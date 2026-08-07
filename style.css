@@ -1094,3 +1094,96 @@ body {
   font-size: 16px;
   font-weight: 700;
 }
+
+/* === 自选股增强版样式 === */
+.wl-sort-bar {
+  display: flex;
+  gap: 8px;
+  padding: 10px 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 8px;
+}
+
+.wl-sort-btn {
+  padding: 5px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.wl-sort-btn:hover {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.wl-sort-btn.active {
+  background: rgba(0,212,255,0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+.watchlist-item-v2 {
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 0;
+}
+
+.wl-middle {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+}
+
+.wl-info-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 60px;
+}
+
+.wl-info-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+
+.wl-info-val {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.wl-cost-diff {
+  font-size: 10px;
+  margin-left: 2px;
+}
+
+.advice-buy { color: #00e676; }
+.advice-wait { color: #00d4ff; }
+.advice-hold { color: #ffa726; }
+.advice-sell { color: #ff6b35; }
+.advice-avoid { color: #ff4757; }
+
+@media (max-width: 480px) {
+  .wl-middle {
+    gap: 6px;
+  }
+  .wl-info-block {
+    min-width: 50px;
+  }
+  .wl-info-val {
+    font-size: 12px;
+  }
+  .wl-sort-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+}

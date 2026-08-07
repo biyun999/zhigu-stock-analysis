@@ -202,7 +202,7 @@ const STOCK_MAP = {
   // 金融
   '中信证券': 'sh600030', '华泰证券': 'sh601688', '招商银行': 'sh600036',
   '宁波银行': 'sz002142', '浦发银行': 'sh600000', '平安银行': 'sz000001',
-  // ST股票（主流）
+  // ST股票（主流，含ST/\*ST双名称映射，方便用户搜索）
   'ST华铁': 'sz000976', 'ST大集': 'sz000564', 'ST工智': 'sz000156',
   'ST曙光': 'sh600303', 'ST中利': 'sz002309', 'ST爱康': 'sz002610',
   'ST美尚': 'sz300495', 'ST美晨': 'sz300237', 'ST红太阳': 'sz000525',
@@ -216,11 +216,39 @@ const STOCK_MAP = {
   'ST安通': 'sh600179', 'ST新亿': 'sh600145', 'ST宜生': 'sh600978',
   'ST德威': 'sz300325', 'ST腾信': 'sz002464', 'ST丰华': 'sh600604',
   'ST昌鱼': 'sh600275', 'ST亚星': 'sh600319', 'ST南化': 'sh600301',
+  // ST股票-补充常见别名（无*前缀版本，方便搜索）
+  'ST深南': 'sz000017', 'ST信威': 'sh600482', 'ST航通': 'sh600677',
+  'ST数知': 'sz300038', 'ST斯太': 'sz000760', 'ST众泰': 'sz000980',
+  'ST长生': 'sz300003', 'ST金钰': 'sh600086', 'ST宜化': 'sz000422',
+  'ST科迪': 'sh600251', 'ST华仪': 'sh600290', 'ST鹏起': 'sh600614',
+  'ST富控': 'sh600634', 'ST工新': 'sh600701',
+  // ST股票-补充更多常见ST股票
+  'ST长油': 'sh601975', '*ST长油': 'sh601975',
+  'ST中安消': 'sh600654', 'ST中绒': 'sh600110', 'ST中珠': 'sh600568',
+  'ST乐视网': 'sz300104', 'ST乐视': 'sz300104',
+  'ST保千': 'sh600076', 'ST千玺': 'sh600076',
+  'ST信威': 'sh600482', 'ST冠福': 'sz002102',
+  'ST天业': 'sh600075', 'ST大唐': 'sh600198',
+  'ST大晟': 'sh600892', 'ST奥维': 'sz002231',
+  'ST安奈儿': 'sz002825', 'ST安泰': 'sh600621',
+  'ST宝实': 'sz000557', 'ST宝鼎': 'sz002552',
+  'ST巴士': 'sz002188', 'ST当代': 'sz000046',
+  'ST德威': 'sz300325', 'ST思美': 'sz002712',
+  'ST恒立': 'sh600318', 'ST慧球': 'sh600556',
+  'ST成城': 'sh600247', 'ST方源': 'sh600656',
+  'ST昌九': 'sh600228', 'ST景谷': 'sh600265',
+  'ST有棵树': 'sz002591', 'ST柏堡': 'sz002776',
+  'ST中昌': 'sh600242', 'ST中天': 'sz000542',
+  'ST节能': 'sh600157', 'ST华信': 'sz002656',
+  'ST湘电': 'sh600416', 'ST新海': 'sz002089',
+  'ST云维': 'sh600725', 'ST九有': 'sh600228',
+  // *ST 完整版
   '*ST深南': 'sz000017', '*ST信威': 'sh600482', '*ST航通': 'sh600677',
   '*ST数知': 'sz300038', '*ST斯太': 'sz000760', '*ST众泰': 'sz000980',
   '*ST长生': 'sz300003', '*ST金钰': 'sh600086', '*ST宜化': 'sz000422',
   '*ST德奥': 'sz002260', '*ST科迪': 'sh600251', '*ST华仪': 'sh600290',
   '*ST鹏起': 'sh600614', '*ST富控': 'sh600634', '*ST工新': 'sh600701',
+  '*ST长油': 'sh601975',
   // 补充更多常用
   '万科': 'sz000002', '京东方': 'sz000725', '比亚迪': 'sz002594',
   '中国平安': 'sh601318', '宁德时代': 'sz300750', '中芯国际': 'sh688981',
@@ -1721,10 +1749,14 @@ const Screener = {
 };
 
 // ============================================================
-// 11. Watchlist - 自选股管理
+// 11. Watchlist - 自选股管理（增强版：评估信息+排序）
 // ============================================================
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
+  // 排序状态
+  sortKey: 'score_desc', // 默认按评估得分降序
+  // 缓存评估数据 { code: { score, advice, vwap, quote } }
+  _cache: {},
 
   /** 获取自选股列表 */
   getList() {
@@ -1756,12 +1788,105 @@ const Watchlist = {
     let list = this.getList();
     list = list.filter(c => c !== code);
     this.save(list);
+    delete this._cache[code];
     Utils.toast('已从自选股移除');
   },
 
   /** 检查是否在自选股中 */
   has(code) {
     return this.getList().includes(code);
+  },
+
+  /** 快速评估（简化版七维度，用于列表展示） */
+  quickScore(quote, klines) {
+    if (!quote || !quote.price || quote.price <= 0) return 0;
+    let score = 50;
+    // PE评分
+    if (quote.pe > 0 && quote.pe < 15) score += 18;
+    else if (quote.pe >= 15 && quote.pe < 25) score += 12;
+    else if (quote.pe >= 25 && quote.pe < 40) score += 4;
+    else if (quote.pe >= 40 || quote.pe < 0) score -= 12;
+    // PB评分
+    if (quote.pb > 0 && quote.pb < 1.5) score += 12;
+    else if (quote.pb >= 1.5 && quote.pb < 3) score += 8;
+    else if (quote.pb >= 5 || quote.pb < 0) score -= 8;
+    // 市值评分
+    if (quote.marketCap > 500) score += 8;
+    else if (quote.marketCap > 100) score += 4;
+    else score -= 4;
+    // 技术面：均线趋势
+    if (klines && klines.length >= 20) {
+      const closes = klines.map(k => k.close);
+      const ma5 = Utils.calcMA(closes, 5);
+      const ma20 = Utils.calcMA(closes, 20);
+      if (ma5 && ma20) {
+        if (ma5 > ma20) score += 8;
+        else score -= 6;
+      }
+      // 涨跌幅
+      if (quote.changePct > 0 && quote.changePct < 5) score += 4;
+      else if (quote.changePct > 5) score += 2;
+      else if (quote.changePct < -5) score -= 6;
+      // 换手率
+      if (quote.turnover > 3 && quote.turnover < 10) score += 3;
+    }
+    return Math.max(0, Math.min(100, Math.round(score)));
+  },
+
+  /** 根据评分生成建议操作 */
+  getAdvice(score) {
+    if (score >= 70) return { text: '持有/加仓', icon: '✅', cls: 'advice-buy' };
+    if (score >= 55) return { text: '逢低建仓', icon: '📈', cls: 'advice-wait' };
+    if (score >= 40) return { text: '观望为主', icon: '📊', cls: 'advice-hold' };
+    if (score >= 25) return { text: '减仓观望', icon: '⚠️', cls: 'advice-sell' };
+    return { text: '回避/止损', icon: '🚫', cls: 'advice-avoid' };
+  },
+
+  /** 计算筹码成本（20日VWAP） */
+  calcChipCost(klines) {
+    if (!klines || klines.length < 5) return 0;
+    const slice = klines.slice(-20);
+    let totalAmt = 0, totalVol = 0;
+    slice.forEach(k => {
+      const price = (k.open + k.high + k.low + k.close) / 4;
+      totalAmt += price * k.volume;
+      totalVol += k.volume;
+    });
+    return totalVol > 0 ? +(totalAmt / totalVol).toFixed(2) : 0;
+  },
+
+  /** 切换排序方式 */
+  setSort(key) {
+    this.sortKey = key;
+    this.render();
+  },
+
+  /** 对数据进行排序 */
+  applySort(items) {
+    const key = this.sortKey;
+    return items.sort((a, b) => {
+      if (key === 'score_desc') return (b.score || 0) - (a.score || 0);
+      if (key === 'score_asc') return (a.score || 0) - (b.score || 0);
+      if (key === 'name') return (a.name || '').localeCompare(b.name || '', 'zh-CN');
+      if (key === 'cost_desc') return (b.vwap || 0) - (a.vwap || 0);
+      if (key === 'cost_asc') return (a.vwap || 0) - (b.vwap || 0);
+      return 0;
+    });
+  },
+
+  /** 渲染排序按钮 */
+  renderSortBar() {
+    const sorts = [
+      { key: 'score_desc', label: '评分↓' },
+      { key: 'score_asc', label: '评分↑' },
+      { key: 'name', label: '名称' },
+      { key: 'cost_desc', label: '成本↓' },
+      { key: 'cost_asc', label: '成本↑' }
+    ];
+    return '<div class="wl-sort-bar">' + sorts.map(s => {
+      const active = this.sortKey === s.key ? ' active' : '';
+      return '<button class="wl-sort-btn' + active + '" onclick="Watchlist.setSort(\'' + s.key + '\')">' + s.label + '</button>';
+    }).join('') + '</div>';
   },
 
   /** 渲染自选股页面 */
@@ -1774,37 +1899,81 @@ const Watchlist = {
       return;
     }
 
-    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>加载行情...</div>';
+    container.innerHTML = this.renderSortBar() + '<div class="loading-pulse"><span class="loading-spinner"></span>加载行情与评估数据...</div>';
 
     // 批量获取行情
     const quotes = await DataAPI.fetchQuotes(list);
     
     if (Object.keys(quotes).length === 0) {
-      container.innerHTML = '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
+      container.innerHTML = this.renderSortBar() + '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
       return;
     }
 
-    let html = '';
-    list.forEach(code => {
+    // 逐只获取K线并计算评估信息
+    const items = [];
+    for (const code of list) {
       const q = quotes[code];
+      if (!q) continue;
+      let klines = [];
+      try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {}
+      const score = this.quickScore(q, klines);
+      const advice = this.getAdvice(score);
+      const vwap = this.calcChipCost(klines);
+      // 缓存
+      this._cache[code] = { score, advice, vwap, quote: q };
+      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, advice, vwap });
+    }
+
+    // 排序
+    const sorted = this.applySort(items);
+
+    let html = this.renderSortBar();
+    sorted.forEach(item => {
+      const q = quotes[item.code];
       if (!q) return;
-      const cls = Utils.colorClass(q.changePct);
-      html += `
-        <div class="watchlist-item">
-          <div class="wl-left" onclick="App.analyzeStock('${code}')">
-            <div class="wl-name">${q.name}</div>
-            <div class="wl-code">${code}</div>
-          </div>
-          <div class="wl-right">
-            <div class="wl-price ${cls}" onclick="App.analyzeStock('${code}')">${q.price.toFixed(2)}</div>
-            <div class="wl-change ${cls}" onclick="App.analyzeStock('${code}')">
-              ${q.changePct > 0 ? '+' : ''}${q.changePct.toFixed(2)}%
-            </div>
-            <button class="wl-delete" onclick="Watchlist.removeAndRefresh('${code}')">✕</button>
-          </div>
-        </div>`;
+      const cls = Utils.colorClass(item.changePct);
+      const scoreColor = Utils.scoreColor(item.score);
+      const advice = item.advice;
+      const vwapStr = item.vwap > 0 ? item.vwap.toFixed(2) : '--';
+      // 价格与成本比较
+      let costDiff = '';
+      if (item.vwap > 0 && item.price > 0) {
+        const diff = ((item.price - item.vwap) / item.vwap * 100).toFixed(1);
+        const diffCls = diff >= 0 ? 'color-up' : 'color-down';
+        costDiff = '<span class="wl-cost-diff ' + diffCls + '">' + (diff >= 0 ? '+' : '') + diff + '%</span>';
+      }
+      html += '<div class="watchlist-item watchlist-item-v2">';
+      html += '<div class="wl-left" onclick="App.analyzeStock(\'' + item.code + '\')">';
+      html += '<div class="wl-name">' + item.name + '</div>';
+      html += '<div class="wl-code">' + item.code + '</div>';
+      html += '</div>';
+      html += '<div class="wl-middle">';
+      // 评估得分
+      html += '<div class="wl-info-block">';
+      html += '<span class="wl-info-label">评估</span>';
+      html += '<span class="wl-info-val" style="color:' + scoreColor + '">' + item.score + '分</span>';
+      html += '</div>';
+      // 建议操作
+      html += '<div class="wl-info-block">';
+      html += '<span class="wl-info-label">建议</span>';
+      html += '<span class="wl-info-val ' + advice.cls + '">' + advice.icon + item.advice.text + '</span>';
+      html += '</div>';
+      // 筹码成本
+      html += '<div class="wl-info-block">';
+      html += '<span class="wl-info-label">筹码成本</span>';
+      html += '<span class="wl-info-val">' + vwapStr + costDiff + '</span>';
+      html += '</div>';
+      html += '</div>';
+      html += '<div class="wl-right">';
+      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + item.price.toFixed(2) + '</div>';
+      html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
+      html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
+      html += '</div>';
+      html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
+      html += '</div>';
+      html += '</div>';
     });
-    container.innerHTML = html || '<div class="empty-tip">暂无数据</div>';
+    container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
   },
 
   /** 删除并刷新 */
