@@ -28,14 +28,6 @@
   <main id="app-content">
     <!-- ===== 首页 ===== -->
     <div id="page-home" class="page active">
-      <!-- 全球市场概览 -->
-      <section class="card" id="globalMarketCard">
-        <div class="card-title">🌍 全球市场概览</div>
-        <div id="globalMarket" class="global-market-grid">
-          <div class="loading-pulse">加载中...</div>
-        </div>
-      </section>
-
       <!-- 快速搜索 -->
       <section class="card search-card">
         <div class="card-title">🔍 股票搜索</div>
@@ -82,6 +74,18 @@
         <div class="stock-meta" id="stockMeta"></div>
       </section>
 
+      <!-- 核心结论（操作建议+主力成本摘要） -->
+      <section class="card" id="conclusionCard" style="display:none">
+        <div class="card-title">🎯 核心结论</div>
+        <div id="conclusionContent"></div>
+      </section>
+
+      <!-- 主力成本 -->
+      <section class="card" id="vwapCard" style="display:none">
+        <div class="card-title">🏦 主力成本与动向</div>
+        <div id="vwapContent"></div>
+      </section>
+
       <!-- 七维度评分 -->
       <section class="card" id="sevenDimCard" style="display:none">
         <div class="card-title">📊 七维度评分</div>
@@ -91,12 +95,6 @@
           <span>综合评分</span>
           <span id="totalScore" class="total-score"></span>
         </div>
-      </section>
-
-      <!-- K线图 -->
-      <section class="card" id="klineCard" style="display:none">
-        <div class="card-title">📈 日K线走势</div>
-        <div id="klineChart" style="width:100%;height:400px"></div>
       </section>
 
       <!-- 持仓诊断8大模块 -->
@@ -150,12 +148,6 @@
           <div class="card-title">🚨 潜在下跌风险汇总清单</div>
           <div class="mod-body" id="riskSummaryContent"></div>
         </div>
-      </section>
-
-      <!-- 主力成本 -->
-      <section class="card" id="vwapCard" style="display:none">
-        <div class="card-title">🏦 主力成本与动向</div>
-        <div id="vwapContent"></div>
       </section>
 
       <!-- 公告/新闻 -->
@@ -228,7 +220,7 @@
           </div>
           <div class="feature-item">
             <span class="feature-icon">🌍</span>
-            <div><strong>全球市场</strong><br>12大全球指数实时追踪</div>
+            <div><strong>多市场覆盖</strong><br>A股·港股·美股100+主流标的</div>
           </div>
           <div class="feature-item">
             <span class="feature-icon">⚡</span>

@@ -225,7 +225,75 @@ const STOCK_MAP = {
   '万科': 'sz000002', '京东方': 'sz000725', '比亚迪': 'sz002594',
   '中国平安': 'sh601318', '宁德时代': 'sz300750', '中芯国际': 'sh688981',
   '中国国航': 'sh601111', '南方航空': 'sh600029', '东方雨虹': 'sz002271',
-  '正泰电器': 'sh601877', '视源股份': 'sz002841'
+  '正泰电器': 'sh601877', '视源股份': 'sz002841',
+  // ===== 港股 =====
+  '腾讯控股': 'hk00700', '阿里巴巴': 'hk09988', '美团': 'hk03690',
+  '小米集团': 'hk01810', '京东集团': 'hk09618', '百度集团': 'hk09888',
+  '快手': 'hk01024', '哔哩哔哩': 'hk09626', '网易': 'hk09999',
+  '商汤科技': 'hk00020', '金蝶国际': 'hk00268', '金山软件': 'hk03888',
+  '联想集团': 'hk00992', '中芯国际港股': 'hk00981', '华虹半导体': 'hk01347',
+  '微盟集团': 'hk02013', '明源云': 'hk00909',
+  '比亚迪港股': 'hk01211', '理想汽车': 'hk02015', '蔚来': 'hk09866',
+  '小鹏汽车': 'hk09868', '吉利汽车': 'hk00175', '长城汽车': 'hk02333',
+  '广汽集团': 'hk02238', '东风集团': 'hk00489', '长安汽车港股': 'hk01138',
+  '零跑汽车': 'hk09863', '哪吒汽车港股': 'hk01880',
+  '汇丰控股': 'hk00005', '友邦保险': 'hk01299', '香港交易所': 'hk00388',
+  '港交所': 'hk00388', '恒生银行': 'hk00011', '中银香港': 'hk02388',
+  '中国平安港股': 'hk02318', '中国人寿港股': 'hk02628', '中国太保港股': 'hk02601',
+  '中国人民保险': 'hk01339', '众安在线': 'hk06060',
+  '中国移动': 'hk00941', '中国电信': 'hk00728', '中国联通港股': 'hk00762',
+  '中国铁塔': 'hk00788', '中兴通讯港股': 'hk00763', '小米集团-W': 'hk01810',
+  '长飞光纤': 'hk06869', '京信通信': 'hk02342', '中国通信服务': 'hk00552',
+  '中国海洋石油': 'hk00883', '中国石油港股': 'hk00857', '中国石化港股': 'hk00386',
+  '中海油田服务': 'hk02883', '中石化冠德': 'hk00934',
+  '中国银行港股': 'hk03988', '建设银行港股': 'hk00939', '工商银行港股': 'hk01398',
+  '农业银行港股': 'hk01288', '交通银行港股': 'hk03328', '邮储银行': 'hk01658',
+  '招商银行港股': 'hk03968', '中信银行港股': 'hk00998', '民生银行港股': 'hk01988',
+  '中国财险': 'hk02328',
+  '华润啤酒': 'hk00291', '蒙牛乳业': 'hk02319', '农夫山泉': 'hk09633',
+  '青岛啤酒港股': 'hk00168', '康师傅控股': 'hk00322', '中国飞鹤': 'hk06186',
+  '海底捞': 'hk06862', '九毛九': 'hk09922', '呷哺呷哺港股': 'hk00520',
+  '百威亚太': 'hk01876', '安踏体育': 'hk02020', '李宁': 'hk02331',
+  '特步国际': 'hk01368', '361度': 'hk01361',
+  '万科企业': 'hk02202', '碧桂园': 'hk02007', '融创中国': 'hk01918',
+  '龙湖集团': 'hk00960', '华润置地': 'hk01109', '中海发展': 'hk00688',
+  '保利物业': 'hk06049', '碧桂园服务': 'hk06098',
+  '药明生物': 'hk02269', '百济神州': 'hk06160', '信达生物': 'hk01801',
+  '君实生物': 'hk01877', '石药集团': 'hk01093', '中国生物制药': 'hk01177',
+  '翰森制药': 'hk02080', '再鼎医药': 'hk09688', '康方生物': 'hk09926',
+  '阿里健康': 'hk00241', '平安好医生': 'hk01833', '京东健康': 'hk06618',
+  '美团-W': 'hk03690',
+  '申洲国际': 'hk02313', '舜宇光学': 'hk02382', '瑞声科技': 'hk02018',
+  '丘钛科技': 'hk01478', '比亚迪电子': 'hk00285', '富智康': 'hk02038',
+  '中国宏桥': 'hk01378', '海螺水泥港股': 'hk00914', '紫金矿业港股': 'hk02899',
+  '中国神华港股': 'hk01088', '兖矿能源': 'hk01171', '江西铜业': 'hk00358',
+  '中信证券港股': 'hk06030', '华泰证券港股': 'hk06886',
+  '中国电力': 'hk02380', '华能国际': 'hk00902', '中广核电力': 'hk01816',
+  '新奥能源': 'hk02688', '华润电力': 'hk00836',
+  '携程集团': 'hk09961', '同程旅行': 'hk00780', '复星旅游文化': 'hk01992',
+  '金沙中国': 'hk01928', '银河娱乐': 'hk00027', '永利澳门': 'hk01128',
+  '新濠博亚': 'hk00200',
+  '中通快递': 'hk02057', '京东物流': 'hk02618', '菜鸟港股': 'hk02057',
+  '极兔速递': 'hk01519',
+  '海丰国际': 'hk01308', '东方海外国际': 'hk00316',
+  '中国中药': 'hk00570', '同仁堂科技': 'hk01666',
+  '中国烟草': 'hk00000', '思摩尔国际': 'hk06969',
+  // 港股通热门
+  '恒安国际': 'hk01044', '维达国际': 'hk03331', '敏华控股': 'hk01999',
+  '蒙牛': 'hk02319', '创科实业': 'hk00669', '耐世特': 'hk01579',
+  // ===== 美股 =====
+  '苹果': 'usAAPL', '微软': 'usMSFT', '谷歌': 'usGOOGL',
+  '亚马逊': 'usAMZN', 'Meta': 'usMETA', '特斯拉': 'usTSLA',
+  '英伟达': 'usNVDA', '台积电': 'usTSM', '奈飞': 'usNFLX',
+  '阿里巴巴美股': 'usBABA', '京东美股': 'usJD', '拼多多': 'usPDD',
+  '百度美股': 'usBIDU', '网易美股': 'usNTES', '哔哩哔哩美股': 'usBILI',
+  '蔚来美股': 'usNIO', '理想美股': 'usLI', '小鹏美股': 'usXPEV',
+  '富途控股': 'usFUTU', '老虎证券': 'usTIGR', '携程美股': 'usTCOM',
+  '名创优品': 'usMNSO', '知乎': 'usZH', '微博': 'usWB',
+  '贝壳': 'usBEKE', '叮咚买菜': 'usDDL', '雾芯科技': 'usRLX',
+  '中芯国际美股': 'usSMIC', '华住集团': 'usHTHT',
+  '好未来': 'usTAL', '新东方': 'usEDU', '高途': 'usGOTU',
+
 };
 
 // 反转映射：代码 -> 名称
@@ -318,10 +386,14 @@ const Utils = {
     return 'sz';
   },
 
-  /** 规范化股票代码（统一为sh/sz+6位数字） */
+  /** 规范化股票代码（统一为sh/sz/hk/us+代码） */
   normalizeCode(code) {
     code = code.trim().toLowerCase();
     if (/^(sh|sz)\d{6}$/.test(code)) return code;
+    if (/^hk\d{5}$/.test(code)) return code;
+    if (/^us[a-z]+$/i.test(code)) return code;
+    // 尝试港股5位代码（纯数字5位）
+    if (/^\d{5}$/.test(code)) return 'hk' + code;
     if (/^\d{6}$/.test(code)) {
       if (code.startsWith('6') || code.startsWith('9')) return 'sh' + code;
       return 'sz' + code;
@@ -568,20 +640,40 @@ const DataAPI = {
     return STOCK_MAP[name] || null;
   },
 
-  /** 搜索股票（本地映射 + API） */
+  /** 搜索股票（本地映射 + API，支持模糊搜索） */
   async searchStockFull(keyword) {
-    // 先查本地映射
+    // 先查本地映射（支持模糊匹配：名称或代码部分匹配）
     const localResults = [];
+    const kw = keyword.toLowerCase();
     Object.entries(STOCK_MAP).forEach(([name, code]) => {
-      if (name.includes(keyword)) {
+      const nameLower = name.toLowerCase();
+      const codeLower = code.toLowerCase();
+      // 名称模糊匹配或代码模糊匹配
+      if (nameLower.includes(kw) || codeLower.includes(kw)) {
+        let market = 'A股';
+        if (code.startsWith('sh')) market = '上证';
+        else if (code.startsWith('sz')) market = '深证';
+        else if (code.startsWith('hk')) market = '港股';
+        else if (code.startsWith('us')) market = '美股';
         localResults.push({
           name, code,
-          market: code.startsWith('sh') ? '上证' : '深证',
+          market,
           fullCode: code
         });
       }
     });
-    // 再查API
+    // 去重（港股/美股可能有多个名称映射到同一代码）
+    const seen = new Set();
+    const deduped = [];
+    localResults.forEach(r => {
+      if (!seen.has(r.fullCode)) {
+        seen.add(r.fullCode);
+        deduped.push(r);
+      }
+    });
+    localResults.length = 0;
+    localResults.push(...deduped);
+    // 再查API（仅A股）
     try {
       const apiResults = await this.searchStock(keyword);
       // 合并去重
@@ -1748,13 +1840,11 @@ const App = {
     setInterval(() => this.updateTime(), 1000);
 
     // 加载首页数据
-    Market.loadGlobalMarket();
     this.loadHotStocks();
 
     // 定时刷新（60秒）
     setInterval(() => {
       if (Navigation.currentPage === 'home') {
-        Market.loadGlobalMarket();
         this.loadHotStocks();
       }
       if (Navigation.currentPage === 'watchlist') {
@@ -1929,7 +2019,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'klineCard', 'diagnosticResult', 'vwapCard', 'newsCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -1956,21 +2046,24 @@ const App = {
 
       // 七维度评分
       const scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow);
-      this.renderSevenDim(scores);
-
-      // K线图
-      if (klines.length > 0) {
-        this.renderKline(klines, quote);
-      }
 
       // 持仓诊断
       const report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores);
-      this.renderDiagnostic(report);
 
-      // VWAP主力成本
+      // ===== 结论前置：先渲染操作建议摘要和主力成本 =====
+      // 操作建议摘要
+      this.renderConclusionSummary(quote, klines, capitalFlow, scores);
+
+      // 主力成本（VWAP）
       if (klines.length > 0) {
         this.renderVWAP(klines, quote);
       }
+
+      // 然后渲染七维度评分
+      this.renderSevenDim(scores);
+
+      // 持仓诊断详细模块
+      this.renderDiagnostic(report);
 
       // 新闻公告
       if (news.length > 0) {
@@ -1986,6 +2079,94 @@ const App = {
   /** 显示/隐藏区块 */
   showSection(id, show) {
     document.getElementById(id).style.display = show ? '' : 'none';
+  },
+
+  /** 渲染核心结论摘要（操作建议+主力成本，结论前置） */
+  renderConclusionSummary(quote, klines, capitalFlow, scores) {
+    this.showSection('conclusionCard', true);
+    const current = quote.price;
+    const sr = Utils.calcSupportResistance(klines, current);
+    const stopLoss = Math.min(sr.support, current * 0.92);
+    const totalScore = scores.total;
+
+    // 计算VWAP
+    let vwap20 = 0;
+    if (klines.length >= 20) {
+      vwap20 = Utils.calcVWAP(klines.slice(-20).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
+    }
+
+    // 操作建议类型判断
+    let adviceType = '';
+    let adviceIcon = '';
+    let adviceDetail = '';
+
+    if (totalScore >= 70) {
+      adviceType = '持仓浮盈';
+      adviceIcon = '✅';
+      adviceDetail = '综合评分较高，基本面和技术面表现良好。建议持有并分批锁定利润，动态止损上移至成本价上方。';
+    } else if (totalScore >= 40) {
+      adviceType = '观望为主';
+      adviceIcon = '📊';
+      adviceDetail = '综合评分一般，存在一定风险因子。建议逢高减仓，降低风险敞口，等待更好的入场时机。';
+    } else {
+      adviceType = '空仓待入';
+      adviceIcon = '⚠️';
+      adviceDetail = '综合评分偏低，风险因子较多。如已持有建议果断止损离场；如未持有建议暂时观望，等待企稳信号。';
+    }
+
+    // 判断当前价与主力成本关系
+    let costRelation = '';
+    if (vwap20 > 0) {
+      const diff = ((current - vwap20) / vwap20 * 100).toFixed(1);
+      if (current > vwap20) {
+        costRelation = `当前价高于20日主力成本${diff}%，主力整体获利。`;
+      } else {
+        costRelation = `当前价低于20日主力成本${Math.abs(diff)}%，主力可能存在浮亏。`;
+      }
+    }
+
+    const el = document.getElementById('conclusionContent');
+    el.innerHTML = `
+      <div class="conclusion-summary">
+        <div class="cs-advice">
+          <div class="cs-advice-header">
+            <span class="cs-advice-icon">${adviceIcon}</span>
+            <span class="cs-advice-type">${adviceType}</span>
+            <span class="cs-score-badge" style="color:${Utils.scoreColor(totalScore)}">${totalScore}分</span>
+          </div>
+          <p class="cs-advice-detail">${adviceDetail}</p>
+        </div>
+        <div class="cs-cost">
+          <div class="cs-cost-header">
+            <span class="cs-cost-icon">🏦</span>
+            <span class="cs-cost-title">主力成本区间</span>
+          </div>
+          <div class="cs-cost-grid">
+            <div class="cs-cost-item">
+              <span class="cs-cost-label">5日成本</span>
+              <span class="cs-cost-val">${klines.length >= 5 ? Utils.calcVWAP(klines.slice(-5).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume])).toFixed(2) : '--'}</span>
+            </div>
+            <div class="cs-cost-item">
+              <span class="cs-cost-label">20日成本</span>
+              <span class="cs-cost-val">${vwap20 > 0 ? vwap20.toFixed(2) : '--'}</span>
+            </div>
+            <div class="cs-cost-item">
+              <span class="cs-cost-label">60日成本</span>
+              <span class="cs-cost-val">${klines.length >= 60 ? Utils.calcVWAP(klines.slice(-60).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume])).toFixed(2) : '--'}</span>
+            </div>
+            <div class="cs-cost-item">
+              <span class="cs-cost-label">止损价</span>
+              <span class="cs-cost-val" style="color:var(--accent-red)">${stopLoss.toFixed(2)}</span>
+            </div>
+          </div>
+          <p class="cs-cost-relation">${costRelation}</p>
+        </div>
+        <div class="cs-key-prices">
+          <div class="cs-kp-item"><span class="cs-kp-label">支撑位</span><span class="cs-kp-val color-up">${sr.support}</span></div>
+          <div class="cs-kp-item"><span class="cs-kp-label">压力位</span><span class="cs-kp-val color-down">${sr.resistance}</span></div>
+        </div>
+      </div>
+    `;
   },
 
   /** 渲染股票概要 */
