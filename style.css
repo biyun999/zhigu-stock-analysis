@@ -1187,3 +1187,57 @@ body {
     font-size: 11px;
   }
 }
+
+
+/* Watchlist debug tip */
+.wl-debug-tip {
+  padding: 8px 12px;
+  margin: 6px 0;
+  background: rgba(255, 152, 0, 0.1);
+  border: 1px solid rgba(255, 152, 0, 0.3);
+  border-radius: 6px;
+  color: #ffb74d;
+  font-size: 12px;
+}
+
+/* Enhanced sort bar for more options */
+.wl-sort-bar {
+  display: flex;
+  gap: 6px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.wl-sort-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.03);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.wl-sort-btn:hover {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  background: rgba(0,212,255,0.08);
+}
+
+.wl-sort-btn.active {
+  background: rgba(0,212,255,0.15);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+  font-weight: 600;
+  box-shadow: 0 0 6px rgba(0,212,255,0.2);
+}
+
+/* noQuote item styling */
+.watchlist-item-v2.no-quote {
+  opacity: 0.6;
+}

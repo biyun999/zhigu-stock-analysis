@@ -307,17 +307,90 @@ const STOCK_MAP = {
   '中国中药': 'hk00570', '同仁堂科技': 'hk01666',
   '中国烟草': 'hk00000', '思摩尔国际': 'hk06969',
   
-  // 新三板/北交所
+  // ===== 热门ETF基金（50+只）=====
+  // 宽基ETF
+  '沪深300ETF': 'sh510300', '中证500ETF': 'sh510500', '创业板ETF': 'sz159915',
+  '上证50ETF': 'sh510050', '中证1000ETF': 'sh512100', '科创50ETF': 'sh588000',
+  '深证100ETF': 'sz159901', '中小板ETF': 'sz159902', '双创50ETF': 'sh588300',
+  '创业板50ETF': 'sz159949', '上证180ETF': 'sh510180', '中证800ETF': 'sh515800',
+  '国证2000ETF': 'sh560000', '中证2000ETF': 'sh563300', '富时中国A50ETF': 'sh510850',
+  'MSCI中国A50ETF': 'sh560050', '北证50ETF': 'bj899050',
+  // 行业ETF-科技
+  '半导体ETF': 'sh512480', '芯片ETF': 'sh159995', '人工智能ETF': 'sh515980',
+  '5GETF': 'sh515050', '通信ETF': 'sh515880', '计算机ETF': 'sh512720',
+  '软件ETF': 'sh515230', '云计算ETF': 'sh516510', '大数据ETF': 'sh515400',
+  '物联网ETF': 'sh516330', '机器人ETF': 'sh562500', '信创ETF': 'sh562030',
+  // 行业ETF-新能源
+  '新能源ETF': 'sh516160', '光伏ETF': 'sh515790', '新能源车ETF': 'sh515030',
+  '碳中和ETF': 'sh516070', '锂电池ETF': 'sz159840', '储能ETF': 'sh516850',
+  '电力ETF': 'sh562350',
+  // 行业ETF-消费
+  '消费ETF': 'sh159928', '食品饮料ETF': 'sh515170', '白酒ETF': 'sh512690',
+  '医药ETF': 'sh512010', '医疗ETF': 'sh512170', '创新药ETF': 'sh515120',
+  '中药ETF': 'sh560080', '养殖ETF': 'sh516670', '旅游ETF': 'sh516560',
+  // 行业ETF-金融
+  '银行ETF': 'sh512800', '证券ETF': 'sh512880', '保险ETF': 'sh512070',
+  '金融ETF': 'sh510230', '房地产ETF': 'sh512200', '红利ETF': 'sh510880',
+  '高股息ETF': 'sh563020',
+  // 行业ETF-周期/制造
+  '军工ETF': 'sh512660', '钢铁ETF': 'sh515210', '煤炭ETF': 'sh515220',
+  '有色ETF': 'sh512400', '化工ETF': 'sh516020', '基建ETF': 'sh516950',
+  '农业ETF': 'sh516550',
+  // 跨境ETF
+  '恒生ETF': 'sh159920', '恒生科技ETF': 'sh513180', '中概互联ETF': 'sh513050',
+  '纳指ETF': 'sh513100', '标普500ETF': 'sh513500', '日经ETF': 'sh513880',
+  '德国ETF': 'sh513030', '法国ETF': 'sh513080',
+  // 商品/债券ETF
+  '黄金ETF': 'sh518880', '豆粕ETF': 'sz159985', '有色金属ETF': 'sh512400',
+  // 策略/主题ETF
+  '红利低波ETF': 'sh512890', '质量成长ETF': 'sh560600', 'ESG ETF': 'sh560090',
+
+  // ===== 热门可转债（30+只）=====
+  '转债ETF': 'sh511380', '南银转债': 'sh113050', '兴业转债': 'sh113052',
+  '中银转债': 'sh113055', '杭银转债': 'sh110079', '苏银转债': 'sh110053',
+  '成银转债': 'sh113057', '青农转债': 'sh113053', '浦发转债': 'sh110059',
+  '平银转债': 'sz127050', '南航转债': 'sz127033', '国泰转债': 'sh113048',
+  '华安转债': 'sh113056', '中微转债': 'sh118013', '伯特转债': 'sh113633',
+  '博杰转债': 'sz127067', '万兴转债': 'sz123141', '晶科转债': 'sh118025',
+  '中矿转债': 'sz123149', '天铁转债': 'sz123145', '丰山转债': 'sh113630',
+  '永东转债': 'sz128071', '润达转债': 'sh113648', '精测转债': 'sz123066',
+  '华翔转债': 'sh113653', '欧22转债': 'sh113646', '鼎胜转债': 'sh113026',
+  '金宏转债': 'sh118019', '伟测转债': 'sh118027', '海优转债': 'sh118008',
+  '瑞达转债': 'sz127069', '力诺转债': 'sz123155',
+
+  // ===== 基础设施REITs（10+只）=====
+  '中金普洛斯REIT': 'sh508056', '博时招商REIT': 'sz180101',
+  '红土盐田REIT': 'sz180301', '华夏中国交建REIT': 'sh508018',
+  '富国首创REIT': 'sh508006', '东吴苏园REIT': 'sh508027',
+  '中航首钢绿能REIT': 'sz180801', '鹏华广州广河REIT': 'sz180401',
+  '平安广州广河REIT': 'sz180401', '国泰君安临港REIT': 'sh508025',
+  '中金安徽交控REIT': 'sh508011', '华夏和达高科REIT': 'sh508028',
+  '嘉实京东仓储REIT': 'sh508098', '中金厦门安居REIT': 'sh508058',
+  '红土深圳安居REIT': 'sz180501', '华夏北京保障房REIT': 'sh508068',
+
+  // ===== 北交所/新三板扩充（50+只）=====
   '每日互动': 'bj833331', '贝特瑞': 'bj835185', '连城数控': 'bj835368',
   '创远仪器': 'bj831961', '同辉信息': 'bj430047', '佳先股份': 'bj430489',
   '球冠电缆': 'bj834682', '广道高新': 'bj839680', '永顺生物': 'bj839729',
   '吉冈精密': 'bj836720', '虹安电子': 'bj832566', '流金科技': 'bj832571',
   '秉扬科技': 'bj836675', '中设咨询': 'bj836871', '德众汽车': 'bj838030',
   '利通科技': 'bj832225', '富士达': 'bj835640', '同力股份': 'bj834599',
-  '长虹能源': 'bj836247', '吉冈精密': 'bj836720', '恒光股份': 'bj301118',
+  '长虹能源': 'bj836247', '恒光股份': 'bj301118',
   '云创数据': 'bj835305', '艾融软件': 'bj830799', '殷图网联': 'bj835515',
-  '国源科技': 'bj835185', '中航机电': 'bj833171', '鑫磊股份': 'bj301317',
-  '天纺标': 'bj871753', '海达尔': 'bj836699', '明阳科技': 'bj837663',
+  '中航机电': 'bj833171', '鑫磊股份': 'bj301317', '天纺标': 'bj871753',
+  '海达尔': 'bj836699', '明阳科技': 'bj837663',
+  // 北交所扩充
+  '锦波生物': 'bj832982', '曙光数创': 'bj872808', '民士达': 'bj833394',
+  '华岭股份': 'bj430139', '诺思兰德': 'bj430047', '吉林碳谷': 'bj836077',
+  '硅烷科技': 'bj838402', '惠丰钻石': 'bj839725', '科达自控': 'bj831305',
+  '利君股份': 'bj430030', '恒合股份': 'bj837152', '朗鸿科技': 'bj836395',
+  '丰光精密': 'bj430510', '志晟信息': 'bj835640', '三祥科技': 'bj837220',
+  '华密新材': 'bj836221', '润农节水': 'bj834021', '长虹美菱': 'bj200832',
+  '凯德石英': 'bj835185', '吉林敖东': 'bj000776', '中裕科技': 'bj871692',
+  '雅葆轩': 'bj870688', '卓兆点胶': 'bj871642', '万源通': 'bj873833',
+  '苏轴股份': 'bj430418', '格利尔': 'bj831641', '天马新材': 'bj838971',
+  '泰鹏智能': 'bj872668', '康乐卫士': 'bj833575', '艾融软件': 'bj830799',
+
 
   // 港股通热门
   '恒安国际': 'hk01044', '维达国际': 'hk03331', '敏华控股': 'hk01999',
@@ -430,13 +503,22 @@ const Utils = {
   /** 规范化股票代码（统一为sh/sz/hk/us+代码） */
   normalizeCode(code) {
     code = code.trim().toLowerCase();
-    if (/^(sh|sz)\d{6}$/.test(code)) return code;
+    if (/^(sh|sz|bj)\d{6}$/.test(code)) return code;
     if (/^hk\d{5}$/.test(code)) return code;
     if (/^us[a-z]+$/i.test(code)) return code;
     // 尝试港股5位代码（纯数字5位）
     if (/^\d{5}$/.test(code)) return 'hk' + code;
     if (/^\d{6}$/.test(code)) {
+      // 北交所/新三板：8开头或43/4开头
+      if (code.startsWith('8') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
+      // 沪市ETF/REITs
+      if (code.startsWith('51') || code.startsWith('508') || code.startsWith('56')) return 'sh' + code;
+      // 深市ETF/可转债
+      if (code.startsWith('15') || code.startsWith('12') || code.startsWith('16')) return 'sz' + code;
+      // 沪市主板/科创板/可转债
       if (code.startsWith('6') || code.startsWith('9')) return 'sh' + code;
+      // 沪市可转债 11开头
+      if (code.startsWith('11')) return 'sh' + code;
       return 'sz' + code;
     }
     return null;
@@ -694,6 +776,7 @@ const DataAPI = {
         let market = 'A股';
         if (code.startsWith('sh')) market = '上证';
         else if (code.startsWith('sz')) market = '深证';
+        else if (code.startsWith('bj')) market = '北交所';
         else if (code.startsWith('hk')) market = '港股';
         else if (code.startsWith('us')) market = '美股';
         localResults.push({
@@ -1792,6 +1875,8 @@ const Watchlist = {
     }
     list.push(code);
     this.save(list);
+    // 记录添加时间
+    this._saveAddedAt(code);
     Utils.toast('已添加到自选股');
     return true;
   },
@@ -1868,21 +1953,58 @@ const Watchlist = {
     return totalVol > 0 ? +(totalAmt / totalVol).toFixed(2) : 0;
   },
 
-  /** 切换排序方式 */
+  /** 切换排序方式（支持点击同一按钮切换升降序） */
   setSort(key) {
-    this.sortKey = key;
+    // 如果点击的是当前排序字段，切换升降序
+    const baseKey = key.replace(/_(asc|desc)$/, '');
+    const currentBase = this.sortKey.replace(/_(asc|desc)$/, '');
+    if (baseKey === currentBase && this.sortKey.endsWith('_desc')) {
+      this.sortKey = baseKey + '_asc';
+    } else if (baseKey === currentBase && this.sortKey.endsWith('_asc')) {
+      this.sortKey = baseKey + '_desc';
+    } else {
+      this.sortKey = key;
+    }
     this.render();
+  },
+
+  /** 获取股票添加时间 */
+  getAddedAt(code) {
+    try {
+      const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
+      return meta[code] || 0;
+    } catch { return 0; }
+  },
+
+  /** 保存股票添加时间 */
+  _saveAddedAt(code) {
+    try {
+      const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
+      if (!meta[code]) {
+        meta[code] = Date.now();
+        localStorage.setItem('zhigu_watchlist_meta', JSON.stringify(meta));
+      }
+    } catch {}
   },
 
   /** 对数据进行排序 */
   applySort(items) {
     const key = this.sortKey;
     return items.sort((a, b) => {
+      // 无行情的排到最后
+      if (a.noQuote && !b.noQuote) return 1;
+      if (!a.noQuote && b.noQuote) return -1;
       if (key === 'score_desc') return (b.score || 0) - (a.score || 0);
       if (key === 'score_asc') return (a.score || 0) - (b.score || 0);
       if (key === 'name') return (a.name || '').localeCompare(b.name || '', 'zh-CN');
       if (key === 'cost_desc') return (b.vwap || 0) - (a.vwap || 0);
       if (key === 'cost_asc') return (a.vwap || 0) - (b.vwap || 0);
+      if (key === 'price_desc') return (b.price || 0) - (a.price || 0);
+      if (key === 'price_asc') return (a.price || 0) - (b.price || 0);
+      if (key === 'change_desc') return (b.changePct || 0) - (a.changePct || 0);
+      if (key === 'change_asc') return (a.changePct || 0) - (b.changePct || 0);
+      if (key === 'added_desc') return (b.addedAt || 0) - (a.addedAt || 0);
+      if (key === 'added_asc') return (a.addedAt || 0) - (b.addedAt || 0);
       return 0;
     });
   },
@@ -1890,15 +2012,22 @@ const Watchlist = {
   /** 渲染排序按钮 */
   renderSortBar() {
     const sorts = [
-      { key: 'score_desc', label: '评分↓' },
-      { key: 'score_asc', label: '评分↑' },
-      { key: 'name', label: '名称' },
-      { key: 'cost_desc', label: '成本↓' },
-      { key: 'cost_asc', label: '成本↑' }
+      { key: 'score', label: '🏆评分', defaultDir: 'desc' },
+      { key: 'price', label: '💰价格', defaultDir: 'desc' },
+      { key: 'change', label: '📊涨跌幅', defaultDir: 'desc' },
+      { key: 'cost', label: '🎯成本', defaultDir: 'desc' },
+      { key: 'name', label: '🔤名称', defaultDir: 'asc' },
+      { key: 'added', label: '🕐时间', defaultDir: 'desc' }
     ];
     return '<div class="wl-sort-bar">' + sorts.map(s => {
-      const active = this.sortKey === s.key ? ' active' : '';
-      return '<button class="wl-sort-btn' + active + '" onclick="Watchlist.setSort(\'' + s.key + '\')">' + s.label + '</button>';
+      const activeKey = this.sortKey.replace(/_(asc|desc)$/, '');
+      const dir = this.sortKey.endsWith('_asc') ? 'asc' : 'desc';
+      const isActive = activeKey === s.key;
+      let arrow = '';
+      if (isActive) arrow = dir === 'desc' ? ' ↓' : ' ↑';
+      const cls = isActive ? ' active' : '';
+      const clickKey = s.key === 'name' ? 'name' : s.key + '_' + s.defaultDir;
+      return '<button class="wl-sort-btn' + cls + '" onclick="Watchlist.setSort(\'' + clickKey + '\')">' + s.label + arrow + '</button>';
     }).join('') + '</div>';
   },
 
@@ -1924,26 +2053,42 @@ const Watchlist = {
 
     // 逐只获取K线并计算评估信息
     const items = [];
+    const failedCodes = [];
     for (const code of list) {
       const q = quotes[code];
-      if (!q) continue;
+      if (!q) {
+        // fallback：无法获取行情时仍显示该股票
+        const fallbackName = CODE_TO_NAME[code] || code;
+        console.warn('[Watchlist] 行情获取失败:', code);
+        failedCodes.push(code);
+        const noDataAdvice = { text: '暂无数据', icon: '⚠️', cls: 'advice-hold' };
+        this._cache[code] = { score: 0, advice: noDataAdvice, vwap: 0, quote: null };
+        items.push({ code, name: fallbackName, price: 0, changePct: 0, score: 0, advice: noDataAdvice, vwap: 0, noQuote: true, addedAt: this.getAddedAt(code) });
+        continue;
+      }
       let klines = [];
-      try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {}
+      try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {
+        console.warn('[Watchlist] K线获取失败:', code, e.message);
+      }
       const score = this.quickScore(q, klines);
       const advice = this.getAdvice(score);
       const vwap = this.calcChipCost(klines);
       // 缓存
       this._cache[code] = { score, advice, vwap, quote: q };
-      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, advice, vwap });
+      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, advice, vwap, addedAt: this.getAddedAt(code) });
+    }
+    if (failedCodes.length > 0) {
+      console.log('[Watchlist] 行情获取失败的股票:', failedCodes.join(', '));
     }
 
     // 排序
     const sorted = this.applySort(items);
 
     let html = this.renderSortBar();
+    if (failedCodes.length > 0) {
+      html += '<div class="wl-debug-tip">⚠️ ' + failedCodes.length + '只股票行情获取失败</div>';
+    }
     sorted.forEach(item => {
-      const q = quotes[item.code];
-      if (!q) return;
       const cls = Utils.colorClass(item.changePct);
       const scoreColor = Utils.scoreColor(item.score);
       const advice = item.advice;
@@ -1978,7 +2123,7 @@ const Watchlist = {
       html += '</div>';
       html += '</div>';
       html += '<div class="wl-right">';
-      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + item.price.toFixed(2) + '</div>';
+      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
       html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
       html += '</div>';
