@@ -202,7 +202,7 @@ const STOCK_MAP = {
   // 金融
   '中信证券': 'sh600030', '华泰证券': 'sh601688', '招商银行': 'sh600036',
   '宁波银行': 'sz002142', '浦发银行': 'sh600000', '平安银行': 'sz000001',
-  // ST股票（主流，含ST/\*ST双名称映射，方便用户搜索）
+  // ST股票（主流）
   'ST华铁': 'sz000976', 'ST大集': 'sz000564', 'ST工智': 'sz000156',
   'ST曙光': 'sh600303', 'ST中利': 'sz002309', 'ST爱康': 'sz002610',
   'ST美尚': 'sz300495', 'ST美晨': 'sz300237', 'ST红太阳': 'sz000525',
@@ -216,39 +216,11 @@ const STOCK_MAP = {
   'ST安通': 'sh600179', 'ST新亿': 'sh600145', 'ST宜生': 'sh600978',
   'ST德威': 'sz300325', 'ST腾信': 'sz002464', 'ST丰华': 'sh600604',
   'ST昌鱼': 'sh600275', 'ST亚星': 'sh600319', 'ST南化': 'sh600301',
-  // ST股票-补充常见别名（无*前缀版本，方便搜索）
-  'ST深南': 'sz000017', 'ST信威': 'sh600482', 'ST航通': 'sh600677',
-  'ST数知': 'sz300038', 'ST斯太': 'sz000760', 'ST众泰': 'sz000980',
-  'ST长生': 'sz300003', 'ST金钰': 'sh600086', 'ST宜化': 'sz000422',
-  'ST科迪': 'sh600251', 'ST华仪': 'sh600290', 'ST鹏起': 'sh600614',
-  'ST富控': 'sh600634', 'ST工新': 'sh600701',
-  // ST股票-补充更多常见ST股票
-  'ST长油': 'sh601975', '*ST长油': 'sh601975',
-  'ST中安消': 'sh600654', 'ST中绒': 'sh600110', 'ST中珠': 'sh600568',
-  'ST乐视网': 'sz300104', 'ST乐视': 'sz300104',
-  'ST保千': 'sh600076', 'ST千玺': 'sh600076',
-  'ST信威': 'sh600482', 'ST冠福': 'sz002102',
-  'ST天业': 'sh600075', 'ST大唐': 'sh600198',
-  'ST大晟': 'sh600892', 'ST奥维': 'sz002231',
-  'ST安奈儿': 'sz002825', 'ST安泰': 'sh600621',
-  'ST宝实': 'sz000557', 'ST宝鼎': 'sz002552',
-  'ST巴士': 'sz002188', 'ST当代': 'sz000046',
-  'ST德威': 'sz300325', 'ST思美': 'sz002712',
-  'ST恒立': 'sh600318', 'ST慧球': 'sh600556',
-  'ST成城': 'sh600247', 'ST方源': 'sh600656',
-  'ST昌九': 'sh600228', 'ST景谷': 'sh600265',
-  'ST有棵树': 'sz002591', 'ST柏堡': 'sz002776',
-  'ST中昌': 'sh600242', 'ST中天': 'sz000542',
-  'ST节能': 'sh600157', 'ST华信': 'sz002656',
-  'ST湘电': 'sh600416', 'ST新海': 'sz002089',
-  'ST云维': 'sh600725', 'ST九有': 'sh600228',
-  // *ST 完整版
   '*ST深南': 'sz000017', '*ST信威': 'sh600482', '*ST航通': 'sh600677',
   '*ST数知': 'sz300038', '*ST斯太': 'sz000760', '*ST众泰': 'sz000980',
   '*ST长生': 'sz300003', '*ST金钰': 'sh600086', '*ST宜化': 'sz000422',
   '*ST德奥': 'sz002260', '*ST科迪': 'sh600251', '*ST华仪': 'sh600290',
   '*ST鹏起': 'sh600614', '*ST富控': 'sh600634', '*ST工新': 'sh600701',
-  '*ST长油': 'sh601975',
   // 补充更多常用
   '万科': 'sz000002', '京东方': 'sz000725', '比亚迪': 'sz002594',
   '中国平安': 'sh601318', '宁德时代': 'sz300750', '中芯国际': 'sh688981',
@@ -306,173 +278,7 @@ const STOCK_MAP = {
   '海丰国际': 'hk01308', '东方海外国际': 'hk00316',
   '中国中药': 'hk00570', '同仁堂科技': 'hk01666',
   '中国烟草': 'hk00000', '思摩尔国际': 'hk06969',
-  
-  // ===== 热门ETF基金（50+只）=====
-  // 宽基ETF
-  '沪深300ETF': 'sh510300', '中证500ETF': 'sh510500', '创业板ETF': 'sz159915',
-  '上证50ETF': 'sh510050', '中证1000ETF': 'sh512100', '科创50ETF': 'sh588000',
-  '深证100ETF': 'sz159901', '中小板ETF': 'sz159902', '双创50ETF': 'sh588300',
-  '创业板50ETF': 'sz159949', '上证180ETF': 'sh510180', '中证800ETF': 'sh515800',
-  '国证2000ETF': 'sh560000', '中证2000ETF': 'sh563300', '富时中国A50ETF': 'sh510850',
-  'MSCI中国A50ETF': 'sh560050', '北证50ETF': 'bj899050',
-  // 行业ETF-科技
-  '半导体ETF': 'sh512480', '芯片ETF': 'sh159995', '人工智能ETF': 'sh515980',
-  '5GETF': 'sh515050', '通信ETF': 'sh515880', '计算机ETF': 'sh512720',
-  '软件ETF': 'sh515230', '云计算ETF': 'sh516510', '大数据ETF': 'sh515400',
-  '物联网ETF': 'sh516330', '机器人ETF': 'sh562500', '信创ETF': 'sh562030',
-  // 行业ETF-新能源
-  '新能源ETF': 'sh516160', '光伏ETF': 'sh515790', '新能源车ETF': 'sh515030',
-  '碳中和ETF': 'sh516070', '锂电池ETF': 'sz159840', '储能ETF': 'sh516850',
-  '电力ETF': 'sh562350',
-  // 行业ETF-消费
-  '消费ETF': 'sh159928', '食品饮料ETF': 'sh515170', '白酒ETF': 'sh512690',
-  '医药ETF': 'sh512010', '医疗ETF': 'sh512170', '创新药ETF': 'sh515120',
-  '中药ETF': 'sh560080', '养殖ETF': 'sh516670', '旅游ETF': 'sh516560',
-  // 行业ETF-金融
-  '银行ETF': 'sh512800', '证券ETF': 'sh512880', '保险ETF': 'sh512070',
-  '金融ETF': 'sh510230', '房地产ETF': 'sh512200', '红利ETF': 'sh510880',
-  '高股息ETF': 'sh563020',
-  // 行业ETF-周期/制造
-  '军工ETF': 'sh512660', '钢铁ETF': 'sh515210', '煤炭ETF': 'sh515220',
-  '有色ETF': 'sh512400', '化工ETF': 'sh516020', '基建ETF': 'sh516950',
-  '农业ETF': 'sh516550',
-  // 跨境ETF
-  '恒生ETF': 'sh159920', '恒生科技ETF': 'sh513180', '中概互联ETF': 'sh513050',
-  '纳指ETF': 'sh513100', '标普500ETF': 'sh513500', '日经ETF': 'sh513880',
-  '德国ETF': 'sh513030', '法国ETF': 'sh513080',
-  // 商品/债券ETF
-  '黄金ETF': 'sh518880', '豆粕ETF': 'sz159985', '有色金属ETF': 'sh512400',
-  // 策略/主题ETF
-  '红利低波ETF': 'sh512890', '质量成长ETF': 'sh560600', 'ESG ETF': 'sh560090',
-
-  // ===== 热门可转债（30+只）=====
-  '转债ETF': 'sh511380', '南银转债': 'sh113050', '兴业转债': 'sh113052',
-  '中银转债': 'sh113055', '杭银转债': 'sh110079', '苏银转债': 'sh110053',
-  '成银转债': 'sh113057', '青农转债': 'sh113053', '浦发转债': 'sh110059',
-  '平银转债': 'sz127050', '南航转债': 'sz127033', '国泰转债': 'sh113048',
-  '华安转债': 'sh113056', '中微转债': 'sh118013', '伯特转债': 'sh113633',
-  '博杰转债': 'sz127067', '万兴转债': 'sz123141', '晶科转债': 'sh118025',
-  '中矿转债': 'sz123149', '天铁转债': 'sz123145', '丰山转债': 'sh113630',
-  '永东转债': 'sz128071', '润达转债': 'sh113648', '精测转债': 'sz123066',
-  '华翔转债': 'sh113653', '欧22转债': 'sh113646', '鼎胜转债': 'sh113026',
-  '金宏转债': 'sh118019', '伟测转债': 'sh118027', '海优转债': 'sh118008',
-  '瑞达转债': 'sz127069', '力诺转债': 'sz123155',
-
-  // ===== 基础设施REITs（10+只）=====
-  '中金普洛斯REIT': 'sh508056', '博时招商REIT': 'sz180101',
-  '红土盐田REIT': 'sz180301', '华夏中国交建REIT': 'sh508018',
-  '富国首创REIT': 'sh508006', '东吴苏园REIT': 'sh508027',
-  '中航首钢绿能REIT': 'sz180801', '鹏华广州广河REIT': 'sz180401',
-  '平安广州广河REIT': 'sz180401', '国泰君安临港REIT': 'sh508025',
-  '中金安徽交控REIT': 'sh508011', '华夏和达高科REIT': 'sh508028',
-  '嘉实京东仓储REIT': 'sh508098', '中金厦门安居REIT': 'sh508058',
-  '红土深圳安居REIT': 'sz180501', '华夏北京保障房REIT': 'sh508068',
-
-  // ===== 北交所/新三板扩充（50+只）=====
-  '每日互动': 'bj833331', '贝特瑞': 'bj835185', '连城数控': 'bj835368',
-  '创远仪器': 'bj831961', '同辉信息': 'bj430047', '佳先股份': 'bj430489',
-  '球冠电缆': 'bj834682', '广道高新': 'bj839680', '永顺生物': 'bj839729',
-  '吉冈精密': 'bj836720', '虹安电子': 'bj832566', '流金科技': 'bj832571',
-  '秉扬科技': 'bj836675', '中设咨询': 'bj836871', '德众汽车': 'bj838030',
-  '利通科技': 'bj832225', '富士达': 'bj835640', '同力股份': 'bj834599',
-  '长虹能源': 'bj836247', '恒光股份': 'bj301118',
-  '云创数据': 'bj835305', '艾融软件': 'bj830799', '殷图网联': 'bj835515',
-  '中航机电': 'bj833171', '鑫磊股份': 'bj301317', '天纺标': 'bj871753',
-  '海达尔': 'bj836699', '明阳科技': 'bj837663',
-  // 北交所扩充
-  '锦波生物': 'bj832982', '曙光数创': 'bj872808', '民士达': 'bj833394',
-  '华岭股份': 'bj430139', '诺思兰德': 'bj430047', '吉林碳谷': 'bj836077',
-  '硅烷科技': 'bj838402', '惠丰钻石': 'bj839725', '科达自控': 'bj831305',
-  '利君股份': 'bj430030', '恒合股份': 'bj837152', '朗鸿科技': 'bj836395',
-  '丰光精密': 'bj430510', '志晟信息': 'bj835640', '三祥科技': 'bj837220',
-  '华密新材': 'bj836221', '润农节水': 'bj834021', '长虹美菱': 'bj200832',
-  '凯德石英': 'bj835185', '吉林敖东': 'bj000776', '中裕科技': 'bj871692',
-  '雅葆轩': 'bj870688', '卓兆点胶': 'bj871642', '万源通': 'bj873833',
-  '苏轴股份': 'bj430418', '格利尔': 'bj831641', '天马新材': 'bj838971',
-  '泰鹏智能': 'bj872668', '康乐卫士': 'bj833575', '艾融软件': 'bj830799',
-
-
-  // 常用A股扩充（交通运输/航空/旅游）
-  '上海机场': 'sh600009', '白云机场': 'sh600004', '深圳机场': 'sz000089',
-  '中国国航': 'sh601111', '南方航空': 'sh600029', '东方航空': 'sh600115',
-  '海南航空': 'sh600221', '春秋航空': 'sh601021', '吉祥航空': 'sh603885',
-  '中远海控': 'sh601919', '招商轮船': 'sh601872', '中远海能': 'sh600026',
-  '中国交建': 'sh601800', '中国中铁': 'sh601390', '中国铁建': 'sh601186',
-  '京沪高铁': 'sh601816', '大秦铁路': 'sh601006', '广深铁路': 'sh601333',
-  // 常用A股（消费/医药/地产）
-  '拓尔思': 'sz300229', '中国中免': 'sh601888', '王府井': 'sh600859',
-  '永辉超市': 'sh601933', '苏宁易购': 'sz002024', '国美零售': 'sz002024',
-  '保利发展': 'sh600048', '万科A': 'sz000002', '招商蛇口': 'sz001979',
-  '金地集团': 'sh600383', '绿城中国': 'sh600007', '华侨城': 'sz000069',
-  '融创中国': 'sz001519', '华润置地': 'sh600919', '龙湖集团': 'sz000961',
-  '片仔癀': 'sh600436', '云南白药': 'sz000538', '同仁堂': 'sh600085',
-  '华东医药': 'sz000963', '复星医药': 'sh600196', '药明康德': 'sh603259',
-  '智飞生物': 'sz300122', '长春高新': 'sz000661', '以岭药业': 'sz002603',
-  '康泰生物': 'sz300601', '华兰生物': 'sz002007', '天坛生物': 'sh600161',
-  // 常用A股（能源/电力/公用事业）
-  '中国神华': 'sh601088', '兖矿能源': 'sh600188', '中煤能源': 'sh601898',
-  '陕西煤业': 'sh601225', '山西焦煤': 'sz000983', '潞安环能': 'sh601699',
-  '国电电力': 'sh600795', '华能国际': 'sh600011', '大唐发电': 'sh601991',
-  '华电国际': 'sh600027', '川投能源': 'sh600674', '粤电力': 'sz000539',
-  '长江电力': 'sh600900', '华能水电': 'sh600025', '国投电力': 'sh600886',
-  '三峡能源': 'sh600905', '龙源电力': 'sz001289', '节能风电': 'sh601016',
-  '中国核电': 'sh601985', '中国广核': 'sz003816', '福能股份': 'sh600483',
-  // 常用A股（科技/通信/软件）
-  '拓尔思': 'sz300229', '科大讯飞': 'sz002230', '用友网络': 'sh600588',
-  '金蝶国际': 'sh600588', '金山办公': 'sh688111', '广联达': 'sz002410',
-  '紫光股份': 'sz000938', '浪潮信息': 'sz000977', '中科曙光': 'sh603019',
-  '深信服': 'sz300454', '启明星辰': 'sz002439', '安恒信息': 'sh688023',
-  '奇安信': 'sh688561', '三六零': 'sh601360', '天融信': 'sz002212',
-  '中科创达': 'sz300496', '恒生电子': 'sh600570', '同花顺': 'sz300033',
-  '东方国信': 'sz300166', '汉得信息': 'sz300170', '宝信软件': 'sh600845',
-  '润和软件': 'sz300339', '软通动力': 'sz301236', '中国软件': 'sh600536',
-  '太极股份': 'sz002368', '南大光电': 'sz300346', '北方华创': 'sz002371',
-  // 常用A股（金融/保险）
-  '中信证券': 'sh600030', '华泰证券': 'sh601688', '国泰君安': 'sh601211',
-  '海通证券': 'sh600837', '广发证券': 'sz000776', '中金公司': 'sh601995',
-  '东方证券': 'sh600958', '光大证券': 'sh601788', '招商证券': 'sh600999',
-  '中国银河': 'sh601881', '长江证券': 'sz000783', '国元证券': 'sz000728',
-  '中国人保': 'sh601319', '新华保险': 'sh601336', '中国太保': 'sh601601',
-  '天风证券': 'sh601162', '中银证券': 'sh601696', '东吴证券': 'sh601555',
-  // 常用A股（军工）
-  '中航沈飞': 'sh600760', '航发动力': 'sh600893', '中航西飞': 'sz000768',
-  '中航光电': 'sz002179', '紫光国微': 'sz002049', '中航电子': 'sh600372',
-  '航天电器': 'sz002025', '中国卫星': 'sh600118', '航天科技': 'sz000901',
-  '北方导航': 'sh600435', '中直股份': 'sh600038', '洪都航空': 'sh600316',
-  '振华科技': 'sz000733', '景嘉微': 'sz300474', '睿创微纳': 'sh688002',
-  // 常用A股（汽车/机械/制造）
-  '上汽集团': 'sh600104', '长城汽车': 'sh601633', '长安汽车': 'sz000625',
-  '广汽集团': 'sh601238', '比亚迪': 'sz002594', '赛力斯': 'sh601127',
-  '理想汽车': 'sz002459', '小鹏汽车': 'sz009868', '蔚来汽车': 'sz09866',
-  '潍柴动力': 'sz000338', '三一重工': 'sh600031', '徐工机械': 'sz000425',
-  '中联重科': 'sz000157', '柳工': 'sz000528', '中国中车': 'sh601766',
-  '福耀玻璃': 'sh600660', '华域汽车': 'sh600741', '均胜电子': 'sh600699',
-  // 常用A股（食品/农业）
-  '贵州茅台': 'sh600519', '五粮液': 'sz000858', '泸州老窖': 'sz000568',
-  '山西汾酒': 'sh600809', '洋河股份': 'sz002304', '古井贡酒': 'sz000596',
-  '伊利股份': 'sh600887', '蒙牛乳业': 'hk02319', '双汇发展': 'sz000895',
-  '海天味业': 'sh603288', '中炬高新': 'sh600872', '涪陵榨菜': 'sz002507',
-  '洽洽食品': 'sz002557', '良品铺子': 'sh603719', '三只松鼠': 'sz300783',
-  '绝味食品': 'sh603517', '安井食品': 'sh603345', '温氏股份': 'sz300498',
-  '牧原股份': 'sz002714', '新希望': 'sz000876', '正邦科技': 'sz002157',
-  // 常用A股（电子/半导体/光电）
-  '京东方A': 'sz000725', 'TCL科技': 'sz000100', '深天马': 'sz000050',
-  '韦尔股份': 'sh603501', '卓胜微': 'sz300782', '兆易创新': 'sh603986',
-  '圣邦股份': 'sz300661', '澜起科技': 'sh688008', '长电科技': 'sh600584',
-  '通富微电': 'sz002156', '华天科技': 'sz002185', '士兰微': 'sh600460',
-  '闻泰科技': 'sh600745', '立讯精密': 'sz002475', '歌尔股份': 'sz002241',
-  '蓝思科技': 'sz300433', '德赛电池': 'sz000049', '欣旺达': 'sz300207',
-  // 常用A股（互联网/传媒/游戏）
-  '三七互娱': 'sz002555', '完美世界': 'sz002624', '巨人网络': 'sz002558',
-  '昆仑万维': 'sz300418', '世纪华通': 'sz002602', '恺英网络': 'sz002517',
-  '芒果超媒': 'sz300413', '分众传媒': 'sz002027', '光线传媒': 'sz300251',
-  '万达电影': 'sz002739', '华谊兄弟': 'sz300027', '中文在线': 'sz300364',
-  // 新股/次新股
-  'N中芯': 'sh688981', 'N华大': 'sh688036', '华润微': 'sh688396',
-  '中微公司': 'sh688012', '芯原股份': 'sh688521', '寒武纪': 'sh688256',
-  '地平线': 'sh688702', '壁仞科技': 'sh688385',
-
-    // 港股通热门
+  // 港股通热门
   '恒安国际': 'hk01044', '维达国际': 'hk03331', '敏华控股': 'hk01999',
   '蒙牛': 'hk02319', '创科实业': 'hk00669', '耐世特': 'hk01579',
   // ===== 美股 =====
@@ -583,22 +389,13 @@ const Utils = {
   /** 规范化股票代码（统一为sh/sz/hk/us+代码） */
   normalizeCode(code) {
     code = code.trim().toLowerCase();
-    if (/^(sh|sz|bj)\d{6}$/.test(code)) return code;
+    if (/^(sh|sz)\d{6}$/.test(code)) return code;
     if (/^hk\d{5}$/.test(code)) return code;
     if (/^us[a-z]+$/i.test(code)) return code;
     // 尝试港股5位代码（纯数字5位）
     if (/^\d{5}$/.test(code)) return 'hk' + code;
     if (/^\d{6}$/.test(code)) {
-      // 北交所/新三板：8开头或43/4开头
-      if (code.startsWith('8') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
-      // 沪市ETF/REITs
-      if (code.startsWith('51') || code.startsWith('508') || code.startsWith('56')) return 'sh' + code;
-      // 深市ETF/可转债
-      if (code.startsWith('15') || code.startsWith('12') || code.startsWith('16')) return 'sz' + code;
-      // 沪市主板/科创板/可转债
       if (code.startsWith('6') || code.startsWith('9')) return 'sh' + code;
-      // 沪市可转债 11开头
-      if (code.startsWith('11')) return 'sh' + code;
       return 'sz' + code;
     }
     return null;
@@ -778,9 +575,9 @@ const DataAPI = {
         return data.QuotationCodeTable.Data.map(item => ({
           name: item.Name,
           code: item.Code,
-          market: item.MktNum === '01' ? 'sh' : item.MktNum === '02' ? 'bj' : 'sz',
+          market: item.MktNum === '01' ? 'sh' : 'sz',
           fullName: `${item.Name}(${item.Code})`,
-          fullCode: (item.MktNum === '01' ? 'sh' : item.MktNum === '02' ? 'bj' : 'sz') + item.Code
+          fullCode: (item.MktNum === '01' ? 'sh' : 'sz') + item.Code
         })).filter(d => /^\d{6}$/.test(d.code));
       }
       return [];
@@ -847,78 +644,52 @@ const DataAPI = {
   async searchStockFull(keyword) {
     // 先查本地映射（支持模糊匹配：名称或代码部分匹配）
     const localResults = [];
-    const kw = keyword.trim().toLowerCase();
-
-    // 支持直接输入6位代码搜索
-    if (/^\d{6}$/.test(kw)) {
-      const prefixes = ['sh', 'sz', 'bj'];
-      for (const prefix of prefixes) {
-        const fullCode = prefix + kw;
-        if (CODE_TO_NAME[fullCode]) {
-          let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
-          localResults.push({ name: CODE_TO_NAME[fullCode], code: kw, market, fullCode });
-        }
-      }
-      // 即使本地没找到，也尝试通过API获取
-      if (localResults.length === 0) {
-        // 尝试三种前缀获取行情
-        for (const prefix of ['sh', 'sz', 'bj']) {
-          try {
-            const fullCode = prefix + kw;
-            const resp = await fetch(CONFIG.TENCENT_QUOTE + fullCode);
-            const text = await resp.text();
-            if (text.includes('~') && !text.includes('pv_none_match')) {
-              const parts = text.split('~');
-              const name = parts[1] || CODE_TO_NAME[fullCode] || kw;
-              let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
-              localResults.push({ name, code: kw, market, fullCode });
-              break;
-            }
-          } catch(e) {}
-        }
-      }
-    }
-
-    // 本地模糊搜索
+    const kw = keyword.toLowerCase();
     Object.entries(STOCK_MAP).forEach(([name, code]) => {
       const nameLower = name.toLowerCase();
       const codeLower = code.toLowerCase();
+      // 名称模糊匹配或代码模糊匹配
       if (nameLower.includes(kw) || codeLower.includes(kw)) {
         let market = 'A股';
         if (code.startsWith('sh')) market = '上证';
         else if (code.startsWith('sz')) market = '深证';
-        else if (code.startsWith('bj')) market = '北交所';
         else if (code.startsWith('hk')) market = '港股';
         else if (code.startsWith('us')) market = '美股';
-        localResults.push({ name, code, market, fullCode: code });
+        localResults.push({
+          name, code,
+          market,
+          fullCode: code
+        });
       }
     });
-
-    // 去重
+    // 去重（港股/美股可能有多个名称映射到同一代码）
     const seen = new Set();
     const deduped = [];
     localResults.forEach(r => {
-      if (!seen.has(r.fullCode)) { seen.add(r.fullCode); deduped.push(r); }
+      if (!seen.has(r.fullCode)) {
+        seen.add(r.fullCode);
+        deduped.push(r);
+      }
     });
     localResults.length = 0;
     localResults.push(...deduped);
-
-    // 再查东方财富API
+    // 再查API（仅A股）
     try {
       const apiResults = await this.searchStock(keyword);
+      // 合并去重
       const codes = new Set(localResults.map(r => r.fullCode));
       apiResults.forEach(r => {
         if (!codes.has(r.fullCode)) {
           localResults.push({
-            name: r.name, code: r.code,
-            market: r.market === 'sh' ? '上证' : r.market === 'bj' ? '北交所' : '深证',
+            name: r.name,
+            code: r.code,
+            market: r.market === 'sh' ? '上证' : '深证',
             fullCode: r.fullCode
           });
           codes.add(r.fullCode);
         }
       });
     } catch (e) {}
-
     return localResults;
   }
 };
@@ -1950,14 +1721,10 @@ const Screener = {
 };
 
 // ============================================================
-// 11. Watchlist - 自选股管理（增强版：评估信息+排序）
+// 11. Watchlist - 自选股管理
 // ============================================================
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
-  // 排序状态
-  sortKey: 'score_desc', // 默认按评估得分降序
-  // 缓存评估数据 { code: { score, advice, vwap, quote } }
-  _cache: {},
 
   /** 获取自选股列表 */
   getList() {
@@ -1980,8 +1747,6 @@ const Watchlist = {
     }
     list.push(code);
     this.save(list);
-    // 记录添加时间
-    this._saveAddedAt(code);
     Utils.toast('已添加到自选股');
     return true;
   },
@@ -1991,149 +1756,12 @@ const Watchlist = {
     let list = this.getList();
     list = list.filter(c => c !== code);
     this.save(list);
-    delete this._cache[code];
     Utils.toast('已从自选股移除');
   },
 
   /** 检查是否在自选股中 */
   has(code) {
     return this.getList().includes(code);
-  },
-
-  /** 快速评估（简化版七维度，用于列表展示） */
-  quickScore(quote, klines) {
-    if (!quote || !quote.price || quote.price <= 0) return 0;
-    let score = 50;
-    // PE评分
-    if (quote.pe > 0 && quote.pe < 15) score += 18;
-    else if (quote.pe >= 15 && quote.pe < 25) score += 12;
-    else if (quote.pe >= 25 && quote.pe < 40) score += 4;
-    else if (quote.pe >= 40 || quote.pe < 0) score -= 12;
-    // PB评分
-    if (quote.pb > 0 && quote.pb < 1.5) score += 12;
-    else if (quote.pb >= 1.5 && quote.pb < 3) score += 8;
-    else if (quote.pb >= 5 || quote.pb < 0) score -= 8;
-    // 市值评分
-    if (quote.marketCap > 500) score += 8;
-    else if (quote.marketCap > 100) score += 4;
-    else score -= 4;
-    // 技术面：均线趋势
-    if (klines && klines.length >= 20) {
-      const closes = klines.map(k => k.close);
-      const ma5 = Utils.calcMA(closes, 5);
-      const ma20 = Utils.calcMA(closes, 20);
-      if (ma5 && ma20) {
-        if (ma5 > ma20) score += 8;
-        else score -= 6;
-      }
-      // 涨跌幅
-      if (quote.changePct > 0 && quote.changePct < 5) score += 4;
-      else if (quote.changePct > 5) score += 2;
-      else if (quote.changePct < -5) score -= 6;
-      // 换手率
-      if (quote.turnover > 3 && quote.turnover < 10) score += 3;
-    }
-    return Math.max(0, Math.min(100, Math.round(score)));
-  },
-
-  /** 根据评分生成建议操作 */
-  getAdvice(score) {
-    if (score >= 70) return { text: '持有/加仓', icon: '✅', cls: 'advice-buy' };
-    if (score >= 55) return { text: '逢低建仓', icon: '📈', cls: 'advice-wait' };
-    if (score >= 40) return { text: '观望为主', icon: '📊', cls: 'advice-hold' };
-    if (score >= 25) return { text: '减仓观望', icon: '⚠️', cls: 'advice-sell' };
-    return { text: '回避/止损', icon: '🚫', cls: 'advice-avoid' };
-  },
-
-  /** 计算筹码成本（20日VWAP） */
-  calcChipCost(klines) {
-    if (!klines || klines.length < 5) return 0;
-    const slice = klines.slice(-20);
-    let totalAmt = 0, totalVol = 0;
-    slice.forEach(k => {
-      const price = (k.open + k.high + k.low + k.close) / 4;
-      totalAmt += price * k.volume;
-      totalVol += k.volume;
-    });
-    return totalVol > 0 ? +(totalAmt / totalVol).toFixed(2) : 0;
-  },
-
-  /** 切换排序方式（支持点击同一按钮切换升降序） */
-  setSort(key) {
-    // 如果点击的是当前排序字段，切换升降序
-    const baseKey = key.replace(/_(asc|desc)$/, '');
-    const currentBase = this.sortKey.replace(/_(asc|desc)$/, '');
-    if (baseKey === currentBase && this.sortKey.endsWith('_desc')) {
-      this.sortKey = baseKey + '_asc';
-    } else if (baseKey === currentBase && this.sortKey.endsWith('_asc')) {
-      this.sortKey = baseKey + '_desc';
-    } else {
-      this.sortKey = key;
-    }
-    this.render();
-  },
-
-  /** 获取股票添加时间 */
-  getAddedAt(code) {
-    try {
-      const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
-      return meta[code] || 0;
-    } catch { return 0; }
-  },
-
-  /** 保存股票添加时间 */
-  _saveAddedAt(code) {
-    try {
-      const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
-      if (!meta[code]) {
-        meta[code] = Date.now();
-        localStorage.setItem('zhigu_watchlist_meta', JSON.stringify(meta));
-      }
-    } catch {}
-  },
-
-  /** 对数据进行排序 */
-  applySort(items) {
-    const key = this.sortKey;
-    return items.sort((a, b) => {
-      // 无行情的排到最后
-      if (a.noQuote && !b.noQuote) return 1;
-      if (!a.noQuote && b.noQuote) return -1;
-      if (key === 'score_desc') return (b.score || 0) - (a.score || 0);
-      if (key === 'score_asc') return (a.score || 0) - (b.score || 0);
-      if (key === 'name') return (a.name || '').localeCompare(b.name || '', 'zh-CN');
-      if (key === 'cost_desc') return (b.vwap || 0) - (a.vwap || 0);
-      if (key === 'cost_asc') return (a.vwap || 0) - (b.vwap || 0);
-      if (key === 'price_desc') return (b.price || 0) - (a.price || 0);
-      if (key === 'price_asc') return (a.price || 0) - (b.price || 0);
-      if (key === 'change_desc') return (b.changePct || 0) - (a.changePct || 0);
-      if (key === 'change_asc') return (a.changePct || 0) - (b.changePct || 0);
-      if (key === 'added_desc') return (b.addedAt || 0) - (a.addedAt || 0);
-      if (key === 'added_asc') return (a.addedAt || 0) - (b.addedAt || 0);
-      return 0;
-    });
-  },
-
-  /** 渲染排序按钮 */
-  renderSortBar() {
-    const sorts = [
-      { key: 'score', label: '🏆评分', defaultDir: 'desc' },
-      { key: 'price', label: '💰价格', defaultDir: 'desc' },
-      { key: 'change', label: '📊涨跌幅', defaultDir: 'desc' },
-      { key: 'cost', label: '🎯成本', defaultDir: 'desc' },
-      { key: 'name', label: '🔤名称', defaultDir: 'asc' },
-      { key: 'added', label: '🕐时间', defaultDir: 'desc' }
-    ];
-    return '<div class="wl-sort-bar">' + sorts.map(s => {
-      const activeKey = this.sortKey.replace(/_(asc|desc)$/, '');
-      const dir = this.sortKey.endsWith('_asc') ? 'asc' : 'desc';
-      const isActive = activeKey === s.key;
-      let arrow = '';
-      if (isActive) arrow = dir === 'desc' ? ' ↓' : ' ↑';
-      const cls = isActive ? ' active' : '';
-      const clickKey = s.key === 'name' ? 'name' : s.key + '_' + s.defaultDir;
-      return '<button class="wl-sort-btn' + cls + '" onclick="Watchlist.setSort(\'' + clickKey + '\')">' + s.label + arrow + '</button>';
-    }).join('') + '</div>';
   },
 
   /** 渲染自选股页面 */
@@ -2146,97 +1774,37 @@ const Watchlist = {
       return;
     }
 
-    container.innerHTML = this.renderSortBar() + '<div class="loading-pulse"><span class="loading-spinner"></span>加载行情与评估数据...</div>';
+    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>加载行情...</div>';
 
     // 批量获取行情
     const quotes = await DataAPI.fetchQuotes(list);
     
     if (Object.keys(quotes).length === 0) {
-      container.innerHTML = this.renderSortBar() + '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
+      container.innerHTML = '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
       return;
     }
 
-    // 逐只获取K线并计算评估信息
-    const items = [];
-    const failedCodes = [];
-    for (const code of list) {
+    let html = '';
+    list.forEach(code => {
       const q = quotes[code];
-      if (!q) {
-        // fallback：无法获取行情时仍显示该股票
-        const fallbackName = CODE_TO_NAME[code] || code;
-        console.warn('[Watchlist] 行情获取失败:', code);
-        failedCodes.push(code);
-        const noDataAdvice = { text: '暂无数据', icon: '⚠️', cls: 'advice-hold' };
-        this._cache[code] = { score: 0, advice: noDataAdvice, vwap: 0, quote: null };
-        items.push({ code, name: fallbackName, price: 0, changePct: 0, score: 0, advice: noDataAdvice, vwap: 0, noQuote: true, addedAt: this.getAddedAt(code) });
-        continue;
-      }
-      let klines = [];
-      try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {
-        console.warn('[Watchlist] K线获取失败:', code, e.message);
-      }
-      const score = this.quickScore(q, klines);
-      const advice = this.getAdvice(score);
-      const vwap = this.calcChipCost(klines);
-      // 缓存
-      this._cache[code] = { score, advice, vwap, quote: q };
-      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, advice, vwap, addedAt: this.getAddedAt(code) });
-    }
-    if (failedCodes.length > 0) {
-      console.log('[Watchlist] 行情获取失败的股票:', failedCodes.join(', '));
-    }
-
-    // 排序
-    const sorted = this.applySort(items);
-
-    let html = this.renderSortBar();
-    if (failedCodes.length > 0) {
-      html += '<div class="wl-debug-tip">⚠️ ' + failedCodes.length + '只股票行情获取失败</div>';
-    }
-    sorted.forEach(item => {
-      const cls = Utils.colorClass(item.changePct);
-      const scoreColor = Utils.scoreColor(item.score);
-      const advice = item.advice;
-      const vwapStr = item.vwap > 0 ? item.vwap.toFixed(2) : '--';
-      // 价格与成本比较
-      let costDiff = '';
-      if (item.vwap > 0 && item.price > 0) {
-        const diff = ((item.price - item.vwap) / item.vwap * 100).toFixed(1);
-        const diffCls = diff >= 0 ? 'color-up' : 'color-down';
-        costDiff = '<span class="wl-cost-diff ' + diffCls + '">' + (diff >= 0 ? '+' : '') + diff + '%</span>';
-      }
-      html += '<div class="watchlist-item watchlist-item-v2">';
-      html += '<div class="wl-left" onclick="App.analyzeStock(\'' + item.code + '\')">';
-      html += '<div class="wl-name">' + item.name + '</div>';
-      html += '<div class="wl-code">' + item.code + '</div>';
-      html += '</div>';
-      html += '<div class="wl-middle">';
-      // 评估得分
-      html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">评估</span>';
-      html += '<span class="wl-info-val" style="color:' + scoreColor + '">' + item.score + '分</span>';
-      html += '</div>';
-      // 建议操作
-      html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">建议</span>';
-      html += '<span class="wl-info-val ' + advice.cls + '">' + advice.icon + item.advice.text + '</span>';
-      html += '</div>';
-      // 筹码成本
-      html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">筹码成本</span>';
-      html += '<span class="wl-info-val">' + vwapStr + costDiff + '</span>';
-      html += '</div>';
-      html += '</div>';
-      html += '<div class="wl-right">';
-      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
-      html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
-      html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
-      html += '</div>';
-      html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
-      html += '</div>';
-      html += '</div>';
+      if (!q) return;
+      const cls = Utils.colorClass(q.changePct);
+      html += `
+        <div class="watchlist-item">
+          <div class="wl-left" onclick="App.analyzeStock('${code}')">
+            <div class="wl-name">${q.name}</div>
+            <div class="wl-code">${code}</div>
+          </div>
+          <div class="wl-right">
+            <div class="wl-price ${cls}" onclick="App.analyzeStock('${code}')">${q.price.toFixed(2)}</div>
+            <div class="wl-change ${cls}" onclick="App.analyzeStock('${code}')">
+              ${q.changePct > 0 ? '+' : ''}${q.changePct.toFixed(2)}%
+            </div>
+            <button class="wl-delete" onclick="Watchlist.removeAndRefresh('${code}')">✕</button>
+          </div>
+        </div>`;
     });
-    container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
+    container.innerHTML = html || '<div class="empty-tip">暂无数据</div>';
   },
 
   /** 删除并刷新 */

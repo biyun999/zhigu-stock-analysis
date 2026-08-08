@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#1a1f2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="智股分析 - A股七维度智能分析系统，零Token纯前端算法">
+  <title>智股分析 - A股七维智能分析</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%230a0e17'/><text x='50' y='42' text-anchor='middle' font-size='30' fill='%2300d4ff'>智</text><text x='50' y='75' text-anchor='middle' font-size='22' fill='%2300e676'>股</text></svg>">
+  <link rel="stylesheet" href="style.css">
+  <!-- ECharts CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+  <!-- 顶部标题栏 -->
+  <header id="app-header">
+    <div class="header-inner">
+      <h1 class="logo">智股分析</h1>
+      <span class="subtitle">七维智能分析系统</span>
+    </div>
+    <div class="header-time" id="headerTime"></div>
+  </header>
+
+  <!-- 主内容区域 -->
+  <main id="app-content">
+    <!-- ===== 首页 ===== -->
+    <div id="page-home" class="page active">
+      <!-- 快速搜索 -->
+      <section class="card search-card">
+        <div class="card-title">🔍 股票搜索</div>
+        <div class="search-box">
+          <input type="text" id="homeSearchInput" placeholder="输入股票代码或名称，如：贵州茅台、600519" autocomplete="off">
+          <button onclick="App.handleHomeSearch()" class="btn-primary">搜索</button>
+        </div>
+        <div id="homeSearchResults" class="search-results"></div>
+      </section>
+
+      <!-- 热门股票Top20 -->
+      <section class="card">
+        <div class="card-title">🔥 热门股票 Top20</div>
+        <div class="score-intro">综合七维度评分排名</div>
+        <div id="hotStocks" class="hot-stocks-list">
+          <div class="loading-pulse">正在计算评分...</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== 分析页 ===== -->
+    <div id="page-analysis" class="page">
+      <!-- 搜索区 -->
+      <section class="card search-card">
+        <div class="search-box">
+          <input type="text" id="analysisSearchInput" placeholder="输入股票代码或名称进行分析" autocomplete="off">
+          <button onclick="App.startAnalysis()" class="btn-primary">开始分析</button>
+        </div>
+        <div id="analysisSearchResults" class="search-results"></div>
+      </section>
+
+      <!-- 股票概要 -->
+      <section class="card" id="stockSummary" style="display:none">
+        <div class="stock-header">
+          <div class="stock-name-code">
+            <span id="stockName" class="stock-name"></span>
+            <span id="stockCode" class="stock-code"></span>
+          </div>
+          <div class="stock-price-info">
+            <span id="stockPrice" class="stock-price"></span>
+            <span id="stockChange" class="stock-change"></span>
+          </div>
+        </div>
+        <div class="stock-meta" id="stockMeta"></div>
+      </section>
+
+      <!-- 核心结论（操作建议+主力成本摘要） -->
+      <section class="card" id="conclusionCard" style="display:none">
+        <div class="card-title">🎯 核心结论</div>
+        <div id="conclusionContent"></div>
+      </section>
+
+      <!-- 主力成本 -->
+      <section class="card" id="vwapCard" style="display:none">
+        <div class="card-title">🏦 主力成本与动向</div>
+        <div id="vwapContent"></div>
+      </section>
+
+      <!-- 七维度评分 -->
+      <section class="card" id="sevenDimCard" style="display:none">
+        <div class="card-title">📊 七维度评分</div>
+        <div id="sevenDimChart" style="width:100%;height:300px"></div>
+        <div id="sevenDimScores" class="dim-scores-grid"></div>
+        <div class="total-score-bar">
+          <span>综合评分</span>
+          <span id="totalScore" class="total-score"></span>
+        </div>
+      </section>
+
+      <!-- 持仓诊断8大模块 -->
+      <section id="diagnosticResult" style="display:none">
+        <div class="card">
+          <div class="card-title">🩺 持仓诊断报告</div>
+          <div class="disclaimer">⚠️ 以下分析由纯前端算法生成，仅供参考，不构成投资建议。本系统模拟持证职业A股操盘分析师视角，客观中立，优先披露下跌风险。</div>
+        </div>
+        <!-- 模块1 -->
+        <div class="diag-module card" id="diagMod1" style="display:none">
+          <div class="mod-header"><span class="mod-icon">📋</span><span class="mod-title">模块一：财务基本面校验</span></div>
+          <div class="mod-body" id="mod1Content"></div>
+        </div>
+        <!-- 模块2 -->
+        <div class="diag-module card" id="diagMod2" style="display:none">
+          <div class="mod-header"><span class="mod-icon">🏭</span><span class="mod-title">模块二：行业政策与成长性评估</span></div>
+          <div class="mod-body" id="mod2Content"></div>
+        </div>
+        <!-- 模块3 -->
+        <div class="diag-module card" id="diagMod3" style="display:none">
+          <div class="mod-header"><span class="mod-icon">💰</span><span class="mod-title">模块三：资金流向数据解读</span></div>
+          <div class="mod-body" id="mod3Content"></div>
+        </div>
+        <!-- 模块4 -->
+        <div class="diag-module card" id="diagMod4" style="display:none">
+          <div class="mod-header"><span class="mod-icon">📐</span><span class="mod-title">模块四：日线技术盘面解析</span></div>
+          <div class="mod-body" id="mod4Content"></div>
+        </div>
+        <!-- 模块5 -->
+        <div class="diag-module card" id="diagMod5" style="display:none">
+          <div class="mod-header"><span class="mod-icon">⚠️</span><span class="mod-title">模块五：全维度风险量化排查</span></div>
+          <div class="mod-body" id="mod5Content"></div>
+        </div>
+        <!-- 模块6 -->
+        <div class="diag-module card" id="diagMod6" style="display:none">
+          <div class="mod-header"><span class="mod-icon">🎯</span><span class="mod-title">模块六：持仓优化处置方案</span></div>
+          <div class="mod-body" id="mod6Content"></div>
+        </div>
+        <!-- 模块7 -->
+        <div class="diag-module card" id="diagMod7" style="display:none">
+          <div class="mod-header"><span class="mod-icon">🛡️</span><span class="mod-title">模块七：统一标准化风控指标</span></div>
+          <div class="mod-body" id="mod7Content"></div>
+        </div>
+        <!-- 模块8 -->
+        <div class="diag-module card" id="diagMod8" style="display:none">
+          <div class="mod-header"><span class="mod-icon">📌</span><span class="mod-title">模块八：分场景实操操作指引</span></div>
+          <div class="mod-body" id="mod8Content"></div>
+        </div>
+        <!-- 风险汇总 -->
+        <div class="card" id="riskSummaryCard" style="display:none">
+          <div class="card-title">🚨 潜在下跌风险汇总清单</div>
+          <div class="mod-body" id="riskSummaryContent"></div>
+        </div>
+      </section>
+
+      <!-- 公告/新闻 -->
+      <section class="card" id="newsCard" style="display:none">
+        <div class="card-title">📰 近期公告与新闻</div>
+        <div id="newsContent" class="news-list"></div>
+      </section>
+    </div>
+
+    <!-- ===== 自选股页 ===== -->
+    <div id="page-watchlist" class="page">
+      <section class="card search-card">
+        <div class="card-title">⭐ 我的自选股</div>
+        <div class="search-box">
+          <input type="text" id="watchlistSearchInput" placeholder="添加自选股：输入代码或名称" autocomplete="off">
+          <button onclick="App.addToWatchlist()" class="btn-primary">添加</button>
+        </div>
+        <div id="watchlistSearchResults" class="search-results"></div>
+      </section>
+      <section class="card">
+        <div id="watchlistContent" class="watchlist-items">
+          <div class="empty-tip">暂无自选股，请在上方搜索添加</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== 智能选股页 ===== -->
+    <div id="page-screener" class="page">
+      <section class="card">
+        <div class="card-title">🧠 智能选股</div>
+        <div class="screener-filters">
+          <div class="filter-group">
+            <label>筛选策略</label>
+            <select id="screenerStrategy">
+              <option value="quality">质量因子（ROE>15%, 连续盈利, 低负债）</option>
+              <option value="value">价值因子（PE<30, PB<3, 高股息）</option>
+              <option value="balanced">均衡策略（质量+价值综合）</option>
+            </select>
+          </div>
+          <button onclick="App.runScreener()" class="btn-primary btn-block">开始筛选</button>
+        </div>
+      </section>
+      <section class="card" id="screenerResultCard" style="display:none">
+        <div class="card-title">📊 筛选结果</div>
+        <div id="screenerInfo" class="screener-info"></div>
+        <div id="screenerResults" class="screener-list"></div>
+      </section>
+    </div>
+
+    <!-- ===== 关于页 ===== -->
+    <div id="page-about" class="page">
+      <section class="card about-card">
+        <div class="about-logo">
+          <div class="about-icon">智股</div>
+          <h2>智股分析 v2.0</h2>
+          <p class="about-sub">A股七维度智能分析系统</p>
+        </div>
+        <div class="about-features">
+          <div class="feature-item">
+            <span class="feature-icon">🧠</span>
+            <div><strong>七维度分析</strong><br>基本面·技术面·资金面·消息面·情绪面·宏观面·风险面</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">🩺</span>
+            <div><strong>持仓诊断</strong><br>8大标准化模块，专业操盘分析师视角</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">🔍</span>
+            <div><strong>智能选股</strong><br>质量因子·价值因子·综合评分排名</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">🌍</span>
+            <div><strong>多市场覆盖</strong><br>A股·港股·美股100+主流标的</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">⚡</span>
+            <div><strong>零Token消耗</strong><br>100%纯前端算法，不调用任何AI接口</div>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">📱</span>
+            <div><strong>PWA支持</strong><br>可添加到手机主屏幕，离线可用</div>
+          </div>
+        </div>
+        <div class="about-data">
+          <p><strong>数据来源</strong></p>
+          <p>腾讯财经API · 东方财富API</p>
+          <p>实时行情 · 日K线 · 资金流向 · 财务数据</p>
+        </div>
+        <div class="about-disclaimer">
+          <p>⚠️ 免责声明</p>
+          <p>本应用所有分析和观点均由前端算法自动生成，仅供学习参考，不构成任何投资建议。股市有风险，投资需谨慎。</p>
+        </div>
+        <div class="about-tech">
+          <p>技术栈：HTML5 + CSS3 + JavaScript + ECharts</p>
+          <p>部署方式：纯前端PWA · 零后端服务</p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 底部导航栏 -->
+  <nav id="app-nav">
+    <div class="nav-item active" data-page="home" onclick="App.switchPage('home')">
+      <span class="nav-icon">🏠</span><span class="nav-label">首页</span>
+    </div>
+    <div class="nav-item" data-page="analysis" onclick="App.switchPage('analysis')">
+      <span class="nav-icon">📊</span><span class="nav-label">分析</span>
+    </div>
+    <div class="nav-item" data-page="watchlist" onclick="App.switchPage('watchlist')">
+      <span class="nav-icon">⭐</span><span class="nav-label">自选股</span>
+    </div>
+    <div class="nav-item" data-page="screener" onclick="App.switchPage('screener')">
+      <span class="nav-icon">🧠</span><span class="nav-label">选股</span>
+    </div>
+    <div class="nav-item" data-page="about" onclick="App.switchPage('about')">
+      <span class="nav-icon">ℹ️</span><span class="nav-label">关于</span>
+    </div>
+  </nav>
+
+  <!-- 全局Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- 应用主脚本 -->
+  <script src="app.js"></script>
+</body>
+</html>
