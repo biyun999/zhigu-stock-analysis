@@ -690,19 +690,179 @@ const Utils = {
 
   /** 评分转等级文字 */
   scoreLevel(score) {
-    if (score >= 80) return '优秀';
-    if (score >= 60) return '良好';
-    if (score >= 40) return '一般';
-    if (score >= 20) return '较弱';
+    if (score >= 90) return '★★★★★';
+    if (score >= 75) return '★★★★☆';
+    if (score >= 60) return '★★★☆☆';
+    if (score >= 40) return '★★☆☆☆';
+    return '★☆☆☆☆';
+  },
+
+  scoreLevelText(score) {
+    if (score >= 90) return '极优秀';
+    if (score >= 75) return '良好';
+    if (score >= 60) return '一般';
+    if (score >= 40) return '较弱';
     return '危险';
   },
 
   scoreColor(score) {
-    if (score >= 80) return '#00e676';
+    if (score >= 75) return '#00e676';
     if (score >= 60) return '#00d4ff';
     if (score >= 40) return '#ffa726';
-    if (score >= 20) return '#ff6b35';
     return '#ff4757';
+  },
+
+  fiveDimScore(quote, klines) {
+    if (!quote || !quote.price || quote.price <= 0) return { total: 0, dims: { fundamental: 0, technical: 0, capital: 0, valuation: 0, sentiment: 0 } };
+    const fundamental = this._scoreFundamentalQuick(quote, klines);
+    const technical = this._scoreTechnicalQuick(klines, quote);
+    const capital = this._scoreCapitalQuick(quote, klines);
+    const valuation = this._scoreValuationQuick(quote);
+    const sentiment = this._scoreSentimentQuick(quote, klines);
+    const total = Math.round(fundamental * 0.30 + technical * 0.25 + capital * 0.20 + valuation * 0.15 + sentiment * 0.10);
+    return { total: Math.max(0, Math.min(100, total)), dims: { fundamental, technical, capital, valuation, sentiment } };
+  },
+
+  _scoreFundamentalQuick(quote, klines) {
+    let s = 50;
+    if (quote.pe > 0 && quote.pe < 12) s += 25;
+    else if (quote.pe >= 12 && quote.pe < 20) s += 18;
+    else if (quote.pe >= 20 && quote.pe < 35) s += 8;
+    else if (quote.pe >= 35 && quote.pe < 60) s -= 5;
+    else if (quote.pe >= 60 || quote.pe < 0) s -= 20;
+    if (quote.pb > 0 && quote.pb < 1.2) s += 15;
+    else if (quote.pb >= 1.2 && quote.pb < 2.5) s += 10;
+    else if (quote.pb >= 2.5 && quote.pb < 4) s += 2;
+    else if (quote.pb >= 4 || quote.pb < 0) s -= 10;
+    if (klines && klines.length >= 20) {
+      const closes = klines.map(k => k.close);
+      const ma5 = this.calcMA(closes, 5);
+      const ma20 = this.calcMA(closes, 20);
+      if (ma5 && ma20) {
+        const prevMa5 = closes.length >= 6 ? this.calcMA(closes.slice(0, -1), 5) : ma5;
+        if (ma5 > ma20 && ma5 > prevMa5) s += 10;
+        else if (ma5 > ma20) s += 5;
+        else if (ma5 < ma20 && ma5 < prevMa5) s -= 10;
+      }
+    }
+    if (quote.marketCap > 1000) s += 10;
+    else if (quote.marketCap > 500) s += 8;
+    else if (quote.marketCap > 100) s += 3;
+    else s -= 8;
+    return Math.max(0, Math.min(100, s));
+  },
+
+  _scoreTechnicalQuick(klines, quote) {
+    if (!klines || klines.length < 20) return 50;
+    let s = 50;
+    const closes = klines.map(k => k.close);
+    const current = quote.price;
+    const ma5 = this.calcMA(closes, 5);
+    const ma10 = this.calcMA(closes, 10);
+    const ma20 = this.calcMA(closes, 20);
+    const ma30 = this.calcMA(closes, Math.min(30, closes.length));
+    if (ma5 && ma10 && ma20) {
+      if (ma5 > ma10 && ma10 > ma20) s += 18;
+      else if (ma5 > ma10) s += 10;
+      else if (ma5 < ma10 && ma10 < ma20) s -= 15;
+      if (ma30 && ma20 > ma30) s += 5;
+    }
+    const high30 = Math.max(...closes.slice(-30));
+    const low30 = Math.min(...closes.slice(-30));
+    if (high30 > low30) {
+      const pos = (current - low30) / (high30 - low30);
+      if (pos > 0.7) s += 8;
+      else if (pos > 0.4) s += 4;
+      else if (pos < 0.15) s -= 5;
+    }
+    if (closes.length >= 10) {
+      const changes = [];
+      for (let i = closes.length - 5; i < closes.length; i++) {
+        changes.push((closes[i] - closes[i-1]) / closes[i-1] * 100);
+      }
+      const avgChg = changes.reduce((a,b) => a+b, 0) / changes.length;
+      const variance = changes.reduce((a,b) => a + (b-avgChg)**2, 0) / changes.length;
+      if (avgChg > 0 && variance < 4) s += 8;
+      else if (avgChg > 0) s += 4;
+      else if (avgChg < -2) s -= 8;
+    }
+    return Math.max(0, Math.min(100, s));
+  },
+
+  _scoreCapitalQuick(quote, klines) {
+    let s = 50;
+    const turnover = quote.turnover || 0;
+    if (turnover >= 2 && turnover <= 5) s += 18;
+    else if (turnover > 5 && turnover <= 8) s += 12;
+    else if (turnover > 1 && turnover < 2) s += 6;
+    else if (turnover > 8 && turnover <= 15) s -= 5;
+    else if (turnover > 15) s -= 15;
+    else s -= 5;
+    if (klines && klines.length >= 20) {
+      const vols = klines.map(k => k.volume);
+      const vol5 = vols.slice(-5).reduce((a,b) => a+b, 0) / 5;
+      const vol20 = vols.slice(-20).reduce((a,b) => a+b, 0) / 20;
+      if (vol20 > 0) {
+        const ratio = vol5 / vol20;
+        if (ratio > 1.3 && quote.changePct > 0) s += 15;
+        else if (ratio > 1.3 && quote.changePct < 0) s -= 10;
+        else if (ratio < 0.7 && quote.changePct > 0) s += 5;
+        else if (ratio > 1.5 && quote.changePct < -3) s -= 15;
+      }
+    }
+    if (quote.changePct > 0 && turnover > 3) s += 8;
+    else if (quote.changePct < -3 && turnover > 8) s -= 10;
+    return Math.max(0, Math.min(100, s));
+  },
+
+  _scoreValuationQuick(quote) {
+    let s = 50;
+    if (quote.pe > 0 && quote.pe < 10) s += 25;
+    else if (quote.pe >= 10 && quote.pe < 18) s += 18;
+    else if (quote.pe >= 18 && quote.pe < 30) s += 8;
+    else if (quote.pe >= 30 && quote.pe < 50) s -= 5;
+    else if (quote.pe >= 50 || quote.pe < 0) s -= 20;
+    if (quote.pb > 0 && quote.pb < 1) s += 20;
+    else if (quote.pb >= 1 && quote.pb < 2) s += 12;
+    else if (quote.pb >= 2 && quote.pb < 3.5) s += 5;
+    else if (quote.pb >= 3.5 && quote.pb < 6) s -= 5;
+    else if (quote.pb >= 6 || quote.pb < 0) s -= 15;
+    if (quote.marketCap > 800) s += 10;
+    else if (quote.marketCap > 300) s += 5;
+    else if (quote.marketCap < 50) s -= 10;
+    return Math.max(0, Math.min(100, s));
+  },
+
+  _scoreSentimentQuick(quote, klines) {
+    let s = 50;
+    if (klines && klines.length >= 10) {
+      const closes = klines.map(k => k.close);
+      const changes = [];
+      for (let i = closes.length - 10; i < closes.length; i++) {
+        changes.push(Math.abs((closes[i] - closes[i-1]) / closes[i-1] * 100));
+      }
+      const avgVol = changes.reduce((a,b) => a+b, 0) / changes.length;
+      if (avgVol < 1.5) s += 15;
+      else if (avgVol < 3) s += 8;
+      else if (avgVol < 5) s += 2;
+      else if (avgVol > 7) s -= 10;
+    }
+    if (klines && klines.length >= 5) {
+      const recent = klines.slice(-5);
+      const avgVol = recent.reduce((sum, k) => sum + k.volume, 0) / 5;
+      const last = recent[4];
+      const priceUp = last.close > recent[0].close;
+      if (priceUp && last.volume > avgVol * 1.2) s += 12;
+      else if (!priceUp && last.volume < avgVol * 0.8) s += 6;
+      else if (!priceUp && last.volume > avgVol * 1.5) s -= 12;
+      else if (priceUp && last.volume < avgVol * 0.5) s -= 3;
+    }
+    if (quote.changePct > 0 && quote.changePct < 3) s += 8;
+    else if (quote.changePct >= 3 && quote.changePct < 7) s += 4;
+    else if (quote.changePct >= 7) s -= 5;
+    else if (quote.changePct < -5) s -= 10;
+    else if (quote.changePct < -2) s -= 3;
+    return Math.max(0, Math.min(100, s));
   }
 };
 
@@ -1093,21 +1253,39 @@ const Search = {
 const SevenDimAnalyzer = {
   /** 计算七维度评分 */
   analyze(quote, klines, capitalFlow) {
+    const fundamental = this.scoreFundamental(quote);
+    const technical = this.scoreTechnical(klines, quote);
+    const capital = this.scoreCapital(capitalFlow);
+    const valuation = this.scoreValuation(quote);
+    const sentiment = this.scoreSentiment(quote, klines);
     const scores = {
-      fundamental: this.scoreFundamental(quote),
-      technical: this.scoreTechnical(klines, quote),
-      capital: this.scoreCapital(capitalFlow),
-      sentiment: this.scoreSentiment(quote, klines),
+      fundamental, technical, capital, valuation, sentiment,
       message: this.scoreMessage(quote),
       macro: this.scoreMacro(),
       risk: this.scoreRisk(quote, klines, capitalFlow)
     };
-    // 综合评分（加权）
-    const weights = { fundamental: 0.2, technical: 0.15, capital: 0.2, sentiment: 0.1, message: 0.1, macro: 0.1, risk: 0.15 };
-    let total = 0;
-    Object.entries(scores).forEach(([k, v]) => { total += v * weights[k]; });
-    scores.total = Math.round(total);
+    const total = fundamental * 0.30 + technical * 0.25 + capital * 0.20 + valuation * 0.15 + sentiment * 0.10;
+    scores.total = Math.round(Math.max(0, Math.min(100, total)));
+    scores.dims = { fundamental, technical, capital, valuation, sentiment };
     return scores;
+  },
+
+  scoreValuation(quote) {
+    let score = 50;
+    if (quote.pe > 0 && quote.pe < 10) score += 30;
+    else if (quote.pe >= 10 && quote.pe < 18) score += 20;
+    else if (quote.pe >= 18 && quote.pe < 30) score += 8;
+    else if (quote.pe >= 30 && quote.pe < 50) score -= 8;
+    else if (quote.pe >= 50 || quote.pe < 0) score -= 25;
+    if (quote.pb > 0 && quote.pb < 1) score += 20;
+    else if (quote.pb >= 1 && quote.pb < 2) score += 12;
+    else if (quote.pb >= 2 && quote.pb < 3.5) score += 5;
+    else if (quote.pb >= 3.5 && quote.pb < 6) score -= 8;
+    else if (quote.pb >= 6 || quote.pb < 0) score -= 18;
+    if (quote.marketCap > 800) score += 10;
+    else if (quote.marketCap > 300) score += 5;
+    else if (quote.marketCap < 50) score -= 10;
+    return Math.max(0, Math.min(100, score));
   },
 
   /** 基本面评分 */
@@ -2017,38 +2195,7 @@ const Watchlist = {
 
   /** 快速评估（简化版七维度，用于列表展示） */
   quickScore(quote, klines) {
-    if (!quote || !quote.price || quote.price <= 0) return 0;
-    let score = 50;
-    // PE评分
-    if (quote.pe > 0 && quote.pe < 15) score += 18;
-    else if (quote.pe >= 15 && quote.pe < 25) score += 12;
-    else if (quote.pe >= 25 && quote.pe < 40) score += 4;
-    else if (quote.pe >= 40 || quote.pe < 0) score -= 12;
-    // PB评分
-    if (quote.pb > 0 && quote.pb < 1.5) score += 12;
-    else if (quote.pb >= 1.5 && quote.pb < 3) score += 8;
-    else if (quote.pb >= 5 || quote.pb < 0) score -= 8;
-    // 市值评分
-    if (quote.marketCap > 500) score += 8;
-    else if (quote.marketCap > 100) score += 4;
-    else score -= 4;
-    // 技术面：均线趋势
-    if (klines && klines.length >= 20) {
-      const closes = klines.map(k => k.close);
-      const ma5 = Utils.calcMA(closes, 5);
-      const ma20 = Utils.calcMA(closes, 20);
-      if (ma5 && ma20) {
-        if (ma5 > ma20) score += 8;
-        else score -= 6;
-      }
-      // 涨跌幅
-      if (quote.changePct > 0 && quote.changePct < 5) score += 4;
-      else if (quote.changePct > 5) score += 2;
-      else if (quote.changePct < -5) score -= 6;
-      // 换手率
-      if (quote.turnover > 3 && quote.turnover < 10) score += 3;
-    }
-    return Math.max(0, Math.min(100, Math.round(score)));
+    return Utils.fiveDimScore(quote, klines);
   },
 
   /** 根据评分生成建议操作 */
@@ -2182,20 +2329,22 @@ const Watchlist = {
         console.warn('[Watchlist] 行情获取失败:', code);
         failedCodes.push(code);
         const noDataAdvice = { text: '暂无数据', icon: '⚠️', cls: 'advice-hold' };
-        this._cache[code] = { score: 0, advice: noDataAdvice, vwap: 0, quote: null };
-        items.push({ code, name: fallbackName, price: 0, changePct: 0, score: 0, advice: noDataAdvice, vwap: 0, noQuote: true, addedAt: this.getAddedAt(code) });
+        const noDims = { fundamental: 0, technical: 0, capital: 0, valuation: 0, sentiment: 0 };
+        this._cache[code] = { score: 0, dims: noDims, advice: noDataAdvice, vwap: 0, quote: null };
+        items.push({ code, name: fallbackName, price: 0, changePct: 0, score: 0, dims: noDims, advice: noDataAdvice, vwap: 0, noQuote: true, addedAt: this.getAddedAt(code) });
         continue;
       }
       let klines = [];
       try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {
         console.warn('[Watchlist] K线获取失败:', code, e.message);
       }
-      const score = this.quickScore(q, klines);
+      const scoreResult = this.quickScore(q, klines);
+      const score = scoreResult.total;
+      const dims = scoreResult.dims;
       const advice = this.getAdvice(score);
       const vwap = this.calcChipCost(klines);
-      // 缓存
-      this._cache[code] = { score, advice, vwap, quote: q };
-      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, advice, vwap, addedAt: this.getAddedAt(code) });
+      this._cache[code] = { score, dims, advice, vwap, quote: q };
+      items.push({ code, name: q.name, price: q.price, changePct: q.changePct, score, dims, advice, vwap, addedAt: this.getAddedAt(code) });
     }
     if (failedCodes.length > 0) {
       console.log('[Watchlist] 行情获取失败的股票:', failedCodes.join(', '));
@@ -2226,10 +2375,16 @@ const Watchlist = {
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
       html += '<div class="wl-middle">';
-      // 综合评分
+      // 综合评分 + 星级
+      const starLevel = Utils.scoreLevel(item.score);
+      const levelText = Utils.scoreLevelText(item.score);
       html += '<div class="wl-info-block">';
       html += '<span class="wl-info-label">综合评分</span>';
-      html += '<span class="wl-info-val" style="color:' + scoreColor + '">' + item.score + '分</span>';
+      html += '<span class="wl-score-display" style="color:' + scoreColor + '">';
+      html += '<span class="wl-score-num">' + item.score + '</span>';
+      html += '<span class="wl-score-stars">' + starLevel + '</span>';
+      html += '</span>';
+      html += '<span class="wl-score-level" style="color:' + scoreColor + '">' + levelText + '</span>';
       html += '</div>';
       // 操作建议
       html += '<div class="wl-info-block">';
@@ -2335,15 +2490,9 @@ const App = {
       const scored = [];
       for (const [code, q] of Object.entries(quotes)) {
         if (!q.price || q.price <= 0) continue;
-        // 快速评分（简化版）
-        let score = 50;
-        if (q.pe > 0 && q.pe < 20) score += 15;
-        else if (q.pe > 40) score -= 10;
-        if (q.pb > 0 && q.pb < 2) score += 10;
-        if (q.marketCap > 500) score += 10;
-        if (q.changePct > 0 && q.changePct < 5) score += 5;
-        if (q.turnover > 2 && q.turnover < 8) score += 5;
-        scored.push({ code, name: q.name, price: q.price, change: q.changePct, score: Math.round(score) });
+        // 五维综合评分
+        const scoreResult = Utils.fiveDimScore(q, null);
+        scored.push({ code, name: q.name, price: q.price, change: q.changePct, score: scoreResult.total });
       }
       scored.sort((a, b) => b.score - a.score);
       const top20 = scored.slice(0, 20);
@@ -2363,8 +2512,8 @@ const App = {
               <div class="hs-change-val ${cls}">${s.change > 0 ? '+' : ''}${s.change.toFixed(2)}%</div>
             </div>
             <div class="hs-score">
-              <div class="hs-score-val">${s.score}</div>
-              <div class="hs-score-label">分</div>
+              <div class="hs-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
+              <div class="hs-score-label">${Utils.scoreLevel(s.score)}</div>
             </div>
           </div>`;
       }).join('');
@@ -2579,7 +2728,7 @@ const App = {
           <div class="cs-advice-header">
             <span class="cs-advice-icon">${adviceIcon}</span>
             <span class="cs-advice-type">${adviceType}</span>
-            <span class="cs-score-badge" style="color:${Utils.scoreColor(totalScore)}">${totalScore}分</span>
+            <span class="cs-score-badge" style="color:${Utils.scoreColor(totalScore)}">${totalScore}分 ${Utils.scoreLevel(totalScore)}</span>
           </div>
           <p class="cs-advice-detail">${adviceDetail}</p>
         </div>
@@ -2652,31 +2801,56 @@ const App = {
     this.showSection('sevenDimCard', true);
     const dimNames = {
       fundamental: '基本面', technical: '技术面', capital: '资金面',
-      sentiment: '情绪面', message: '消息面', macro: '宏观面', risk: '风险面'
+      valuation: '估值面', sentiment: '情绪面'
     };
     const dimIcons = {
       fundamental: '📊', technical: '📈', capital: '💰',
-      sentiment: '🎭', message: '📰', macro: '🌍', risk: '⚠️'
+      valuation: '💎', sentiment: '🎭'
+    };
+    const dimWeights = { fundamental: '30%', technical: '25%', capital: '20%', valuation: '15%', sentiment: '10%' };
+    const dimDesc = {
+      fundamental: '盈利·成长·规模',
+      technical: '均线·位置·动量',
+      capital: '换手·量能·流向',
+      valuation: 'PE·PB·市值',
+      sentiment: '波动·量价·强弱'
     };
 
-    // 评分网格
+    // 综合评分大数字
+    const totalScore = scores.total;
+    const starLevel = Utils.scoreLevel(totalScore);
+    const levelText = Utils.scoreLevelText(totalScore);
+    const sColor = Utils.scoreColor(totalScore);
+    document.getElementById('totalScore').innerHTML =
+      '<div class="total-score-display">' +
+      '<div class="total-score-big" style="color:' + sColor + '">' + totalScore + '</div>' +
+      '<div class="total-score-stars">' + starLevel + '</div>' +
+      '<div class="total-score-level" style="color:' + sColor + '">' + levelText + '</div>' +
+      '</div>';
+
+    // 五维评分条
     let gridHtml = '';
     Object.entries(dimNames).forEach(([key, name]) => {
-      const val = scores[key];
-      gridHtml += `
-        <div class="dim-score-item">
-          <span>${dimIcons[key]}</span>
-          <span class="dim-name">${name}</span>
-          <span class="dim-val" style="color:${Utils.scoreColor(val)}">${val}</span>
-        </div>`;
+      const val = scores.dims ? scores.dims[key] : scores[key];
+      const barColor = Utils.scoreColor(val);
+      gridHtml += '<div class="dim-score-item-v2">';
+      gridHtml += '<div class="dim-header">';
+      gridHtml += '<span class="dim-icon">' + dimIcons[key] + '</span>';
+      gridHtml += '<span class="dim-name">' + name + '</span>';
+      gridHtml += '<span class="dim-weight">' + dimWeights[key] + '</span>';
+      gridHtml += '<span class="dim-val" style="color:' + barColor + '">' + val + '分</span>';
+      gridHtml += '</div>';
+      gridHtml += '<div class="dim-bar-wrap"><div class="dim-bar" style="width:' + val + '%;background:' + barColor + '"></div></div>';
+      gridHtml += '<div class="dim-desc">' + dimDesc[key] + '</div>';
+      gridHtml += '</div>';
     });
     document.getElementById('sevenDimScores').innerHTML = gridHtml;
-    document.getElementById('totalScore').textContent = scores.total;
 
-    // ECharts雷达图
+    // ECharts五维雷达图
     if (this.sevenDimChart) this.sevenDimChart.dispose();
     const chartDom = document.getElementById('sevenDimChart');
     this.sevenDimChart = echarts.init(chartDom, 'dark');
+    const dimValues = Object.keys(dimNames).map(k => scores.dims ? scores.dims[k] : scores[k]);
     this.sevenDimChart.setOption({
       backgroundColor: 'transparent',
       radar: {
@@ -2691,8 +2865,8 @@ const App = {
       series: [{
         type: 'radar',
         data: [{
-          value: Object.values(dimNames).map((_, i) => scores[Object.keys(dimNames)[i]]),
-          name: '七维评分',
+          value: dimValues,
+          name: '五维评分',
           areaStyle: { color: 'rgba(0,212,255,0.15)' },
           lineStyle: { color: '#00d4ff', width: 2 },
           itemStyle: { color: '#00d4ff' }
