@@ -418,7 +418,7 @@ const STOCK_MAP = {
   '三峡能源': 'sh600905', '龙源电力': 'sz001289', '节能风电': 'sh601016',
   '中国核电': 'sh601985', '中国广核': 'sz003816', '福能股份': 'sh600483',
   // 常用A股（科技/通信/软件）
-  '拓尔思': 'sz300229', '科大讯飞': 'sz002230', '用友网络': 'sh600588',
+  '海南华铁': 'sz000409', '拓尔思': 'sz300229', '科大讯飞': 'sz002230', '用友网络': 'sh600588',
   '金蝶国际': 'sh600588', '金山办公': 'sh688111', '广联达': 'sz002410',
   '紫光股份': 'sz000938', '浪潮信息': 'sz000977', '中科曙光': 'sh603019',
   '深信服': 'sz300454', '启明星辰': 'sz002439', '安恒信息': 'sh688023',
@@ -768,20 +768,35 @@ const DataAPI = {
     }
   },
 
-  /** 东方财富搜索股票 */
+  /** 东方财富搜索股票 - 支持全类型股票 */
   async searchStock(keyword) {
     try {
-      const url = `${CONFIG.EM_SEARCH}?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=10`;
+      const url = `${CONFIG.EM_SEARCH}?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20`;
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
-        return data.QuotationCodeTable.Data.map(item => ({
-          name: item.Name,
-          code: item.Code,
-          market: item.MktNum === '01' ? 'sh' : item.MktNum === '02' ? 'bj' : 'sz',
-          fullName: `${item.Name}(${item.Code})`,
-          fullCode: (item.MktNum === '01' ? 'sh' : item.MktNum === '02' ? 'bj' : 'sz') + item.Code
-        })).filter(d => /^\d{6}$/.test(d.code));
+        return data.QuotationCodeTable.Data.map(item => {
+          let prefix = 'sz';
+          const code = item.Code;
+          const mkt = item.MktNum;
+          // 东方财富MktNum映射: 01=沪市, 02=深市, 0=北交所
+          if (mkt === '01' || mkt === 1) prefix = 'sh';
+          else if (mkt === '0' && code.startsWith('8')) prefix = 'bj';
+          else if (mkt === '0' && code.startsWith('4')) prefix = 'bj';
+          // 根据代码前缀自动判断
+          else if (code.startsWith('6')) prefix = 'sh';
+          else if (code.startsWith('0') || code.startsWith('3')) prefix = 'sz';
+          else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
+          else if (code.startsWith('5')) prefix = 'sh'; // ETF
+          else if (code.startsWith('1')) prefix = 'sz'; // 可转债/ETF
+          return {
+            name: item.Name || code,
+            code: code,
+            market: prefix,
+            fullName: `${item.Name || code}(${code})`,
+            fullCode: prefix + code
+          };
+        }).filter(d => /^\d{6}$/.test(d.code));
       }
       return [];
     } catch (e) {
@@ -2117,7 +2132,7 @@ const Watchlist = {
   /** 渲染排序按钮 */
   renderSortBar() {
     const sorts = [
-      { key: 'score', label: '🏆评分', defaultDir: 'desc' },
+      { key: 'score', label: '🏆综合评分', defaultDir: 'desc' },
       { key: 'price', label: '💰价格', defaultDir: 'desc' },
       { key: 'change', label: '📊涨跌幅', defaultDir: 'desc' },
       { key: 'cost', label: '🎯成本', defaultDir: 'desc' },
@@ -2211,14 +2226,14 @@ const Watchlist = {
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
       html += '<div class="wl-middle">';
-      // 评估得分
+      // 综合评分
       html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">评估</span>';
+      html += '<span class="wl-info-label">综合评分</span>';
       html += '<span class="wl-info-val" style="color:' + scoreColor + '">' + item.score + '分</span>';
       html += '</div>';
-      // 建议操作
+      // 操作建议
       html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">建议</span>';
+      html += '<span class="wl-info-label">操作</span>';
       html += '<span class="wl-info-val ' + advice.cls + '">' + advice.icon + item.advice.text + '</span>';
       html += '</div>';
       // 筹码成本
