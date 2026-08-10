@@ -1399,3 +1399,89 @@ body {
   .wl-score-stars { font-size: 10px; }
   .dim-score-item-v2 { padding: 10px 12px; }
 }
+
+
+/* === 需求3: 返回按钮 === */
+.page-back-bar {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px 0;
+}
+
+.btn-back {
+  background: rgba(0,212,255,0.1);
+  border: 1px solid rgba(0,212,255,0.3);
+  color: var(--accent-cyan);
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.btn-back:hover {
+  background: rgba(0,212,255,0.2);
+  border-color: var(--accent-cyan);
+}
+
+.btn-back:active {
+  transform: scale(0.96);
+}
+
+/* === 需求1: 热门股票综合评分标题 === */
+.hs-score-label-top {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+  text-align: center;
+}
+
+/* === 需求4: 智能选股增强版样式 === */
+.screener-item-v2 {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  transition: background 0.2s;
+}
+
+.screener-item-v2:hover {
+  background: var(--bg-card-hover);
+}
+
+.sc-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.sc-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(0,212,255,0.1);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(0,212,255,0.2);
+  white-space: nowrap;
+}
+
+.sc-score-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.sc-score-val {
+  font-size: 22px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.sc-score-stars {
+  font-size: 11px;
+  text-align: center;
+  color: var(--accent-yellow);
+}

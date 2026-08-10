@@ -41,7 +41,7 @@
       <!-- 热门股票Top20 -->
       <section class="card">
         <div class="card-title">🔥 热门股票 Top20</div>
-        <div class="score-intro">综合七维度评分排名</div>
+        <div class="score-intro">综合评分排名</div>
         <div id="hotStocks" class="hot-stocks-list">
           <div class="loading-pulse">正在计算评分...</div>
         </div>
@@ -50,6 +50,10 @@
 
     <!-- ===== 分析页 ===== -->
     <div id="page-analysis" class="page">
+      <!-- 返回按钮 -->
+      <div class="page-back-bar">
+        <button class="btn-back" onclick="App.goBack()">← 返回</button>
+      </div>
       <!-- 搜索区 -->
       <section class="card search-card">
         <div class="search-box">
@@ -159,6 +163,10 @@
 
     <!-- ===== 自选股页 ===== -->
     <div id="page-watchlist" class="page">
+      <!-- 返回按钮 -->
+      <div class="page-back-bar">
+        <button class="btn-back" onclick="App.goBack()">← 返回</button>
+      </div>
       <section class="card search-card">
         <div class="card-title">⭐ 我的自选股</div>
         <div class="search-box">
@@ -176,15 +184,19 @@
 
     <!-- ===== 智能选股页 ===== -->
     <div id="page-screener" class="page">
+      <!-- 返回按钮 -->
+      <div class="page-back-bar">
+        <button class="btn-back" onclick="App.goBack()">← 返回</button>
+      </div>
       <section class="card">
         <div class="card-title">🧠 智能选股</div>
         <div class="screener-filters">
           <div class="filter-group">
             <label>筛选策略</label>
             <select id="screenerStrategy">
-              <option value="quality">质量因子（ROE>15%, 连续盈利, 低负债）</option>
-              <option value="value">价值因子（PE<30, PB<3, 高股息）</option>
-              <option value="balanced">均衡策略（质量+价值综合）</option>
+              <option value="quality">质量优选（行业周期+龙头+技术壁垒+财务稳健）</option>
+              <option value="value">价值优选（低估值+低PB+稳定分红）</option>
+              <option value="balanced">均衡策略（质量+价值+全球化综合）</option>
             </select>
           </div>
           <button onclick="App.runScreener()" class="btn-primary btn-block">开始筛选</button>

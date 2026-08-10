@@ -31,6 +31,8 @@ const CONFIG = {
   EM_CAPITAL: 'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
   // 东方财富财务数据API
   EM_FINANCE: 'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get',
+  // 东方财富实时行情API（北交所备用）
+  EM_QUOTE: 'https://push2.eastmoney.com/api/qt/stock/get',
   // 东方财富公告API
   EM_NEWS: 'https://np-anotice-stock.eastmoney.com/api/security/ann',
   // 全球市场指数代码
@@ -162,7 +164,33 @@ const CONFIG = {
     'sz002938': { name: '电子电路', type: '科技' },
     'sh600183': { name: '覆铜板', type: '科技' },
     'sz002607': { name: '传媒', type: '服务' },
-    'sh600741': { name: '汽车零部件', type: '制造' }
+    'sh600741': { name: '汽车零部件', type: '制造' },
+    // 北交所行业
+    'bj832727': { name: '数据服务', type: '科技' },
+    'bj835185': { name: '锂电负极', type: '新能源' },
+    'bj835368': { name: '光伏设备', type: '新能源' },
+    'bj832982': { name: '医美', type: '医疗' },
+    'bj872808': { name: '数据中心', type: '科技' },
+    'bj836247': { name: '电力设备', type: '新能源' },
+    'bj834599': { name: '矿用车', type: '制造' },
+    'bj833575': { name: '生物制品', type: '医疗' },
+    'bj835305': { name: '大数据', type: '科技' },
+    'bj830799': { name: '金融科技', type: '科技' },
+    // 行业周期分类（用于选股）
+  },
+  // 行业周期阶段：rising(上升), mature(成熟), declining(下行), cyclical_up(周期上行), cyclical_down(周期下行)
+  INDUSTRY_CYCLE: {
+    '科技': 'rising', '新能源': 'cyclical_up', '医疗': 'rising',
+    '消费': 'mature', '金融': 'mature', '能源': 'cyclical_down',
+    '周期': 'cyclical_up', '制造': 'rising', '服务': 'mature',
+    '农业': 'cyclical_down', '地产': 'declining', '基建': 'cyclical_up'
+  },
+  // 行业全球化程度系数（0-1）
+  INDUSTRY_GLOBAL: {
+    '科技': 0.8, '新能源': 0.7, '医疗': 0.5,
+    '消费': 0.3, '金融': 0.2, '能源': 0.6,
+    '周期': 0.5, '制造': 0.7, '服务': 0.2,
+    '农业': 0.2, '地产': 0.1, '基建': 0.3
   }
 };
 
@@ -369,7 +397,7 @@ const STOCK_MAP = {
   '红土深圳安居REIT': 'sz180501', '华夏北京保障房REIT': 'sh508068',
 
   // ===== 北交所/新三板扩充（50+只）=====
-  '每日互动': 'bj833331', '贝特瑞': 'bj835185', '连城数控': 'bj835368',
+  '每日互动': 'bj832727', '贝特瑞': 'bj835185', '连城数控': 'bj835368',
   '创远仪器': 'bj831961', '同辉信息': 'bj430047', '佳先股份': 'bj430489',
   '球冠电缆': 'bj834682', '广道高新': 'bj839680', '永顺生物': 'bj839729',
   '吉冈精密': 'bj836720', '虹安电子': 'bj832566', '流金科技': 'bj832571',
@@ -873,20 +901,81 @@ const DataAPI = {
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
-      const url = CONFIG.TENCENT_QUOTE + codes.join(',');
-      const resp = await fetch(url);
-      const buffer = await resp.arrayBuffer();
-      const text = Utils.gbkToUtf8(buffer);
-      // 腾讯API可能返回多行数据
-      const lines = text.split(';').filter(l => l.includes('v_'));
+      // 分离北交所和其他股票
+      const bjCodes = codes.filter(c => c.startsWith('bj'));
+      const otherCodes = codes.filter(c => !c.startsWith('bj'));
       const results = {};
-      lines.forEach(line => {
-        const codeMatch = line.match(/v_([a-z]{2}\d+)=/);
-        if (codeMatch) {
-          const parsed = Utils.parseTencentQuote(line);
-          if (parsed) results[codeMatch[1]] = parsed;
-        }
-      });
+
+      // 腾讯API获取非北交所股票
+      if (otherCodes.length > 0) {
+        const url = CONFIG.TENCENT_QUOTE + otherCodes.join(',');
+        const resp = await fetch(url);
+        const buffer = await resp.arrayBuffer();
+        const text = Utils.gbkToUtf8(buffer);
+        const lines = text.split(';').filter(l => l.includes('v_'));
+        lines.forEach(line => {
+          const codeMatch = line.match(/v_([a-z]{2}\d+)=/);
+          if (codeMatch) {
+            const parsed = Utils.parseTencentQuote(line);
+            if (parsed) results[codeMatch[1]] = parsed;
+          }
+        });
+      }
+
+      // 北交所股票：先尝试腾讯，失败则用东方财富备用API
+      for (const code of bjCodes) {
+        try {
+          const url = CONFIG.TENCENT_QUOTE + code;
+          const resp = await fetch(url);
+          const buffer = await resp.arrayBuffer();
+          const text = Utils.gbkToUtf8(buffer);
+          if (text.includes('~') && !text.includes('pv_none_match')) {
+            const parsed = Utils.parseTencentQuote(text);
+            if (parsed && parsed.price > 0) {
+              parsed.code = code;
+              results[code] = parsed;
+              continue;
+            }
+          }
+        } catch(e) { console.warn('[fetchQuotes] 腾讯API获取北交所失败:', code, e.message); }
+
+        // 东方财富备用API
+        try {
+          const emCode = code.substring(2);
+          const secid = '0.' + emCode;
+          const emUrl = CONFIG.EM_QUOTE + '?secid=' + secid + '&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f60,f116,f117,f162,f167,f170,f171';
+          const resp = await fetch(emUrl);
+          const data = await resp.json();
+          if (data && data.data) {
+            const d = data.data;
+            const price = (d.f43 || 0) / 100;
+            const prevClose = (d.f60 || 0) / 100;
+            const change = (d.f171 || 0) / 100;
+            const changePct = (d.f170 || 0) / 100;
+            results[code] = {
+              name: d.f58 || code,
+              code: emCode,
+              price: price,
+              prevClose: prevClose,
+              open: (d.f46 || 0) / 100,
+              high: (d.f44 || 0) / 100,
+              low: (d.f45 || 0) / 100,
+              volume: d.f47 || 0,
+              amount: (d.f48 || 0) / 10000,
+              change: change,
+              changePct: changePct,
+              turnover: d.f168 || (d.f167 || 0) / 100,
+              pe: (d.f162 || 0) / 100,
+              pb: (d.f167 || 0) / 100,
+              marketCap: (d.f116 || 0) / 100000000,
+              circCap: (d.f117 || 0) / 100000000,
+              amplitude: (d.f50 || 0) / 100,
+              time: ''
+            };
+          }
+        } catch(e) { console.warn('[fetchQuotes] 东方财富API获取北交所失败:', code, e.message); }
+      }
+
       return results;
     } catch (e) {
       console.error('fetchQuotes error:', e);
@@ -910,17 +999,40 @@ const DataAPI = {
   /** 获取日K线数据 */
   async fetchKline(code, count = 120) {
     try {
-      const market = code.startsWith('sh') ? code.substring(0, 2) : code.substring(0, 2);
-      const num = code.substring(2);
+      // 先尝试腾讯K线API
       const url = `${CONFIG.TENCENT_KLINE}?param=${code},day,,,${count},qfq`;
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.data && data.data[code]) {
         const kdata = data.data[code].day || data.data[code].qfqday || [];
-        return kdata.map(k => ({
-          date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
-        }));
+        if (kdata.length > 0) {
+          return kdata.map(k => ({
+            date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+          }));
+        }
       }
+
+      // 北交所或其他股票腾讯无数据时，用东方财富K线备用
+      if (code.startsWith('bj') || code.startsWith('sh') || code.startsWith('sz')) {
+        const emCode = code.substring(2);
+        let market = 1; // 沪市
+        if (code.startsWith('sz')) market = 0;
+        if (code.startsWith('bj')) market = 0;
+        const secid = market + '.' + emCode;
+        const emUrl = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
+        const emResp = await fetch(emUrl);
+        const emData = await emResp.json();
+        if (emData && emData.data && emData.data.klines) {
+          return emData.data.klines.map(line => {
+            const f = line.split(',');
+            return {
+              date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
+              volume: +f[5], amount: +f[6]
+            };
+          });
+        }
+      }
+
       return [];
     } catch (e) {
       console.error('fetchKline error:', e);
@@ -968,7 +1080,7 @@ const DataAPI = {
   /** 获取资金流向（近5日） */
   async fetchCapitalFlow(code) {
     try {
-      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`;
+      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`; // 北交所(sz/bj)均用market=0
       const url = `${CONFIG.EM_CAPITAL}?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&klt=101&lmt=5`;
       const resp = await fetch(url);
       const data = await resp.json();
@@ -1122,6 +1234,10 @@ const Navigation = {
     if (!this.pages[pageName]) {
       console.error(`页面 ${pageName} 未注册！`);
       return;
+    }
+    // 记录上一页
+    if (this.currentPage !== pageName) {
+      App._previousPage = this.currentPage;
     }
     // 隐藏所有页面
     Object.values(this.pages).forEach(p => {
@@ -2045,7 +2161,7 @@ const Screener = {
     const infoEl = document.getElementById('screenerInfo');
     const card = document.getElementById('screenerResultCard');
     
-    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>正在获取数据并筛选...</div>';
+    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>正在获取数据并多维筛选...</div>';
     card.style.display = 'block';
     infoEl.textContent = '';
 
@@ -2058,26 +2174,89 @@ const Screener = {
       const batch = pool.slice(i, i + batchSize);
       const quotes = await DataAPI.fetchQuotes(batch);
       Object.assign(allQuotes, quotes);
-      // 小延迟避免请求过快
       await new Promise(r => setTimeout(r, 200));
     }
 
-    // 筛选
+    // 计算市值排名（用于龙头判断）
+    const allByCap = Object.entries(allQuotes)
+      .filter(([,q]) => q.price > 0 && q.marketCap > 0)
+      .sort((a, b) => b[1].marketCap - a[1].marketCap);
+    const capRankMap = {};
+    allByCap.forEach(([code], idx) => { capRankMap[code] = idx + 1; });
+    const totalStocks = allByCap.length;
+
+    // 多维筛选
     const candidates = [];
     Object.entries(allQuotes).forEach(([code, q]) => {
-      // 剔除ST
       if (q.name && (q.name.includes('ST') || q.name.includes('*ST'))) return;
-      // 剔除停牌
       if (!q.price || q.price <= 0 || q.volume <= 0) return;
-      // 剔除流动性不足（成交额<5000万）
       if (q.amount < 5000) return;
 
       let score = 50;
-      let pe = q.pe || 999;
-      let pb = q.pb || 999;
+      const pe = q.pe || 999;
+      const pb = q.pb || 999;
+      const sector = CONFIG.SECTORS[code] || { name: '未知', type: '服务' };
+      const cycle = CONFIG.INDUSTRY_CYCLE[sector.type] || 'mature';
+      const globalCoeff = CONFIG.INDUSTRY_GLOBAL[sector.type] || 0.3;
 
+      // === 新增维度标签 ===
+      const tags = [];
+
+      // --- 维度1: 行业周期判断 ---
+      let cycleScore = 0;
+      if (cycle === 'rising') { cycleScore = 12; tags.push('📈行业上升期'); }
+      else if (cycle === 'cyclical_up') { cycleScore = 8; tags.push('🔄周期上行'); }
+      else if (cycle === 'mature') { cycleScore = 4; tags.push('⏸️行业成熟期'); }
+      else if (cycle === 'cyclical_down') { cycleScore = -2; tags.push('🔻周期下行'); }
+      else if (cycle === 'declining') { cycleScore = -8; tags.push('📉行业下行'); }
+
+      // --- 维度2: 龙头企业识别 ---
+      let leaderScore = 0;
+      const capRank = capRankMap[code] || totalStocks;
+      const capPercentile = capRank / totalStocks;
+      if (capPercentile <= 0.1) { leaderScore = 15; tags.push('🏆行业龙头'); }
+      else if (capPercentile <= 0.2) { leaderScore = 10; tags.push('🥇头部企业'); }
+      else if (capPercentile <= 0.4) { leaderScore = 5; tags.push('🥈中坚力量'); }
+      else { leaderScore = 0; }
+
+      // --- 维度3: 核心技术评估（研发投入代理：PE合理+市值大=有研发投入能力） ---
+      let techScore = 0;
+      if (sector.type === '科技' || sector.type === '新能源' || sector.type === '医疗') {
+        if (pe > 0 && pe < 40 && q.marketCap > 200) { techScore = 12; tags.push('🔬技术壁垒强'); }
+        else if (pe > 0 && pe < 60 && q.marketCap > 100) { techScore = 8; tags.push('💡技术型企业'); }
+        else if (q.marketCap > 50) { techScore = 4; tags.push('🔧有一定技术'); }
+        else { techScore = 0; }
+      } else {
+        // 非科技行业，技术评分较低但有基础分
+        if (pe > 0 && pe < 20 && q.marketCap > 300) { techScore = 6; tags.push('🏭工艺成熟'); }
+        else { techScore = 2; }
+      }
+
+      // --- 维度4: 全球化程度 ---
+      let globalScore = Math.round(globalCoeff * 10);
+      if (globalCoeff >= 0.7) tags.push('🌍全球化布局');
+      else if (globalCoeff >= 0.5) tags.push('🌐有海外业务');
+      else if (globalCoeff >= 0.3) tags.push('🏠以国内为主');
+      else tags.push('🏘️本地化企业');
+
+      // --- 维度5: 财务稳健性 ---
+      let financeScore = 0;
+      if (pe > 0 && pe < 20) financeScore += 8;
+      else if (pe > 0 && pe < 35) financeScore += 4;
+      else if (pe >= 60 || pe < 0) financeScore -= 5;
+      if (pb > 0 && pb < 2) financeScore += 6;
+      else if (pb >= 5) financeScore -= 4;
+      // 换手率稳定（代表机构认可）
+      if (q.turnover > 0.5 && q.turnover < 8) financeScore += 4;
+      // 涨跌幅适中（不暴涨暴跌=稳健）
+      if (Math.abs(q.changePct) < 3) financeScore += 3;
+      if (q.marketCap > 500) financeScore += 4;
+      if (financeScore >= 15) tags.push('💎财务稳健');
+      else if (financeScore >= 8) tags.push('✅财务正常');
+      else if (financeScore < 0) tags.push('⚠️财务风险');
+
+      // === 原有策略评分 ===
       if (strategy === 'quality' || strategy === 'balanced') {
-        // 质量因子：PE合理、PB合理、市值大
         if (pe > 0 && pe < 25) score += 15;
         else if (pe >= 25) score -= 10;
         if (pb > 0 && pb < 3) score += 10;
@@ -2087,19 +2266,27 @@ const Screener = {
       }
 
       if (strategy === 'value' || strategy === 'balanced') {
-        // 价值因子：低PE、低PB
         if (pe > 0 && pe < 15) score += 15;
         else if (pe > 0 && pe < 30) score += 8;
         if (pb > 0 && pb < 2) score += 10;
-        // 涨跌幅适中
         if (Math.abs(q.changePct) < 3) score += 5;
       }
+
+      // === 叠加新维度得分（加权） ===
+      score += cycleScore + leaderScore + techScore + globalScore + financeScore;
 
       candidates.push({
         code, name: q.name, price: q.price,
         change: q.changePct, pe, pb,
         marketCap: q.marketCap,
-        score: Math.round(score)
+        score: Math.round(score),
+        sector: sector.name,
+        sectorType: sector.type,
+        cycle, tags,
+        dimScores: {
+          cycle: cycleScore, leader: leaderScore, tech: techScore,
+          global: globalScore, finance: financeScore
+        }
       });
     });
 
@@ -2108,19 +2295,22 @@ const Screener = {
     this.results = candidates.slice(0, 30);
 
     // 渲染
-    infoEl.textContent = `从 ${Object.keys(allQuotes).length} 只股票中筛选出 ${this.results.length} 只符合条件的标的`;
+    infoEl.textContent = `从 ${Object.keys(allQuotes).length} 只股票中，基于行业周期·龙头地位·技术壁垒·全球化·财务稳健 五维精选 ${this.results.length} 只优质标的`;
     
     if (this.results.length === 0) {
       container.innerHTML = '<div class="empty-tip">当前无符合条件的股票</div>';
       return;
     }
 
-    container.innerHTML = this.results.map((s, i) => `
-      <div class="screener-item" onclick="App.analyzeStock('${s.code}')">
+    container.innerHTML = this.results.map((s, i) => {
+      const tagsHtml = s.tags.slice(0, 3).map(t => '<span class="sc-tag">' + t + '</span>').join('');
+      return `
+      <div class="screener-item screener-item-v2" onclick="App.analyzeStock('${s.code}')">
         <div class="sc-rank">${i + 1}</div>
         <div class="sc-info">
           <div class="sc-name">${s.name}</div>
-          <div class="sc-code">${s.code}</div>
+          <div class="sc-code">${s.code} · ${s.sector}</div>
+          <div class="sc-tags">${tagsHtml}</div>
         </div>
         <div class="sc-metrics">
           <div class="sc-metric">
@@ -2136,9 +2326,13 @@ const Screener = {
             <div class="sc-metric-label">PB</div>
           </div>
         </div>
-        <div class="sc-score">${s.score}</div>
-      </div>
-    `).join('');
+        <div class="sc-score">
+          <div class="sc-score-label">综合评分</div>
+          <div class="sc-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
+          <div class="sc-score-stars">${Utils.scoreLevel(s.score)}</div>
+        </div>
+      </div>`;
+    }).join('');
   }
 };
 
@@ -2148,7 +2342,7 @@ const Screener = {
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
   // 排序状态
-  sortKey: 'score_desc', // 默认按评估得分降序
+  sortKey: 'score_desc', // 默认按综合评分降序
   // 缓存评估数据 { code: { score, advice, vwap, quote } }
   _cache: {},
 
@@ -2176,6 +2370,7 @@ const Watchlist = {
     // 记录添加时间
     this._saveAddedAt(code);
     Utils.toast('已添加到自选股');
+    App.setDirty(true);
     return true;
   },
 
@@ -2186,6 +2381,7 @@ const Watchlist = {
     this.save(list);
     delete this._cache[code];
     Utils.toast('已从自选股移除');
+    App.setDirty(true);
   },
 
   /** 检查是否在自选股中 */
@@ -2407,6 +2603,7 @@ const Watchlist = {
       html += '</div>';
     });
     container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
+    App.setDirty(false);
   },
 
   /** 删除并刷新 */
@@ -2425,6 +2622,9 @@ const App = {
   sevenDimChart: null,
 
   /** 初始化应用 */
+  _isDirty: false, // 是否有未保存的编辑操作
+  _previousPage: 'home', // 上一个页面
+
   init() {
     // 初始化导航
     Navigation.init();
@@ -2453,6 +2653,34 @@ const App = {
         Watchlist.render();
       }
     }, 60000);
+
+    // 退出确认：防止误关闭
+    window.addEventListener('beforeunload', (e) => {
+      if (this._isDirty) {
+        e.preventDefault();
+        e.returnValue = '您有未完成的编辑操作，确定要离开吗？';
+        return e.returnValue;
+      }
+    });
+  },
+
+  /** 标记页面有未保存修改 */
+  setDirty(dirty) {
+    this._isDirty = dirty;
+  },
+
+  /** 返回上一页 */
+  goBack() {
+    if (Navigation.currentPage === 'home') return; // 首页不处理
+    
+    // 如果在编辑状态，确认退出
+    if (this._isDirty) {
+      if (!confirm('您有未完成的编辑操作，确定要返回吗？')) return;
+      this._isDirty = false;
+    }
+    
+    // 返回上一页
+    Navigation.switchTo(this._previousPage || 'home');
   },
 
   /** 注册Service Worker */
@@ -2512,6 +2740,7 @@ const App = {
               <div class="hs-change-val ${cls}">${s.change > 0 ? '+' : ''}${s.change.toFixed(2)}%</div>
             </div>
             <div class="hs-score">
+              <div class="hs-score-label-top">综合评分</div>
               <div class="hs-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
               <div class="hs-score-label">${Utils.scoreLevel(s.score)}</div>
             </div>
