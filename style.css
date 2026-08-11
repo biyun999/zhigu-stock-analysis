@@ -1485,3 +1485,598 @@ body {
   text-align: center;
   color: var(--accent-yellow);
 }
+
+/* ============================================
+   横屏适配 - 手机Landscape模式
+   ============================================ */
+
+/* === 安全区域适配 (iPhone刘海屏/底部横条) === */
+body {
+  padding-top: calc(var(--header-height) + env(safe-area-inset-top, 0px));
+  padding-bottom: calc(var(--nav-height) + env(safe-area-inset-bottom, 0px));
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+#app-header {
+  padding-left: calc(16px + env(safe-area-inset-left, 0px));
+  padding-right: calc(16px + env(safe-area-inset-right, 0px));
+  top: env(safe-area-inset-top, 0px);
+}
+
+#app-nav {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px));
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* === 全局横屏基础约束 === */
+@media screen and (orientation: landscape) {
+  :root {
+    --nav-height: 48px;
+    --header-height: 44px;
+  }
+
+  html {
+    /* 确保body不超出视口 */
+    overflow-x: hidden;
+  }
+
+  body {
+    /* 使用100dvh防止移动端地址栏干扰 */
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  #app-content {
+    min-height: calc(100dvh - var(--header-height) - var(--nav-height));
+    padding: 8px 12px;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* === 横屏 Header 压缩 === */
+  .logo {
+    font-size: 17px;
+  }
+
+  .subtitle {
+    font-size: 10px;
+  }
+
+  .header-time {
+    font-size: 10px;
+  }
+
+  /* === 横屏导航栏紧凑 === */
+  #app-nav {
+    height: var(--nav-height);
+  }
+
+  .nav-item {
+    padding: 4px 8px;
+    gap: 1px;
+  }
+
+  .nav-icon {
+    font-size: 18px;
+  }
+
+  .nav-label {
+    font-size: 9px;
+  }
+
+  /* === 卡片横屏紧凑 === */
+  .card {
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+
+  .card-title {
+    font-size: 14px;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+  }
+
+  /* === 搜索框 === */
+  .search-box input {
+    height: 36px;
+    font-size: 13px;
+  }
+
+  .btn-primary {
+    height: 36px;
+    padding: 0 14px;
+    font-size: 13px;
+    /* 触摸友好：最小44px */
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* === 热门股票列表 === */
+  .hot-stocks-list {
+    max-height: calc(100dvh - var(--header-height) - var(--nav-height) - 200px);
+    overflow-y: auto;
+  }
+
+  .hot-stock-item {
+    padding: 6px 0;
+  }
+
+  /* === 股票概要横屏双栏 === */
+  .stock-header {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .stock-name {
+    font-size: 17px;
+  }
+
+  .stock-price {
+    font-size: 22px;
+  }
+
+  .stock-meta {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+
+  .stock-meta .meta-item {
+    padding: 4px 6px;
+  }
+
+  /* === 七维度图表横屏 === */
+  #sevenDimChart {
+    height: 240px !important;
+    max-width: 100%;
+  }
+
+  .dim-scores-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+  }
+
+  .dim-score-item {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  .dim-score-item .dim-name {
+    font-size: 11px;
+  }
+
+  .dim-score-item .dim-val {
+    font-size: 14px;
+  }
+
+  /* === 五维评分条横屏 === */
+  .dim-score-item-v2 {
+    padding: 8px 10px;
+    margin-bottom: 4px;
+  }
+
+  .total-score-big {
+    font-size: 40px;
+  }
+
+  .total-score-display {
+    padding: 8px 0 6px;
+  }
+
+  /* === VWAP 横屏4列 === */
+  .vwap-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+
+  .vwap-item {
+    padding: 6px 8px;
+  }
+
+  .vwap-item .vw-val {
+    font-size: 14px;
+  }
+
+  /* === 自选股横屏 === */
+  .watchlist-items {
+    max-height: calc(100dvh - var(--header-height) - var(--nav-height) - 160px);
+    overflow-y: auto;
+  }
+
+  .watchlist-item,
+  .watchlist-item-v2 {
+    padding: 8px 0;
+  }
+
+  .wl-name {
+    font-size: 13px;
+  }
+
+  .wl-price {
+    font-size: 14px;
+    min-width: 60px;
+  }
+
+  .wl-change {
+    font-size: 12px;
+    min-width: 50px;
+  }
+
+  .wl-delete {
+    width: 36px;
+    height: 36px;
+    min-width: 36px;
+    min-height: 36px;
+  }
+
+  .wl-score-num {
+    font-size: 18px;
+  }
+
+  .wl-info-block {
+    min-width: 50px;
+  }
+
+  .wl-info-val {
+    font-size: 11px;
+  }
+
+  /* === 智能选股横屏 === */
+  .screener-list {
+    max-height: calc(100dvh - var(--header-height) - var(--nav-height) - 200px);
+    overflow-y: auto;
+  }
+
+  .screener-item,
+  .screener-item-v2 {
+    padding: 8px 0;
+  }
+
+  .screener-item .sc-score {
+    font-size: 14px;
+  }
+
+  .sc-score-val {
+    font-size: 18px;
+  }
+
+  /* === 诊断模块横屏 === */
+  .mod-body {
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .mod-body .metric-row {
+    padding: 4px 0;
+  }
+
+  .disclaimer {
+    font-size: 11px;
+    padding: 8px 10px;
+  }
+
+  /* === 结论卡片横屏 === */
+  .cs-cost-grid {
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+  }
+
+  .cs-key-prices {
+    gap: 8px;
+  }
+
+  .cs-kp-item {
+    padding: 8px 10px;
+  }
+
+  /* === 关于页横屏双列特性 === */
+  .about-features {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 16px;
+  }
+
+  .feature-item {
+    padding: 8px 0;
+    border-bottom: none;
+    font-size: 12px;
+  }
+
+  .about-icon {
+    width: 60px;
+    height: 60px;
+    font-size: 24px;
+    border-radius: 14px;
+  }
+
+  .about-card h2 {
+    font-size: 17px;
+  }
+
+  /* === 新闻横屏 === */
+  .news-list {
+    max-height: calc(100dvh - var(--header-height) - var(--nav-height) - 180px);
+    overflow-y: auto;
+  }
+
+  .news-item {
+    padding: 6px 0;
+  }
+
+  /* === 搜索结果下拉 === */
+  .search-results {
+    max-height: 160px;
+  }
+
+  /* === Toast 横屏 === */
+  .toast {
+    max-width: 80vw;
+  }
+
+  /* === 全局图表安全约束 === */
+  canvas,
+  svg {
+    max-width: 100% !important;
+    height: auto !important;
+  }
+
+  /* === 核心结论卡片 === */
+  .conclusion-summary {
+    gap: 8px;
+  }
+
+  .cs-advice,
+  .cs-cost {
+    padding: 10px;
+  }
+
+  /* === 排序栏横屏 === */
+  .wl-sort-bar {
+    padding: 6px 0;
+    gap: 4px;
+  }
+
+  .wl-sort-btn {
+    padding: 4px 8px;
+    font-size: 10px;
+    /* 触摸友好 */
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* === 返回按钮横屏 === */
+  .page-back-bar {
+    padding: 4px 8px 0;
+  }
+
+  .btn-back {
+    padding: 4px 12px;
+    font-size: 12px;
+    min-height: 36px;
+  }
+
+  /* === 全球市场网格横屏 === */
+  .global-market-grid {
+    grid-template-columns: repeat(6, 1fr);
+    gap: 4px;
+  }
+
+  .market-item {
+    padding: 6px 4px;
+  }
+
+  .market-item .mi-name {
+    font-size: 10px;
+  }
+
+  .market-item .mi-price {
+    font-size: 12px;
+  }
+
+  /* === 核心结论摘要双列 === */
+  .conclusion-summary {
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  .cs-advice,
+  .cs-cost {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* === 筛选器横屏 === */
+  .filter-group select {
+    height: 36px;
+    min-height: 44px;
+  }
+
+  .filter-group {
+    margin-bottom: 6px;
+  }
+}
+
+/* === 超小屏幕横屏 (如iPhone SE横屏) === */
+@media screen and (orientation: landscape) and (max-height: 360px) {
+  :root {
+    --nav-height: 40px;
+    --header-height: 38px;
+  }
+
+  .logo {
+    font-size: 15px;
+  }
+
+  .subtitle {
+    display: none;
+  }
+
+  .nav-label {
+    font-size: 8px;
+  }
+
+  .nav-icon {
+    font-size: 16px;
+  }
+
+  #app-content {
+    padding: 4px 8px;
+  }
+
+  .card {
+    padding: 8px 10px;
+    margin-bottom: 6px;
+  }
+
+  .card-title {
+    font-size: 13px;
+    margin-bottom: 6px;
+  }
+
+  .dim-scores-grid {
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+  }
+
+  .dim-score-item {
+    padding: 4px 6px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .dim-score-item .dim-name {
+    font-size: 10px;
+  }
+
+  .dim-score-item .dim-val {
+    font-size: 12px;
+  }
+
+  #sevenDimChart {
+    height: 180px !important;
+  }
+
+  .total-score-big {
+    font-size: 32px;
+  }
+
+  .about-features {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .vwap-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .cs-cost-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .conclusion-summary {
+    flex-direction: column;
+  }
+}
+
+/* === 大屏幕横屏 (如iPad横屏) === */
+@media screen and (orientation: landscape) and (min-width: 900px) {
+  #app-content {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 12px 20px;
+  }
+
+  .stock-header {
+    flex-wrap: nowrap;
+  }
+
+  .stock-meta {
+    grid-template-columns: repeat(6, 1fr);
+  }
+
+  .dim-scores-grid {
+    grid-template-columns: repeat(7, 1fr);
+  }
+
+  .vwap-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
+  .global-market-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+
+  .about-features {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* === 横屏滚动修复：确保所有可滚动容器不溢出 === */
+@media screen and (orientation: landscape) {
+  .hot-stocks-list,
+  .watchlist-items,
+  .screener-list,
+  .news-list,
+  .search-results {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  /* 防止flex/grid子元素溢出 */
+  .card {
+    overflow: hidden;
+    max-width: 100%;
+  }
+
+  /* 图片自适应 */
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* 确保select不溢出 */
+  select {
+    max-width: 100%;
+  }
+
+  /* 弹窗/下拉菜单约束 */
+  .search-results {
+    position: relative;
+    width: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+
+/* === 触摸优化：横屏下确保按钮可触摸 === */
+@media screen and (orientation: landscape) {
+  .btn-primary,
+  .btn-back,
+  .wl-delete,
+  .nav-item,
+  .hot-stock-item,
+  .watchlist-item,
+  .watchlist-item-v2,
+  .screener-item,
+  .screener-item-v2,
+  .search-result-item,
+  .wl-sort-btn {
+    /* iOS推荐的最小触摸目标 */
+    min-height: 44px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    min-width: 44px;
+  }
+
+  .btn-back {
+    display: flex;
+    align-items: center;
+  }
+}
