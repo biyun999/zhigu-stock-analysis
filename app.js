@@ -1219,7 +1219,8 @@ const Navigation = {
     analysis: null,
     watchlist: null,
     screener: null,
-    about: null
+    about: null,
+    settings: null
   },
   currentPage: 'home',
 
@@ -2656,9 +2657,9 @@ const App = {
 
     // 退出确认：防止误关闭
     window.addEventListener('beforeunload', (e) => {
-      if (this._isDirty) {
+      if (this._isDirty || Auth.isLoggedIn()) {
         e.preventDefault();
-        e.returnValue = '您有未完成的编辑操作，确定要离开吗？';
+        e.returnValue = '确定退出智股分析？';
         return e.returnValue;
       }
     });
@@ -2705,6 +2706,9 @@ const App = {
     // 页面切换时触发数据刷新
     if (pageName === 'watchlist') {
       Watchlist.render();
+    }
+    if (pageName === 'settings') {
+      Auth.initSettingsPage();
     }
   },
 
@@ -3266,6 +3270,263 @@ const App = {
 };
 
 // ============================================================
-// 应用启动
+// 13. Auth - 登录授权模块
 // ============================================================
-document.addEventListener('DOMContentLoaded', () => App.init());
+const Auth = {
+  STORAGE_KEY: 'zhigu_auth',
+  SESSION_KEY: 'zhigu_session',
+  DEFAULT_PHONE: '13800138000',
+  DEFAULT_PWD: 'zhigu2026',
+  SESSION_DURATION: 7 * 24 * 60 * 60 * 1000, // 7天
+
+  /** 简单hash（用于密码存储，非安全加密） */
+  _hash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    // 再做一轮混淆
+    return 'h1_' + Math.abs(hash).toString(36) + '_' + str.length;
+  },
+
+  /** 获取授权数据 */
+  _getAuth() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      if (data) return JSON.parse(data);
+    } catch(e) {}
+    // 返回默认授权
+    return {
+      users: [{ phone: this.DEFAULT_PHONE, password: this._hash(this.DEFAULT_PWD) }]
+    };
+  },
+
+  /** 保存授权数据 */
+  _saveAuth(auth) {
+    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(auth));
+  },
+
+  /** 获取session */
+  _getSession() {
+    try {
+      const data = localStorage.getItem(this.SESSION_KEY);
+      if (data) {
+        const session = JSON.parse(data);
+        if (session.expires > Date.now()) return session;
+      }
+    } catch(e) {}
+    return null;
+  },
+
+  /** 保存session */
+  _saveSession(phone, remember) {
+    const session = {
+      phone,
+      expires: remember ? Date.now() + this.SESSION_DURATION : Date.now() + 24 * 60 * 60 * 1000
+    };
+    localStorage.setItem(this.SESSION_KEY, JSON.stringify(session));
+  },
+
+  /** 验证密码 */
+  _verifyPassword(phone, password) {
+    const auth = this._getAuth();
+    const hashedPwd = this._hash(password);
+    const user = auth.users.find(u => u.phone === phone);
+    if (user && user.password === hashedPwd) return true;
+    // fallback: 如果是默认密码且用户未修改过
+    if (!user && phone === this.DEFAULT_PHONE && hashedPwd === this._hash(this.DEFAULT_PWD)) return true;
+    return false;
+  },
+
+  /** 检查是否已登录 */
+  isLoggedIn() {
+    return !!this._getSession();
+  },
+
+  /** 获取当前登录手机号 */
+  getCurrentUser() {
+    const session = this._getSession();
+    return session ? session.phone : null;
+  },
+
+  /** 初始化：检查登录状态 */
+  init() {
+    const loginPage = document.getElementById('page-login');
+    const appHeader = document.getElementById('app-header');
+    const appContent = document.getElementById('app-content');
+    const appNav = document.getElementById('app-nav');
+
+    if (this.isLoggedIn()) {
+      // 已登录，隐藏登录页
+      loginPage.style.display = 'none';
+      appHeader.style.display = '';
+      appContent.style.display = '';
+      appNav.style.display = '';
+    } else {
+      // 未登录，显示登录页
+      loginPage.style.display = 'flex';
+      appHeader.style.display = 'none';
+      appContent.style.display = 'none';
+      appNav.style.display = 'none';
+    }
+  },
+
+  /** 处理登录 */
+  handleLogin(event) {
+    event.preventDefault();
+    const phone = document.getElementById('loginPhone').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    const remember = document.getElementById('loginRemember').checked;
+    const errorEl = document.getElementById('loginError');
+
+    // 验证手机号
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      errorEl.textContent = '请输入正确的11位手机号';
+      errorEl.style.display = 'block';
+      return false;
+    }
+
+    // 验证密码
+    if (this._verifyPassword(phone, password)) {
+      this._saveSession(phone, remember);
+      errorEl.style.display = 'none';
+      // 显示主界面
+      document.getElementById('page-login').style.display = 'none';
+      document.getElementById('app-header').style.display = '';
+      document.getElementById('app-content').style.display = '';
+      document.getElementById('app-nav').style.display = '';
+      // 初始化APP
+      App.init();
+    } else {
+      errorEl.textContent = '手机号或密码错误';
+      errorEl.style.display = 'block';
+    }
+    return false;
+  },
+
+  /** 修改密码 */
+  handleChangePassword(event) {
+    event.preventDefault();
+    const oldPwd = document.getElementById('oldPassword').value;
+    const newPwd = document.getElementById('newPassword').value;
+    const confirmPwd = document.getElementById('confirmPassword').value;
+
+    if (newPwd.length < 6) {
+      alert('新密码至少6位');
+      return false;
+    }
+
+    if (newPwd !== confirmPwd) {
+      alert('两次输入的新密码不一致');
+      return false;
+    }
+
+    const currentUser = this.getCurrentUser();
+    if (!this._verifyPassword(currentUser, oldPwd)) {
+      alert('当前密码错误');
+      return false;
+    }
+
+    const auth = this._getAuth();
+    const user = auth.users.find(u => u.phone === currentUser);
+    if (user) {
+      user.password = this._hash(newPwd);
+      this._saveAuth(auth);
+      alert('密码修改成功');
+      document.getElementById('changePwdForm').reset();
+    } else {
+      alert('用户不存在');
+    }
+    return false;
+  },
+
+  /** 添加手机号 */
+  handleAddPhone(event) {
+    event.preventDefault();
+    const newPhone = document.getElementById('newPhone').value.trim();
+    const pwd = document.getElementById('addPhonePwd').value;
+
+    if (!/^1[3-9]\d{9}$/.test(newPhone)) {
+      alert('请输入正确的11位手机号');
+      return false;
+    }
+
+    const currentUser = this.getCurrentUser();
+    if (!this._verifyPassword(currentUser, pwd)) {
+      alert('密码错误，无法添加');
+      return false;
+    }
+
+    const auth = this._getAuth();
+    if (auth.users.find(u => u.phone === newPhone)) {
+      alert('该手机号已存在');
+      return false;
+    }
+
+    auth.users.push({ phone: newPhone, password: this._hash(this.DEFAULT_PWD) });
+    this._saveAuth(auth);
+    alert('添加成功，初始密码为：' + this.DEFAULT_PWD);
+    document.getElementById('addPhoneForm').reset();
+    this.renderPhoneList();
+    return false;
+  },
+
+  /** 删除手机号 */
+  removePhone(phone) {
+    const currentUser = this.getCurrentUser();
+    if (phone === currentUser) {
+      alert('不能删除当前登录的手机号');
+      return;
+    }
+    if (!confirm('确定删除手机号 ' + phone + ' ？')) return;
+    const auth = this._getAuth();
+    auth.users = auth.users.filter(u => u.phone !== phone);
+    this._saveAuth(auth);
+    this.renderPhoneList();
+  },
+
+  /** 渲染手机号列表 */
+  renderPhoneList() {
+    const auth = this._getAuth();
+    const currentUser = this.getCurrentUser();
+    const container = document.getElementById('phoneList');
+    if (!container) return;
+    
+    container.innerHTML = auth.users.map(u => `
+      <div class="phone-item">
+        <span>📱 ${u.phone}${u.phone === currentUser ? '<span class="phone-tag">(当前)</span>' : ''}</span>
+        ${u.phone !== currentUser ? '<button class="del-btn" onclick="Auth.removePhone(\'' + u.phone + '\')">删除</button>' : ''}
+      </div>
+    `).join('');
+  },
+
+  /** 退出登录 */
+  logout() {
+    if (!confirm('确定退出登录？')) return;
+    localStorage.removeItem(this.SESSION_KEY);
+    location.reload();
+  },
+
+  /** 设置页面初始化 */
+  initSettingsPage() {
+    const currentUser = this.getCurrentUser();
+    const phoneEl = document.getElementById('settingsCurrentUser');
+    if (phoneEl) phoneEl.textContent = currentUser || '--';
+    this.renderPhoneList();
+  }
+};
+
+// ============================================================
+// 应用启动（带登录检查）
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  // 先初始化登录检查
+  Auth.init();
+  
+  // 如果已登录，初始化APP
+  if (Auth.isLoggedIn()) {
+    App.init();
+  }
+});
