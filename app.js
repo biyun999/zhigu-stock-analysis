@@ -1953,7 +1953,7 @@ const DiagnosticEngine = {
     const totalScore = scores.total;
     let html = '';
 
-    // 综合评分判断
+    // 量化评分判断
     let action = '';
     let actionCls = '';
     let detail = '';
@@ -1961,15 +1961,15 @@ const DiagnosticEngine = {
     if (totalScore >= 70) {
       action = '长期保留';
       actionCls = 'action-hold';
-      detail = '综合评分较高，基本面和技术面均表现良好，建议长期持有，耐心等待价值回归。';
+      detail = '量化评分较高，基本面和技术面均表现良好，建议长期持有，耐心等待价值回归。';
     } else if (totalScore >= 40) {
       action = '逢高减仓';
       actionCls = 'action-reduce';
-      detail = '综合评分一般，存在一定风险因子，建议在反弹时适当减仓，降低持仓成本和风险敞口。';
+      detail = '量化评分一般，存在一定风险因子，建议在反弹时适当减仓，降低持仓成本和风险敞口。';
     } else {
       action = '全部清仓';
       actionCls = 'action-sell';
-      detail = '综合评分偏低，风险因子较多，建议果断清仓离场，避免更大损失。';
+      detail = '量化评分偏低，风险因子较多，建议果断清仓离场，避免更大损失。';
     }
 
     html += `<div class="conclusion">🎯 处置建议：<span class="action-tag ${actionCls}">${action}</span></div>`;
@@ -1977,7 +1977,7 @@ const DiagnosticEngine = {
 
     html += '<p><strong>【评分依据】</strong></p>';
     html += `<div class="metric-row">
-      <span class="metric-label">综合评分</span>
+      <span class="metric-label">量化评分</span>
       <span class="metric-val" style="color:${Utils.scoreColor(totalScore)}">${totalScore}分</span>
     </div>`;
     html += `<div class="metric-row">
@@ -2328,7 +2328,7 @@ const Screener = {
           </div>
         </div>
         <div class="sc-score">
-          <div class="sc-score-label">综合评分</div>
+          <div class="sc-score-label">量化评分</div>
           <div class="sc-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
           <div class="sc-score-stars">${Utils.scoreLevel(s.score)}</div>
         </div>
@@ -2343,7 +2343,7 @@ const Screener = {
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
   // 排序状态
-  sortKey: 'score_desc', // 默认按综合评分降序
+  sortKey: 'score_desc', // 默认按量化评分降序
   // 缓存评估数据 { code: { score, advice, vwap, quote } }
   _cache: {},
 
@@ -2476,7 +2476,7 @@ const Watchlist = {
   /** 渲染排序按钮 */
   renderSortBar() {
     const sorts = [
-      { key: 'score', label: '🏆综合评分', defaultDir: 'desc' },
+      { key: 'score', label: '🏆量化评分', defaultDir: 'desc' },
       { key: 'price', label: '💰价格', defaultDir: 'desc' },
       { key: 'change', label: '📊涨跌幅', defaultDir: 'desc' },
       { key: 'cost', label: '🎯成本', defaultDir: 'desc' },
@@ -2572,32 +2572,24 @@ const Watchlist = {
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
       html += '<div class="wl-middle">';
-      // 综合评分 + 星级
-      const starLevel = Utils.scoreLevel(item.score);
-      const levelText = Utils.scoreLevelText(item.score);
-      html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">综合评分</span>';
-      html += '<span class="wl-score-display" style="color:' + scoreColor + '">';
-      html += '<span class="wl-score-num">' + item.score + '</span>';
-      html += '<span class="wl-score-stars">' + starLevel + '</span>';
-      html += '</span>';
-      html += '<span class="wl-score-level" style="color:' + scoreColor + '">' + levelText + '</span>';
-      html += '</div>';
-      // 操作建议
-      html += '<div class="wl-info-block">';
-      html += '<span class="wl-info-label">操作</span>';
-      html += '<span class="wl-info-val ' + advice.cls + '">' + advice.icon + item.advice.text + '</span>';
-      html += '</div>';
       // 筹码成本
       html += '<div class="wl-info-block">';
       html += '<span class="wl-info-label">筹码成本</span>';
       html += '<span class="wl-info-val">' + vwapStr + costDiff + '</span>';
       html += '</div>';
       html += '</div>';
+      // 末尾：量化评分 + 操作分 + 价格
+      const starLevel = Utils.scoreLevel(item.score);
       html += '<div class="wl-right">';
       html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
       html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
+      html += '</div>';
+      html += '<div class="wl-tail-scores">';
+      html += '<div class="wl-quant-score" style="color:' + scoreColor + '"><span class="wl-qs-num">' + item.score + '</span><span class="wl-qs-stars">' + starLevel + '</span></div>';
+      const opBg = item.score >= 70 ? 'rgba(0,200,83,0.2)' : item.score >= 40 ? 'rgba(255,165,0,0.2)' : 'rgba(255,71,87,0.2)';
+      const opColor = item.score >= 70 ? '#00c853' : item.score >= 40 ? '#ffa500' : '#ff4757';
+      html += '<div class="wl-op-score" style="background:' + opBg + ';color:' + opColor + '">' + advice.icon + item.advice.text + '</div>';
       html += '</div>';
       html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
       html += '</div>';
@@ -2722,7 +2714,7 @@ const App = {
       const scored = [];
       for (const [code, q] of Object.entries(quotes)) {
         if (!q.price || q.price <= 0) continue;
-        // 五维综合评分
+        // 五维量化评分
         const scoreResult = Utils.fiveDimScore(q, null);
         scored.push({ code, name: q.name, price: q.price, change: q.changePct, score: scoreResult.total });
       }
@@ -2744,7 +2736,7 @@ const App = {
               <div class="hs-change-val ${cls}">${s.change > 0 ? '+' : ''}${s.change.toFixed(2)}%</div>
             </div>
             <div class="hs-score">
-              <div class="hs-score-label-top">综合评分</div>
+              <div class="hs-score-label-top">量化评分</div>
               <div class="hs-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
               <div class="hs-score-label">${Utils.scoreLevel(s.score)}</div>
             </div>
@@ -2910,7 +2902,7 @@ const App = {
     document.getElementById(id).style.display = show ? '' : 'none';
   },
 
-  /** 渲染核心结论摘要（操作建议+主力成本，结论前置） */
+  /** 渲染操作分摘要（操作建议+主力成本，结论前置） */
   renderConclusionSummary(quote, klines, capitalFlow, scores) {
     this.showSection('conclusionCard', true);
     const current = quote.price;
@@ -2932,15 +2924,15 @@ const App = {
     if (totalScore >= 70) {
       adviceType = '持仓浮盈';
       adviceIcon = '✅';
-      adviceDetail = '综合评分较高，基本面和技术面表现良好。建议持有并分批锁定利润，动态止损上移至成本价上方。';
+      adviceDetail = '量化评分较高，基本面和技术面表现良好。建议持有并分批锁定利润，动态止损上移至成本价上方。';
     } else if (totalScore >= 40) {
       adviceType = '观望为主';
       adviceIcon = '📊';
-      adviceDetail = '综合评分一般，存在一定风险因子。建议逢高减仓，降低风险敞口，等待更好的入场时机。';
+      adviceDetail = '量化评分一般，存在一定风险因子。建议逢高减仓，降低风险敞口，等待更好的入场时机。';
     } else {
       adviceType = '空仓待入';
       adviceIcon = '⚠️';
-      adviceDetail = '综合评分偏低，风险因子较多。如已持有建议果断止损离场；如未持有建议暂时观望，等待企稳信号。';
+      adviceDetail = '量化评分偏低，风险因子较多。如已持有建议果断止损离场；如未持有建议暂时观望，等待企稳信号。';
     }
 
     // 判断当前价与主力成本关系
@@ -3049,7 +3041,7 @@ const App = {
       sentiment: '波动·量价·强弱'
     };
 
-    // 综合评分大数字
+    // 量化评分大数字
     const totalScore = scores.total;
     const starLevel = Utils.scoreLevel(totalScore);
     const levelText = Utils.scoreLevelText(totalScore);

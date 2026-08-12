@@ -969,7 +969,7 @@ body {
   .stock-meta { grid-template-columns: repeat(6, 1fr); }
 }
 
-/* === 核心结论摘要卡片 === */
+/* === 操作分摘要卡片 === */
 .conclusion-summary {
   display: flex;
   flex-direction: column;
@@ -1243,9 +1243,9 @@ body {
 }
 
 
-/* ===== 五维综合评分体系 - 星级样式 ===== */
+/* ===== 五维量化评分体系 - 星级样式 ===== */
 
-/* 综合评分大数字展示 */
+/* 量化评分大数字展示 */
 .total-score-display {
   text-align: center;
   padding: 16px 0 12px;
@@ -1431,7 +1431,7 @@ body {
   transform: scale(0.96);
 }
 
-/* === 需求1: 热门股票综合评分标题 === */
+/* === 需求1: 热门股票量化评分标题 === */
 .hs-score-label-top {
   font-size: 10px;
   color: var(--text-muted);
@@ -1821,7 +1821,7 @@ body {
     height: auto !important;
   }
 
-  /* === 核心结论卡片 === */
+  /* === 操作分卡片 === */
   .conclusion-summary {
     gap: 8px;
   }
@@ -1875,7 +1875,7 @@ body {
     font-size: 12px;
   }
 
-  /* === 核心结论摘要双列 === */
+  /* === 操作分摘要双列 === */
   .conclusion-summary {
     flex-direction: row;
     gap: 10px;
@@ -2331,4 +2331,33 @@ body {
 
 .logout-btn:active {
   background: rgba(255, 71, 87, 0.1);
+}
+/* === 自选股末尾量化评分+操作分 === */
+.wl-tail-scores {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin-top: 4px;
+}
+.wl-quant-score {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-weight: 700;
+}
+.wl-qs-num {
+  font-size: 16px;
+}
+.wl-qs-stars {
+  font-size: 10px;
+  letter-spacing: -1px;
+}
+.wl-op-score {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  text-align: center;
 }
