@@ -3092,11 +3092,18 @@ const App = {
     const starLevel = Utils.scoreLevel(totalScore);
     const levelText = Utils.scoreLevelText(totalScore);
     const sColor = Utils.scoreColor(totalScore);
+    // 操作分（基于量化评分的操作建议）
+    const opAdvice = Watchlist.getAdvice(totalScore);
+    const opBg = totalScore >= 70 ? 'rgba(0,200,83,0.15)' : totalScore >= 55 ? 'rgba(0,200,83,0.1)' : totalScore >= 40 ? 'rgba(255,165,0,0.15)' : totalScore >= 25 ? 'rgba(255,120,0,0.15)' : 'rgba(255,71,87,0.15)';
     document.getElementById('totalScore').innerHTML =
-      '<div class="total-score-display">' +
-      '<div class="total-score-big" style="color:' + sColor + '">' + totalScore + '</div>' +
+      '<div class="total-score-display" style="flex-direction:row;gap:16px;align-items:center;justify-content:center;">' +
+      '<div style="text-align:center"><div class="total-score-big" style="color:' + sColor + '">' + totalScore + '</div>' +
       '<div class="total-score-stars">' + starLevel + '</div>' +
-      '<div class="total-score-level" style="color:' + sColor + '">' + levelText + '</div>' +
+      '<div class="total-score-level" style="color:' + sColor + '">量化评分</div></div>' +
+      '<div style="width:1px;height:48px;background:rgba(255,255,255,0.1)"></div>' +
+      '<div style="text-align:center"><div style="font-size:22px;font-weight:700;color:' + sColor + '">' + opAdvice.icon + '</div>' +
+      '<div style="font-size:13px;font-weight:600;color:' + sColor + '">' + opAdvice.text + '</div>' +
+      '<div style="font-size:11px;color:#8a8e9b;margin-top:2px">操作分</div></div>' +
       '</div>';
 
     // 五维评分条
