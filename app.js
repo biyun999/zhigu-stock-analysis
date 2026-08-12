@@ -1077,6 +1077,49 @@ const DataAPI = {
     }
   },
 
+  /** 获取全市场股票排行（按成交额排序，取前N只） */
+  async fetchMarketRanking(topN) {
+    topN = topN || 300;
+    try {
+      // 东方财富全市场排行API：fs覆盖沪市主板+深市主板+中小板+创业板+科创板+北交所
+      const url = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23';
+      const resp = await fetch(url);
+      const data = await resp.json();
+      if (data && data.data && data.data.diff) {
+        return data.data.diff.map(item => {
+          const code = item.f12;
+          let prefix = 'sz';
+          if (code.startsWith('6')) prefix = 'sh';
+          else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
+          else if (code.startsWith('0') || code.startsWith('3')) prefix = 'sz';
+          return {
+            code: prefix + code,
+            name: item.f14 || code,
+            price: item.f2 || 0,
+            changePct: item.f3 || 0,
+            change: item.f4 || 0,
+            volume: item.f5 || 0,
+            amount: (item.f6 || 0) / 10000,
+            amplitude: item.f7 || 0,
+            turnover: item.f8 || 0,
+            pe: item.f9 || 0,
+            high: item.f15 || 0,
+            low: item.f16 || 0,
+            open: item.f17 || 0,
+            prevClose: item.f18 || 0,
+            marketCap: (item.f20 || 0) / 100000000,
+            circCap: (item.f21 || 0) / 100000000,
+            pb: item.f23 || 0
+          };
+        }).filter(d => d.price > 0 && d.name && !d.name.includes('ST'));
+      }
+      return [];
+    } catch (e) {
+      console.error('fetchMarketRanking error:', e);
+      return [];
+    }
+  },
+
   /** 获取资金流向（近5日） */
   async fetchCapitalFlow(code) {
     try {
@@ -2162,21 +2205,24 @@ const Screener = {
     const infoEl = document.getElementById('screenerInfo');
     const card = document.getElementById('screenerResultCard');
     
-    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>正在获取数据并多维筛选...</div>';
+    container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>正在获取全市场数据并多维筛选...</div>';
     card.style.display = 'block';
     infoEl.textContent = '';
 
-    // 批量获取股票池行情
-    const pool = CONFIG.SCREENER_POOL;
-    const batchSize = 10;
-    const allQuotes = {};
-    
-    for (let i = 0; i < pool.length; i += batchSize) {
-      const batch = pool.slice(i, i + batchSize);
-      const quotes = await DataAPI.fetchQuotes(batch);
-      Object.assign(allQuotes, quotes);
-      await new Promise(r => setTimeout(r, 200));
+    // 从全市场获取成交额排行前300只股票
+    const marketRanking = await DataAPI.fetchMarketRanking(300);
+    if (!marketRanking || marketRanking.length === 0) {
+      container.innerHTML = '<div class="empty-tip">全市场数据获取失败，请刷新重试</div>';
+      return;
     }
+    
+    // 将排行数据转为quotes格式
+    const allQuotes = {};
+    marketRanking.forEach(item => {
+      allQuotes[item.code] = item;
+    });
+    
+    infoEl.textContent = '已从全市场 ' + marketRanking.length + ' 只活跃股票中筛选';
 
     // 计算市值排名（用于龙头判断）
     const allByCap = Object.entries(allQuotes)
@@ -2296,7 +2342,7 @@ const Screener = {
     this.results = candidates.slice(0, 30);
 
     // 渲染
-    infoEl.textContent = `从 ${Object.keys(allQuotes).length} 只股票中，基于行业周期·龙头地位·技术壁垒·全球化·财务稳健 五维精选 ${this.results.length} 只优质标的`;
+    infoEl.textContent = `全市场 ${Object.keys(allQuotes).length} 只活跃股中，基于行业周期·龙头地位·技术壁垒·全球化·财务稳健 五维精选 ${this.results.length} 只优质标的`;
     
     if (this.results.length === 0) {
       container.innerHTML = '<div class="empty-tip">当前无符合条件的股票</div>';
