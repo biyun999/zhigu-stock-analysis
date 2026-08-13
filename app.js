@@ -753,144 +753,319 @@ const Utils = {
   },
 
   _scoreFundamentalQuick(quote, klines) {
+    // 基本面评分：评估公司估值质量和经营稳定性
     let s = 50;
-    if (quote.pe > 0 && quote.pe < 12) s += 25;
-    else if (quote.pe >= 12 && quote.pe < 20) s += 18;
-    else if (quote.pe >= 20 && quote.pe < 35) s += 8;
-    else if (quote.pe >= 35 && quote.pe < 60) s -= 5;
-    else if (quote.pe >= 60 || quote.pe < 0) s -= 20;
-    if (quote.pb > 0 && quote.pb < 1.2) s += 15;
-    else if (quote.pb >= 1.2 && quote.pb < 2.5) s += 10;
-    else if (quote.pb >= 2.5 && quote.pb < 4) s += 2;
-    else if (quote.pb >= 4 || quote.pb < 0) s -= 10;
-    if (klines && klines.length >= 20) {
-      const closes = klines.map(k => k.close);
-      const ma5 = this.calcMA(closes, 5);
-      const ma20 = this.calcMA(closes, 20);
-      if (ma5 && ma20) {
-        const prevMa5 = closes.length >= 6 ? this.calcMA(closes.slice(0, -1), 5) : ma5;
-        if (ma5 > ma20 && ma5 > prevMa5) s += 10;
-        else if (ma5 > ma20) s += 5;
-        else if (ma5 < ma20 && ma5 < prevMa5) s -= 10;
-      }
+
+    // === PE估值质量（权重：核心指标）===
+    const pe = quote.pe || 0;
+    if (pe > 0 && pe < 10) s += 22;        // 低估值，安全边际高
+    else if (pe >= 10 && pe < 18) s += 16;  // 合理偏低
+    else if (pe >= 18 && pe < 28) s += 8;   // 合理区间
+    else if (pe >= 28 && pe < 45) s += 0;   // 合理偏高
+    else if (pe >= 45 && pe < 80) s -= 8;   // 偏高，泡沫风险
+    else if (pe >= 80) s -= 18;             // 严重高估
+    else s -= 15;                           // 亏损企业
+
+    // === PB估值质量 ===
+    const pb = quote.pb || 0;
+    if (pb > 0 && pb < 1) s += 18;          // 破净，深度价值
+    else if (pb >= 1 && pb < 2) s += 14;    // 低PB，安全边际好
+    else if (pb >= 2 && pb < 3.5) s += 6;   // 合理
+    else if (pb >= 3.5 && pb < 6) s -= 3;   // 偏高
+    else if (pb >= 6) s -= 12;              // 严重高估
+    else s -= 10;                           // 负净资产
+
+    // === 市值稳定性（大市值更稳健）===
+    const mc = quote.marketCap || 0;
+    if (mc > 1000) s += 12;                 // 超大盘蓝筹
+    else if (mc > 500) s += 9;              // 大盘股
+    else if (mc > 200) s += 5;              // 中盘股
+    else if (mc > 80) s += 0;               // 小盘股
+    else s -= 8;                            // 微盘股，流动性风险
+
+    // === 盈利质量交叉验证（PE+PB组合）===
+    if (pe > 0 && pe < 20 && pb > 0 && pb < 2) {
+      s += 8; // 低PE+低PB = 深度价值
+    } else if (pe > 0 && pe < 30 && pb > 0 && pb < 3) {
+      s += 3; // 合理组合
+    } else if ((pe > 60 || pe < 0) && pb > 4) {
+      s -= 8; // 高PE+高PB = 双重高估风险
     }
-    if (quote.marketCap > 1000) s += 10;
-    else if (quote.marketCap > 500) s += 8;
-    else if (quote.marketCap > 100) s += 3;
-    else s -= 8;
+
     return Math.max(0, Math.min(100, s));
   },
 
   _scoreTechnicalQuick(klines, quote) {
+    // 技术面评分：MACD+RSI+均线系统+支撑压力位综合评估
     if (!klines || klines.length < 20) return 50;
     let s = 50;
     const closes = klines.map(k => k.close);
     const current = quote.price;
+
+    // === MACD信号（核心趋势指标）===
+    const macd = this.calcMACD(closes);
+    if (macd) {
+      // DIF和DEA都在零轴上方 = 多头市场
+      if (macd.dif > 0 && macd.dea > 0) {
+        s += 12;
+        // MACD柱由负转正 = 金叉买入信号
+        if (macd.macd > 0) s += 8;
+      } else if (macd.dif > 0 && macd.dea <= 0) {
+        // DIF上穿DEA = 金叉形成中
+        s += 10;
+      } else if (macd.dif < 0 && macd.dea < 0) {
+        s -= 10;
+        if (macd.macd < 0) s -= 6;
+      } else if (macd.dif < 0 && macd.dea >= 0) {
+        // 死叉形成中
+        s -= 8;
+      }
+    }
+
+    // === RSI指标（超买超卖判断）===
+    const rsi = this.calcRSI(closes, 14);
+    if (rsi >= 40 && rsi <= 60) {
+      s += 5; // 中性区间，健康
+    } else if (rsi > 30 && rsi < 40) {
+      s += 10; // 接近超卖，可能反弹
+    } else if (rsi > 20 && rsi <= 30) {
+      s += 15; // 超卖区域，反弹概率大
+    } else if (rsi <= 20) {
+      s += 8; // 极度超卖，但可能继续下跌，给较少的分
+    } else if (rsi > 60 && rsi <= 70) {
+      s += 3; // 偏强
+    } else if (rsi > 70 && rsi <= 80) {
+      s -= 5; // 超买风险
+    } else if (rsi > 80) {
+      s -= 12; // 严重超买
+    }
+
+    // === 均线系统（趋势方向与强度）===
     const ma5 = this.calcMA(closes, 5);
     const ma10 = this.calcMA(closes, 10);
     const ma20 = this.calcMA(closes, 20);
-    const ma30 = this.calcMA(closes, Math.min(30, closes.length));
+    const ma60 = closes.length >= 60 ? this.calcMA(closes, 60) : null;
+
     if (ma5 && ma10 && ma20) {
-      if (ma5 > ma10 && ma10 > ma20) s += 18;
-      else if (ma5 > ma10) s += 10;
-      else if (ma5 < ma10 && ma10 < ma20) s -= 15;
-      if (ma30 && ma20 > ma30) s += 5;
-    }
-    const high30 = Math.max(...closes.slice(-30));
-    const low30 = Math.min(...closes.slice(-30));
-    if (high30 > low30) {
-      const pos = (current - low30) / (high30 - low30);
-      if (pos > 0.7) s += 8;
-      else if (pos > 0.4) s += 4;
-      else if (pos < 0.15) s -= 5;
-    }
-    if (closes.length >= 10) {
-      const changes = [];
-      for (let i = closes.length - 5; i < closes.length; i++) {
-        changes.push((closes[i] - closes[i-1]) / closes[i-1] * 100);
+      // 完美多头排列
+      if (ma5 > ma10 && ma10 > ma20) {
+        s += 15;
+        if (ma60 && ma20 > ma60) s += 5; // 长周期也多头
+      } else if (ma5 > ma10) {
+        s += 8; // 短期多头
+      } else if (ma5 < ma10 && ma10 < ma20) {
+        s -= 12; // 空头排列
+        if (ma60 && ma20 < ma60) s -= 5;
+      } else if (ma5 < ma10) {
+        s -= 5;
       }
-      const avgChg = changes.reduce((a,b) => a+b, 0) / changes.length;
-      const variance = changes.reduce((a,b) => a + (b-avgChg)**2, 0) / changes.length;
-      if (avgChg > 0 && variance < 4) s += 8;
-      else if (avgChg > 0) s += 4;
-      else if (avgChg < -2) s -= 8;
     }
+
+    // === 支撑压力位位置评估 ===
+    const sr = this.calcSupportResistance(klines, current);
+    if (sr.support > 0 && sr.resistance > 0) {
+      const range = sr.resistance - sr.support;
+      if (range > 0) {
+        const position = (current - sr.support) / range;
+        if (position > 0.8) s += 3;      // 接近压力位，强势
+        else if (position > 0.5) s += 6;  // 中上区间，健康
+        else if (position > 0.2) s += 2;  // 中下区间
+        else s -= 5;                       // 接近支撑位，弱势
+      }
+    }
+
+    // === 均线乖离率（BIAS）===
+    if (ma20 && ma20 > 0) {
+      const bias20 = (current - ma20) / ma20 * 100;
+      if (bias20 > 15) s -= 10;       // 严重偏离均线，回调风险
+      else if (bias20 > 8) s -= 3;    // 偏离较大
+      else if (bias20 >= -3 && bias20 <= 5) s += 5; // 均线附近，健康
+      else if (bias20 < -8) s += 8;   // 严重超跌，反弹机会
+      else if (bias20 < -3) s += 3;   // 略低于均线
+    }
+
     return Math.max(0, Math.min(100, s));
   },
 
   _scoreCapitalQuick(quote, klines) {
+    // 资金面评分：换手率健康度+量价配合+资金撬动效率
     let s = 50;
     const turnover = quote.turnover || 0;
-    if (turnover >= 2 && turnover <= 5) s += 18;
-    else if (turnover > 5 && turnover <= 8) s += 12;
-    else if (turnover > 1 && turnover < 2) s += 6;
-    else if (turnover > 8 && turnover <= 15) s -= 5;
-    else if (turnover > 15) s -= 15;
-    else s -= 5;
+    const changePct = quote.changePct || 0;
+
+    // === 换手率健康度评估 ===
+    if (turnover >= 2 && turnover <= 5) s += 15;       // 温和活跃，最佳区间
+    else if (turnover > 5 && turnover <= 8) s += 10;   // 较活跃
+    else if (turnover > 1 && turnover < 2) s += 5;     // 偏低活跃
+    else if (turnover > 8 && turnover <= 12) s += 0;   // 过度活跃，注意风险
+    else if (turnover > 12 && turnover <= 20) s -= 8;  // 异常活跃，可能是出货
+    else if (turnover > 20) s -= 15;                   // 极度异常
+    else s -= 5;                                        // 几乎无交易
+
+    // === 量价配合分析（核心）===
     if (klines && klines.length >= 20) {
       const vols = klines.map(k => k.volume);
+      const closes = klines.map(k => k.close);
       const vol5 = vols.slice(-5).reduce((a,b) => a+b, 0) / 5;
       const vol20 = vols.slice(-20).reduce((a,b) => a+b, 0) / 20;
+
       if (vol20 > 0) {
-        const ratio = vol5 / vol20;
-        if (ratio > 1.3 && quote.changePct > 0) s += 15;
-        else if (ratio > 1.3 && quote.changePct < 0) s -= 10;
-        else if (ratio < 0.7 && quote.changePct > 0) s += 5;
-        else if (ratio > 1.5 && quote.changePct < -3) s -= 15;
+        const volRatio = vol5 / vol20;
+
+        // 放量上涨 = 主力资金进场（最佳信号）
+        if (volRatio > 1.3 && changePct > 2) s += 18;
+        else if (volRatio > 1.2 && changePct > 0) s += 12;
+        // 缩量上涨 = 筹码锁定好，主力控盘
+        else if (volRatio < 0.8 && changePct > 0 && changePct < 5) s += 10;
+        // 放量下跌 = 主力出货（危险信号）
+        else if (volRatio > 1.5 && changePct < -2) s -= 18;
+        else if (volRatio > 1.3 && changePct < 0) s -= 12;
+        // 缩量下跌 = 抛压减轻，可能见底
+        else if (volRatio < 0.7 && changePct < 0 && changePct > -3) s += 3;
+        // 平量平盘 = 观望
+        else if (volRatio >= 0.8 && volRatio <= 1.2 && Math.abs(changePct) < 1) s += 2;
+      }
+
+      // === 资金撬动效率（小量大涨=主力高度控盘）===
+      if (klines.length >= 5) {
+        const lastVol = vols[vols.length - 1];
+        const avgVol = vols.slice(-20).reduce((a,b) => a+b, 0) / Math.min(20, vols.length);
+        if (avgVol > 0) {
+          const efficiency = changePct / (lastVol / avgVol);
+          if (efficiency > 3 && changePct > 3) s += 8;   // 高效撬动
+          else if (efficiency > 2 && changePct > 1) s += 4;
+        }
+      }
+
+      // === 连续量价趋势（3日趋势一致性）===
+      if (klines.length >= 5) {
+        let upVolUpPrice = 0, dnVolDnPrice = 0;
+        for (let i = klines.length - 3; i < klines.length; i++) {
+          const prev = klines[i-1], cur = klines[i];
+          if (cur.volume > prev.volume && cur.close > prev.close) upVolUpPrice++;
+          if (cur.volume < prev.volume && cur.close < prev.close) dnVolDnPrice++;
+        }
+        if (upVolUpPrice >= 2) s += 6;  // 连续放量上涨
+        if (dnVolDnPrice >= 2) s += 4;  // 连续缩量下跌（抛压减轻）
       }
     }
-    if (quote.changePct > 0 && turnover > 3) s += 8;
-    else if (quote.changePct < -3 && turnover > 8) s -= 10;
+
+    // === 当日量价快速判断 ===
+    if (changePct > 0 && turnover >= 3 && turnover <= 8) s += 5;  // 温和放量上涨
+    else if (changePct < -5 && turnover > 10) s -= 10;             // 放量大跌
+    else if (changePct > 5 && turnover > 15) s -= 5;               // 天量天价风险
+
     return Math.max(0, Math.min(100, s));
   },
 
   _scoreValuationQuick(quote) {
+    // 估值评分：PE/PB综合估值+安全边际评估（与基本面互补，侧重相对估值）
     let s = 50;
-    if (quote.pe > 0 && quote.pe < 10) s += 25;
-    else if (quote.pe >= 10 && quote.pe < 18) s += 18;
-    else if (quote.pe >= 18 && quote.pe < 30) s += 8;
-    else if (quote.pe >= 30 && quote.pe < 50) s -= 5;
-    else if (quote.pe >= 50 || quote.pe < 0) s -= 20;
-    if (quote.pb > 0 && quote.pb < 1) s += 20;
-    else if (quote.pb >= 1 && quote.pb < 2) s += 12;
-    else if (quote.pb >= 2 && quote.pb < 3.5) s += 5;
-    else if (quote.pb >= 3.5 && quote.pb < 6) s -= 5;
-    else if (quote.pb >= 6 || quote.pb < 0) s -= 15;
-    if (quote.marketCap > 800) s += 10;
-    else if (quote.marketCap > 300) s += 5;
-    else if (quote.marketCap < 50) s -= 10;
+    const pe = quote.pe || 0;
+    const pb = quote.pb || 0;
+
+    // === PE估值分位评估 ===
+    if (pe > 0 && pe < 8) s += 22;          // 极低PE，深度低估
+    else if (pe >= 8 && pe < 15) s += 18;   // 低PE
+    else if (pe >= 15 && pe < 25) s += 10;  // 合理
+    else if (pe >= 25 && pe < 40) s += 0;   // 合理偏高
+    else if (pe >= 40 && pe < 70) s -= 10;  // 偏高
+    else if (pe >= 70) s -= 20;             // 泡沫区域
+    else s -= 12;                           // 亏损
+
+    // === PB估值分位评估 ===
+    if (pb > 0 && pb < 0.8) s += 20;        // 深度破净
+    else if (pb >= 0.8 && pb < 1.5) s += 15; // 破净或接近
+    else if (pb >= 1.5 && pb < 2.5) s += 8;  // 合理
+    else if (pb >= 2.5 && pb < 4) s += 0;    // 偏高
+    else if (pb >= 4 && pb < 8) s -= 8;      // 高估
+    else if (pb >= 8) s -= 15;               // 严重高估
+    else s -= 10;                            // 负净资产
+
+    // === PE+PB联合安全边际 ===
+    if (pe > 0 && pe < 15 && pb > 0 && pb < 1.5) {
+      s += 10; // 双低估值，极高安全边际
+    } else if (pe > 0 && pe < 25 && pb > 0 && pb < 2.5) {
+      s += 4;  // 合理估值组合
+    } else if ((pe > 50 || pe < 0) && (pb > 4 || pb < 0)) {
+      s -= 10; // 双重高估，极高风险
+    }
+
+    // === 市值与估值匹配度 ===
+    const mc = quote.marketCap || 0;
+    if (mc > 500 && pe > 0 && pe < 20) s += 5;   // 大盘低估值，白马股
+    else if (mc < 50 && pe > 40) s -= 8;          // 小盘高估值，泡沫风险大
+    else if (mc > 200 && pb > 0 && pb < 1.5) s += 5; // 中大盘低PB
+
     return Math.max(0, Math.min(100, s));
   },
 
   _scoreSentimentQuick(quote, klines) {
+    // 情绪面评分：RSI动量+波动率+短期趋势一致性+市场情绪
     let s = 50;
+    const changePct = quote.changePct || 0;
+
+    // === RSI动量指标（市场情绪温度计）===
+    if (klines && klines.length >= 15) {
+      const closes = klines.map(k => k.close);
+      const rsi6 = this.calcRSI(closes, 6);   // 短期RSI
+      const rsi14 = this.calcRSI(closes, 14);  // 中期RSI
+
+      // RSI6 短期情绪
+      if (rsi6 >= 40 && rsi6 <= 60) s += 8;       // 情绪稳定
+      else if (rsi6 > 25 && rsi6 < 40) s += 12;   // 超卖反弹机会
+      else if (rsi6 > 60 && rsi6 < 75) s += 5;    // 偏强
+      else if (rsi6 >= 75 && rsi6 < 85) s -= 5;   // 过热
+      else if (rsi6 >= 85) s -= 12;                // 极度狂热
+      else if (rsi6 <= 25) s += 6;                 // 极度恐慌（逆向机会但风险大）
+
+      // RSI6与RSI14的背离检测
+      if (rsi14 > 0) {
+        const divergence = rsi6 - rsi14;
+        if (divergence > 15 && rsi6 < 50) s += 5;  // 短期超卖但中期尚可，反弹信号
+        if (divergence < -15 && rsi6 > 50) s -= 5;  // 短期超买但中期一般，回调信号
+      }
+    }
+
+    // === 波动率评估（市场恐慌度）===
     if (klines && klines.length >= 10) {
       const closes = klines.map(k => k.close);
       const changes = [];
       for (let i = closes.length - 10; i < closes.length; i++) {
-        changes.push(Math.abs((closes[i] - closes[i-1]) / closes[i-1] * 100));
+        changes.push((closes[i] - closes[i-1]) / closes[i-1] * 100);
       }
-      const avgVol = changes.reduce((a,b) => a+b, 0) / changes.length;
-      if (avgVol < 1.5) s += 15;
-      else if (avgVol < 3) s += 8;
-      else if (avgVol < 5) s += 2;
-      else if (avgVol > 7) s -= 10;
+      const avgAbsChange = changes.reduce((a,b) => a + Math.abs(b), 0) / changes.length;
+
+      if (avgAbsChange < 1.5) s += 10;        // 低波动，市场平静
+      else if (avgAbsChange < 3) s += 5;      // 正常波动
+      else if (avgAbsChange < 5) s += 0;      // 波动偏大
+      else if (avgAbsChange > 7) s -= 10;     // 剧烈波动，恐慌
     }
-    if (klines && klines.length >= 5) {
+
+    // === 短期趋势一致性（5日方向）===
+    if (klines && klines.length >= 6) {
       const recent = klines.slice(-5);
-      const avgVol = recent.reduce((sum, k) => sum + k.volume, 0) / 5;
-      const last = recent[4];
-      const priceUp = last.close > recent[0].close;
-      if (priceUp && last.volume > avgVol * 1.2) s += 12;
-      else if (!priceUp && last.volume < avgVol * 0.8) s += 6;
-      else if (!priceUp && last.volume > avgVol * 1.5) s -= 12;
-      else if (priceUp && last.volume < avgVol * 0.5) s -= 3;
+      let upDays = 0, dnDays = 0;
+      for (let i = 1; i < recent.length; i++) {
+        if (recent[i].close > recent[i-1].close) upDays++;
+        else dnDays++;
+      }
+      if (upDays >= 4) s += 8;               // 连续上涨，情绪高涨
+      else if (upDays === 3) s += 5;
+      else if (dnDays >= 4) s -= 8;           // 连续下跌，恐慌
+      else if (dnDays === 3) s -= 4;
     }
-    if (quote.changePct > 0 && quote.changePct < 3) s += 8;
-    else if (quote.changePct >= 3 && quote.changePct < 7) s += 4;
-    else if (quote.changePct >= 7) s -= 5;
-    else if (quote.changePct < -5) s -= 10;
-    else if (quote.changePct < -2) s -= 3;
+
+    // === 当日涨跌幅情绪 ===
+    if (changePct > 0 && changePct < 2) s += 6;       // 温和上涨，健康
+    else if (changePct >= 2 && changePct < 5) s += 3;  // 较强上涨
+    else if (changePct >= 5 && changePct < 8) s += 0;  // 大涨，追高风险
+    else if (changePct >= 8) s -= 8;                    // 涨停附近，过热
+    else if (changePct < 0 && changePct >= -2) s += 2;  // 微跌，正常
+    else if (changePct < -2 && changePct >= -5) s -= 3; // 明显下跌
+    else if (changePct < -5 && changePct >= -8) s -= 6; // 大跌
+    else if (changePct < -8) s -= 10;                   // 跌停附近
+
     return Math.max(0, Math.min(100, s));
   }
 };
