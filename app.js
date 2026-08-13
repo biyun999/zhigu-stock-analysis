@@ -718,25 +718,26 @@ const Utils = {
 
   /** 评分转等级文字 */
   scoreLevel(score) {
-    if (score >= 90) return '★★★★★';
-    if (score >= 75) return '★★★★☆';
-    if (score >= 60) return '★★★☆☆';
-    if (score >= 40) return '★★☆☆☆';
+    if (score >= 80) return '★★★★★';
+    if (score >= 65) return '★★★★☆';
+    if (score >= 50) return '★★★☆☆';
+    if (score >= 35) return '★★☆☆☆';
     return '★☆☆☆☆';
   },
 
   scoreLevelText(score) {
-    if (score >= 90) return '极优秀';
-    if (score >= 75) return '良好';
-    if (score >= 60) return '一般';
-    if (score >= 40) return '较弱';
+    if (score >= 80) return '极优秀';
+    if (score >= 65) return '良好';
+    if (score >= 50) return '一般';
+    if (score >= 35) return '较弱';
     return '危险';
   },
 
   scoreColor(score) {
-    if (score >= 75) return '#00e676';
-    if (score >= 60) return '#00d4ff';
-    if (score >= 40) return '#ffa726';
+    if (score >= 80) return '#00e676';
+    if (score >= 65) return '#00d4ff';
+    if (score >= 50) return '#ffa726';
+    if (score >= 35) return '#ff8c00';
     return '#ff4757';
   },
 
@@ -2001,18 +2002,26 @@ const DiagnosticEngine = {
     let actionCls = '';
     let detail = '';
 
-    if (totalScore >= 70) {
-      action = '长期保留';
+    if (totalScore >= 80) {
+      action = '持有/加仓';
       actionCls = 'action-hold';
-      detail = '量化评分较高，基本面和技术面均表现良好，建议长期持有，耐心等待价值回归。';
-    } else if (totalScore >= 40) {
-      action = '逢高减仓';
+      detail = '量化评分优秀，基本面和技术面均表现良好，建议持有或逢低加仓。';
+    } else if (totalScore >= 65) {
+      action = '逢低建仓';
+      actionCls = 'action-hold';
+      detail = '量化评分较高，可分批建仓，以20日VWAP为参考成本线。';
+    } else if (totalScore >= 50) {
+      action = '观望为主';
       actionCls = 'action-reduce';
-      detail = '量化评分一般，存在一定风险因子，建议在反弹时适当减仓，降低持仓成本和风险敞口。';
+      detail = '量化评分中等，建议观望，等待放量突破或回踩支撑位再决策。';
+    } else if (totalScore >= 35) {
+      action = '谨慎减仓';
+      actionCls = 'action-reduce';
+      detail = '量化评分偏低，存在一定风险，建议逢高减仓降低风险敞口。';
     } else {
-      action = '全部清仓';
+      action = '回避/止损';
       actionCls = 'action-sell';
-      detail = '量化评分偏低，风险因子较多，建议果断清仓离场，避免更大损失。';
+      detail = '量化评分较低，风险因子较多，建议果断止损离场。';
     }
 
     html += `<div class="conclusion">🎯 处置建议：<span class="action-tag ${actionCls}">${action}</span></div>`;
@@ -2029,15 +2038,21 @@ const DiagnosticEngine = {
     </div>`;
 
     html += '<p><strong>【处置逻辑】</strong></p>';
-    if (totalScore >= 70) {
-      html += '<p>✅ 基本面扎实（PE/PB合理）+ 技术面趋势向好 + 资金面主力流入 → 持有逻辑成立。</p>';
-      html += '<p>操作建议：维持现有仓位，设好止损线，不轻易下车。回调至支撑位可加仓。</p>';
-    } else if (totalScore >= 40) {
-      html += '<p>📊 部分指标出现预警信号，虽不致命但需要控制风险。</p>';
-      html += '<p>操作建议：在股价反弹至压力位附近减仓1/3~1/2，降低持仓成本。剩余仓位严格设止损。</p>';
+    if (totalScore >= 80) {
+      html += '<p>✅ 基本面扎实 + 技术面趋势向好 + 资金面主力流入 → 持有/加仓逻辑成立。</p>';
+      html += '<p>操作建议：维持或增加仓位，设好止损线，回调至支撑位可加仓。</p>';
+    } else if (totalScore >= 65) {
+      html += '<p>✅ 基本面较好 + 技术面偏多 → 可逢低分批建仓。</p>';
+      html += '<p>操作建议：分2-3次建仓降低风险，以VWAP为成本参考，严格止损。</p>';
+    } else if (totalScore >= 50) {
+      html += '<p>📊 部分指标出现预警信号，需控制风险。</p>';
+      html += '<p>操作建议：观望为主，等待放量突破信号，不急于入场。</p>';
+    } else if (totalScore >= 35) {
+      html += '<p>📊 多项指标偏弱，风险收益比不佳。</p>';
+      html += '<p>操作建议：持仓者逢高减仓1/3~1/2，空仓者暂勿入场。</p>';
     } else {
-      html += '<p>⚠️ 多项指标亮红灯，继续持有风险收益比不佳。</p>';
-      html += '<p>操作建议：尽快逢高清仓，不要补仓摊低成本（越补越亏的风险大于摊低成本的机会）。等趋势企稳后再考虑重新介入。</p>';
+      html += '<p>⚠️ 多项指标亮红灯，继续持有风险极大。</p>';
+      html += '<p>操作建议：尽快清仓止损，不要补仓摊低成本。等企稳后再考虑重新介入。</p>';
     }
     return html;
   },
@@ -2962,23 +2977,21 @@ const App = {
       vwap20 = Utils.calcVWAP(klines.slice(-20).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
     }
 
-    // 操作建议类型判断
-    let adviceType = '';
-    let adviceIcon = '';
+    // 统一使用 getAdvice 判断操作建议
+    const advice = Watchlist.getAdvice(totalScore);
+    const adviceIcon = advice.icon;
+    const adviceType = advice.text;
     let adviceDetail = '';
-
-    if (totalScore >= 70) {
-      adviceType = '持仓浮盈';
-      adviceIcon = '✅';
-      adviceDetail = '量化评分较高，基本面和技术面表现良好。建议持有并分批锁定利润，动态止损上移至成本价上方。';
-    } else if (totalScore >= 40) {
-      adviceType = '观望为主';
-      adviceIcon = '📊';
-      adviceDetail = '量化评分一般，存在一定风险因子。建议逢高减仓，降低风险敞口，等待更好的入场时机。';
+    if (totalScore >= 80) {
+      adviceDetail = '基本面和技术面表现优秀，建议持有并分批锁定利润，动态止损上移至成本价上方。';
+    } else if (totalScore >= 65) {
+      adviceDetail = '量化评分较高，可逢低分批建仓。建议以20日VWAP为参考成本线，分2-3次买入降低风险。';
+    } else if (totalScore >= 50) {
+      adviceDetail = '量化评分中等，观望为主。等待放量突破或回踩支撑位再决策，设好止损。';
+    } else if (totalScore >= 35) {
+      adviceDetail = '量化评分偏低，存在一定风险。持仓者可逢高减仓降低风险，空仓者暂勿入场。';
     } else {
-      adviceType = '空仓待入';
-      adviceIcon = '⚠️';
-      adviceDetail = '量化评分偏低，风险因子较多。如已持有建议果断止损离场；如未持有建议暂时观望，等待企稳信号。';
+      adviceDetail = '量化评分较低，风险因子较多。已持有建议果断止损离场，未持有暂时观望等待企稳。';
     }
 
     // 判断当前价与主力成本关系
@@ -3094,7 +3107,7 @@ const App = {
     const sColor = Utils.scoreColor(totalScore);
     // 操作分（基于量化评分的操作建议）
     const opAdvice = Watchlist.getAdvice(totalScore);
-    const opBg = totalScore >= 70 ? 'rgba(0,200,83,0.15)' : totalScore >= 55 ? 'rgba(0,200,83,0.1)' : totalScore >= 40 ? 'rgba(255,165,0,0.15)' : totalScore >= 25 ? 'rgba(255,120,0,0.15)' : 'rgba(255,71,87,0.15)';
+    const opBg = totalScore >= 80 ? 'rgba(0,200,83,0.15)' : totalScore >= 65 ? 'rgba(0,200,83,0.1)' : totalScore >= 50 ? 'rgba(255,165,0,0.15)' : totalScore >= 35 ? 'rgba(255,120,0,0.15)' : 'rgba(255,71,87,0.15)';
     document.getElementById('totalScore').innerHTML =
       '<div class="total-score-display" style="flex-direction:row;gap:16px;align-items:center;justify-content:center;">' +
       '<div style="text-align:center"><div class="total-score-big" style="color:' + sColor + '">' + totalScore + '</div>' +
