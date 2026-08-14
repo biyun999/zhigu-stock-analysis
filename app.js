@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.0 - A股七维度智能分析系统
+ * 智股分析 v2.1 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -2499,6 +2499,14 @@ const Screener = {
       if (scores.dims.valuation >= 70) tags.push('💎估值合理');
       if (cycle === 'rising') tags.push('📈行业上升期');
       else if (cycle === 'cyclical_up') tags.push('🔄周期上行');
+      
+      // MSCI风格策略标签
+      if (strategy === 'msci') {
+        if (q.marketCap > 1000) tags.push('🏦大盘蓝筹');
+        if (pe > 0 && pe < 20 && pb > 0 && pb < 2) tags.push('💎价值洼地');
+        if (q.amount > 50000) tags.push('💧流动性佳');
+        if (leaderScore >= 10) tags.push('🏆MSCI龙头');
+      }
 
       scoredCandidates.push({
         code, name: q.name, price: q.price,
