@@ -724,8 +724,14 @@ body {
   color: var(--text-primary);
   font-size: 14px;
   outline: none;
-  appearance: none;
-  -webkit-appearance: none;
+  appearance: auto;
+  -webkit-appearance: menulist;
+}
+.filter-group select option {
+  background: #1a1f2e;
+  color: #e8e9ed;
+  padding: 10px 12px;
+  font-size: 13px;
 }
 
 .screener-info {

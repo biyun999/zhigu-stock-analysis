@@ -2389,7 +2389,7 @@ const DiagnosticEngine = {
 const Screener = {
   results: [],
 
-  /** 运行选股（集成五维评分+风控+行业分散+动量因子） */
+  /** 运行选股（全市场覆盖+五维评分+风控+行业分散+动量因子） */
   async run(strategy) {
     const container = document.getElementById('screenerResults');
     const infoEl = document.getElementById('screenerInfo');
@@ -2399,8 +2399,9 @@ const Screener = {
     card.style.display = 'block';
     infoEl.textContent = '';
 
-    // 从全市场获取成交额排行前300只股票
-    const marketRanking = await DataAPI.fetchMarketRanking(300);
+    // === 全市场获取：扩大到1500只，覆盖所有类型 ===
+    const fetchSize = strategy === 'msci' ? 1500 : 800;
+    const marketRanking = await DataAPI.fetchMarketRanking(fetchSize);
     if (!marketRanking || marketRanking.length === 0) {
       container.innerHTML = '<div class="empty-tip">全市场数据获取失败，请刷新重试</div>';
       return;
@@ -2408,90 +2409,100 @@ const Screener = {
     
     const allQuotes = {};
     marketRanking.forEach(item => { allQuotes[item.code] = item; });
-    infoEl.textContent = `已从全市场 ${marketRanking.length} 只活跃股中筛选`;
+    infoEl.textContent = `已从全市场 ${marketRanking.length} 只股票中筛选`;
 
-    // === 第一轮：风控过滤 ===
+    // === 第一轮：风控过滤（纯数据，速度快） ===
     const riskFiltered = [];
-    const riskWarnings = [];
+    const riskStats = { ST: 0, limitUp: 0, limitDown: 0, abnormalTurnover: 0, lowPrice: 0 };
     Object.entries(allQuotes).forEach(([code, q]) => {
-      // ST股过滤
-      if (q.name && (q.name.includes('ST') || q.name.includes('*ST'))) {
-        riskWarnings.push({ code, name: q.name, reason: 'ST风险股' });
-        return;
-      }
-      // 无效数据过滤
+      if (q.name && (q.name.includes('ST') || q.name.includes('*ST'))) { riskStats.ST++; return; }
       if (!q.price || q.price <= 0 || q.volume <= 0) return;
-      if (q.amount < 5000) return;
-      // 涨停/跌停过滤（无法买入/卖出）
-      if (q.changePct >= 9.9) { riskWarnings.push({ code, name: q.name, reason: '涨停' }); return; }
-      if (q.changePct <= -9.9) { riskWarnings.push({ code, name: q.name, reason: '跌停' }); return; }
-      // 异常换手率过滤（>20%可能是游资炒作）
-      if (q.turnover > 20) { riskWarnings.push({ code, name: q.name, reason: '异常换手率' }); return; }
-      // 低价股过滤（<3元可能是退市风险）
-      if (q.price < 3) { riskWarnings.push({ code, name: q.name, reason: '低价股(<3元)' }); return; }
+      if (q.amount < 3000) return;
+      if (q.changePct >= 9.9) { riskStats.limitUp++; return; }
+      if (q.changePct <= -9.9) { riskStats.limitDown++; return; }
+      if (q.turnover > 25) { riskStats.abnormalTurnover++; return; }
+      if (q.price < 2) { riskStats.lowPrice++; return; }
       riskFiltered.push([code, q]);
     });
 
-    // === 第二轮：基础评分（使用快速五维评分） ===
+    // === 第二轮：快速预评分（不用K线，纯行情数据打分） ===
+    const preScored = riskFiltered.map(([code, q]) => {
+      let preScore = 0;
+      const pe = q.pe || 999;
+      const pb = q.pb || 999;
+      const sector = CONFIG.SECTORS[code] || { name: '未知', type: '服务' };
+
+      // 估值合理性
+      if (pe > 0 && pe < 20) preScore += 15;
+      else if (pe > 0 && pe < 35) preScore += 8;
+      else if (pe >= 60 || pe < 0) preScore -= 10;
+      if (pb > 0 && pb < 2) preScore += 10;
+      else if (pb >= 5) preScore -= 5;
+
+      // 市值（MSCI策略权重更高）
+      if (strategy === 'msci') {
+        if (q.marketCap > 2000) preScore += 25;
+        else if (q.marketCap > 1000) preScore += 18;
+        else if (q.marketCap > 500) preScore += 10;
+        else if (q.marketCap > 200) preScore += 3;
+      } else {
+        if (q.marketCap > 500) preScore += 10;
+        else if (q.marketCap > 200) preScore += 5;
+      }
+
+      // 换手率适中
+      if (q.turnover > 1 && q.turnover < 10) preScore += 5;
+      // 涨跌幅适中（不暴涨暴跌）
+      if (Math.abs(q.changePct) < 3) preScore += 5;
+      if (Math.abs(q.changePct) > 7) preScore -= 5;
+
+      // 行业周期
+      const cycle = CONFIG.INDUSTRY_CYCLE[sector.type] || 'mature';
+      if (cycle === 'rising') preScore += 10;
+      else if (cycle === 'cyclical_up') preScore += 6;
+      else if (cycle === 'declining') preScore -= 5;
+
+      return { code, q, preScore, sector, cycle };
+    });
+
+    // 按预评分排序，取前80名进入精细评估
+    preScored.sort((a, b) => b.preScore - a.preScore);
+    const topCandidates = preScored.slice(0, 80);
+
+    // === 第三轮：精细五维评分（需要K线数据，只对top80获取） ===
+    infoEl.textContent = `风控过滤后 ${riskFiltered.length} 只 → 精细评估前 ${topCandidates.length} 只（获取K线数据中...）`;
+    
     const scoredCandidates = [];
-    for (const [code, q] of riskFiltered) {
-      // 获取简单K线数据用于技术面评分（取最近30天的数据作为近似）
+    for (const { code, q, preScore, sector, cycle } of topCandidates) {
       let klines = [];
       try {
         klines = await DataAPI.fetchKline(code);
       } catch(e) { klines = []; }
-      
-      // 构造quote对象以兼容fiveDimScore
+
       const quoteForScore = {
-        code: code,
-        name: q.name,
-        price: q.price,
-        changePct: q.changePct,
-        pe: q.pe,
-        pb: q.pb,
-        marketCap: q.marketCap,
-        turnover: q.turnover,
-        volume: q.volume,
-        amount: q.amount
+        code, name: q.name, price: q.price, changePct: q.changePct,
+        pe: q.pe, pb: q.pb, marketCap: q.marketCap,
+        turnover: q.turnover, volume: q.volume, amount: q.amount
       };
 
       const scores = Utils.fiveDimScore(quoteForScore, klines);
-      
-      // === 动量因子（5日涨幅趋势）===
+
+      // 动量因子（5日涨幅趋势）
       let momentumScore = 0;
       if (klines.length >= 5) {
         const recent5 = klines.slice(-5);
         const priceStart = recent5[0].open;
         const priceEnd = recent5[recent5.length - 1].close;
-        const momentum5d = ((priceEnd - priceStart) / priceStart) * 100;
-        // 温和上涨最优（2-8%），暴涨需警惕，下跌扣分
+        const momentum5d = priceStart > 0 ? ((priceEnd - priceStart) / priceStart) * 100 : 0;
         if (momentum5d >= 2 && momentum5d <= 8) momentumScore = 8;
         else if (momentum5d > 0 && momentum5d < 2) momentumScore = 4;
-        else if (momentum5d > 8 && momentum5d <= 15) momentumScore = 2; // 涨太多，追高风险
-        else if (momentum5d > 15) momentumScore = -5; // 暴涨风险
+        else if (momentum5d > 8 && momentum5d <= 15) momentumScore = 2;
+        else if (momentum5d > 15) momentumScore = -5;
         else if (momentum5d >= -3 && momentum5d < 0) momentumScore = 0;
-        else momentumScore = -3; // 连续下跌
+        else momentumScore = -3;
       }
 
-      // === 资金撬动效率 ===
-      let capitalEffScore = 0;
-      if (q.turnover > 0 && q.price > 0) {
-        const circulateCap = (q.amount / (q.turnover / 100)) / 10000; // 估算流通市值(万)
-        if (circulateCap > 0) {
-          const efficiency = (q.changePct + 10) / (q.turnover + 0.1); // 单位换手带来的涨幅
-          if (efficiency > 1.5) capitalEffScore = 6;
-          else if (efficiency > 1) capitalEffScore = 4;
-          else if (efficiency > 0.5) capitalEffScore = 2;
-        }
-      }
-
-      // 综合得分 = 五维评分 + 动量因子 + 资金效率
-      const totalScore = scores.total + momentumScore + capitalEffScore;
-
-      const sector = CONFIG.SECTORS[code] || { name: '未知', type: '服务' };
-      const cycle = CONFIG.INDUSTRY_CYCLE[sector.type] || 'mature';
-
-      // 生成标签
+      const totalScore = scores.total + momentumScore;
       const tags = [];
       if (scores.dims.fundamental >= 70) tags.push('📊基本面优');
       if (scores.dims.technical >= 70) tags.push('📈技术面强');
@@ -2503,9 +2514,10 @@ const Screener = {
       // MSCI风格策略标签
       if (strategy === 'msci') {
         if (q.marketCap > 1000) tags.push('🏦大盘蓝筹');
-        if (pe > 0 && pe < 20 && pb > 0 && pb < 2) tags.push('💎价值洼地');
+        if (q.pe > 0 && q.pe < 20 && q.pb > 0 && q.pb < 2) tags.push('💎价值洼地');
         if (q.amount > 50000) tags.push('💧流动性佳');
-        if (leaderScore >= 10) tags.push('🏆MSCI龙头');
+        const capRank = marketRanking.filter(m => m.marketCap > q.marketCap).length + 1;
+        if (capRank <= 50) tags.push('🏆MSCI龙头');
       }
 
       scoredCandidates.push({
@@ -2517,7 +2529,6 @@ const Screener = {
         score: Math.round(totalScore),
         fiveDimScore: scores.total,
         momentum: momentumScore,
-        capitalEff: capitalEffScore,
         sector: sector.name,
         sectorType: sector.type,
         cycle, tags,
@@ -2525,11 +2536,11 @@ const Screener = {
       });
     }
 
-    // === 第三轮：行业分散度控制（每行业最多3只） ===
+    // === 第四轮：行业分散度控制 ===
     scoredCandidates.sort((a, b) => b.score - a.score);
     const sectorCount = {};
     const diversified = [];
-    const maxPerSector = 3;
+    const maxPerSector = strategy === 'msci' ? 4 : 3;
     for (const c of scoredCandidates) {
       const sectorKey = c.sector;
       sectorCount[sectorKey] = (sectorCount[sectorKey] || 0) + 1;
@@ -2539,7 +2550,7 @@ const Screener = {
       if (diversified.length >= 30) break;
     }
 
-    // 如果分散后不足15只，放宽限制
+    // 不足15只则放宽
     if (diversified.length < 15) {
       for (const c of scoredCandidates) {
         if (!diversified.find(d => d.code === c.code)) {
@@ -2551,9 +2562,9 @@ const Screener = {
 
     this.results = diversified.slice(0, 30);
 
-    // 渲染
-    const riskCount = marketRanking.length - riskFiltered.length;
-    infoEl.innerHTML = `全市场 <b>${marketRanking.length}</b> 只活跃股 → 风控过滤 <b style="color:#ff6b81">${riskCount}</b> 只 → 五维评分+动量+行业分散 → 精选 <b style="color:#00d4ff">${this.results.length}</b> 只`;
+    // 渲染结果
+    const totalFiltered = riskStats.ST + riskStats.limitUp + riskStats.limitDown + riskStats.abnormalTurnover + riskStats.lowPrice;
+    infoEl.innerHTML = `全市场 <b>${marketRanking.length}</b> 只 → 风控过滤 <b style="color:#ff6b81">${totalFiltered}</b> 只 → 预评取前80 → 五维精评 → 行业分散 → 精选 <b style="color:#00d4ff">${this.results.length}</b> 只`;
     
     if (this.results.length === 0) {
       container.innerHTML = '<div class="empty-tip">当前无符合条件的股票，市场风险较高</div>';
@@ -2561,13 +2572,16 @@ const Screener = {
     }
 
     // 风控过滤摘要
+    const riskParts = [];
+    if (riskStats.ST > 0) riskParts.push('ST(' + riskStats.ST + ')');
+    if (riskStats.limitUp > 0) riskParts.push('涨停(' + riskStats.limitUp + ')');
+    if (riskStats.limitDown > 0) riskParts.push('跌停(' + riskStats.limitDown + ')');
+    if (riskStats.abnormalTurnover > 0) riskParts.push('异常换手(' + riskStats.abnormalTurnover + ')');
+    if (riskStats.lowPrice > 0) riskParts.push('低价股(' + riskStats.lowPrice + ')');
     let riskSummaryHtml = '';
-    if (riskWarnings.length > 0) {
-      const riskTypes = {};
-      riskWarnings.forEach(w => { riskTypes[w.reason] = (riskTypes[w.reason] || 0) + 1; });
+    if (riskParts.length > 0) {
       riskSummaryHtml = '<div style="background:rgba(255,71,87,0.1);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#ff6b81">' +
-        '⚠️ 已自动过滤 ' + riskWarnings.length + ' 只风险股：' +
-        Object.entries(riskTypes).map(([r, c]) => r + '(' + c + ')').join('、') +
+        '⚠️ 已自动过滤 ' + totalFiltered + ' 只风险股：' + riskParts.join('、') +
         '</div>';
     }
 
