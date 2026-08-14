@@ -2389,7 +2389,7 @@ const DiagnosticEngine = {
 const Screener = {
   results: [],
 
-  /** 运行选股（集成五维评分+风控+行业分散+动量因子） */
+  /** 运行选股 */
   async run(strategy) {
     const container = document.getElementById('screenerResults');
     const infoEl = document.getElementById('screenerInfo');
@@ -2406,172 +2406,146 @@ const Screener = {
       return;
     }
     
+    // 将排行数据转为quotes格式
     const allQuotes = {};
-    marketRanking.forEach(item => { allQuotes[item.code] = item; });
-    infoEl.textContent = `已从全市场 ${marketRanking.length} 只活跃股中筛选`;
+    marketRanking.forEach(item => {
+      allQuotes[item.code] = item;
+    });
+    
+    infoEl.textContent = '已从全市场 ' + marketRanking.length + ' 只活跃股票中筛选';
 
-    // === 第一轮：风控过滤 ===
-    const riskFiltered = [];
-    const riskWarnings = [];
+    // 计算市值排名（用于龙头判断）
+    const allByCap = Object.entries(allQuotes)
+      .filter(([,q]) => q.price > 0 && q.marketCap > 0)
+      .sort((a, b) => b[1].marketCap - a[1].marketCap);
+    const capRankMap = {};
+    allByCap.forEach(([code], idx) => { capRankMap[code] = idx + 1; });
+    const totalStocks = allByCap.length;
+
+    // 多维筛选
+    const candidates = [];
     Object.entries(allQuotes).forEach(([code, q]) => {
-      // ST股过滤
-      if (q.name && (q.name.includes('ST') || q.name.includes('*ST'))) {
-        riskWarnings.push({ code, name: q.name, reason: 'ST风险股' });
-        return;
-      }
-      // 无效数据过滤
+      if (q.name && (q.name.includes('ST') || q.name.includes('*ST'))) return;
       if (!q.price || q.price <= 0 || q.volume <= 0) return;
       if (q.amount < 5000) return;
-      // 涨停/跌停过滤（无法买入/卖出）
-      if (q.changePct >= 9.9) { riskWarnings.push({ code, name: q.name, reason: '涨停' }); return; }
-      if (q.changePct <= -9.9) { riskWarnings.push({ code, name: q.name, reason: '跌停' }); return; }
-      // 异常换手率过滤（>20%可能是游资炒作）
-      if (q.turnover > 20) { riskWarnings.push({ code, name: q.name, reason: '异常换手率' }); return; }
-      // 低价股过滤（<3元可能是退市风险）
-      if (q.price < 3) { riskWarnings.push({ code, name: q.name, reason: '低价股(<3元)' }); return; }
-      riskFiltered.push([code, q]);
-    });
 
-    // === 第二轮：基础评分（使用快速五维评分） ===
-    const scoredCandidates = [];
-    for (const [code, q] of riskFiltered) {
-      // 获取简单K线数据用于技术面评分（取最近30天的数据作为近似）
-      let klines = [];
-      try {
-        klines = await DataAPI.fetchKline(code);
-      } catch(e) { klines = []; }
-      
-      // 构造quote对象以兼容fiveDimScore
-      const quoteForScore = {
-        code: code,
-        name: q.name,
-        price: q.price,
-        changePct: q.changePct,
-        pe: q.pe,
-        pb: q.pb,
-        marketCap: q.marketCap,
-        turnover: q.turnover,
-        volume: q.volume,
-        amount: q.amount
-      };
-
-      const scores = Utils.fiveDimScore(quoteForScore, klines);
-      
-      // === 动量因子（5日涨幅趋势）===
-      let momentumScore = 0;
-      if (klines.length >= 5) {
-        const recent5 = klines.slice(-5);
-        const priceStart = recent5[0].open;
-        const priceEnd = recent5[recent5.length - 1].close;
-        const momentum5d = ((priceEnd - priceStart) / priceStart) * 100;
-        // 温和上涨最优（2-8%），暴涨需警惕，下跌扣分
-        if (momentum5d >= 2 && momentum5d <= 8) momentumScore = 8;
-        else if (momentum5d > 0 && momentum5d < 2) momentumScore = 4;
-        else if (momentum5d > 8 && momentum5d <= 15) momentumScore = 2; // 涨太多，追高风险
-        else if (momentum5d > 15) momentumScore = -5; // 暴涨风险
-        else if (momentum5d >= -3 && momentum5d < 0) momentumScore = 0;
-        else momentumScore = -3; // 连续下跌
-      }
-
-      // === 资金撬动效率 ===
-      let capitalEffScore = 0;
-      if (q.turnover > 0 && q.price > 0) {
-        const circulateCap = (q.amount / (q.turnover / 100)) / 10000; // 估算流通市值(万)
-        if (circulateCap > 0) {
-          const efficiency = (q.changePct + 10) / (q.turnover + 0.1); // 单位换手带来的涨幅
-          if (efficiency > 1.5) capitalEffScore = 6;
-          else if (efficiency > 1) capitalEffScore = 4;
-          else if (efficiency > 0.5) capitalEffScore = 2;
-        }
-      }
-
-      // 综合得分 = 五维评分 + 动量因子 + 资金效率
-      const totalScore = scores.total + momentumScore + capitalEffScore;
-
+      let score = 50;
+      const pe = q.pe || 999;
+      const pb = q.pb || 999;
       const sector = CONFIG.SECTORS[code] || { name: '未知', type: '服务' };
       const cycle = CONFIG.INDUSTRY_CYCLE[sector.type] || 'mature';
+      const globalCoeff = CONFIG.INDUSTRY_GLOBAL[sector.type] || 0.3;
 
-      // 生成标签
+      // === 新增维度标签 ===
       const tags = [];
-      if (scores.dims.fundamental >= 70) tags.push('📊基本面优');
-      if (scores.dims.technical >= 70) tags.push('📈技术面强');
-      if (scores.dims.capital >= 70) tags.push('💰资金流入');
-      if (scores.dims.valuation >= 70) tags.push('💎估值合理');
-      if (cycle === 'rising') tags.push('📈行业上升期');
-      else if (cycle === 'cyclical_up') tags.push('🔄周期上行');
 
-      scoredCandidates.push({
+      // --- 维度1: 行业周期判断 ---
+      let cycleScore = 0;
+      if (cycle === 'rising') { cycleScore = 12; tags.push('📈行业上升期'); }
+      else if (cycle === 'cyclical_up') { cycleScore = 8; tags.push('🔄周期上行'); }
+      else if (cycle === 'mature') { cycleScore = 4; tags.push('⏸️行业成熟期'); }
+      else if (cycle === 'cyclical_down') { cycleScore = -2; tags.push('🔻周期下行'); }
+      else if (cycle === 'declining') { cycleScore = -8; tags.push('📉行业下行'); }
+
+      // --- 维度2: 龙头企业识别 ---
+      let leaderScore = 0;
+      const capRank = capRankMap[code] || totalStocks;
+      const capPercentile = capRank / totalStocks;
+      if (capPercentile <= 0.1) { leaderScore = 15; tags.push('🏆行业龙头'); }
+      else if (capPercentile <= 0.2) { leaderScore = 10; tags.push('🥇头部企业'); }
+      else if (capPercentile <= 0.4) { leaderScore = 5; tags.push('🥈中坚力量'); }
+      else { leaderScore = 0; }
+
+      // --- 维度3: 核心技术评估（研发投入代理：PE合理+市值大=有研发投入能力） ---
+      let techScore = 0;
+      if (sector.type === '科技' || sector.type === '新能源' || sector.type === '医疗') {
+        if (pe > 0 && pe < 40 && q.marketCap > 200) { techScore = 12; tags.push('🔬技术壁垒强'); }
+        else if (pe > 0 && pe < 60 && q.marketCap > 100) { techScore = 8; tags.push('💡技术型企业'); }
+        else if (q.marketCap > 50) { techScore = 4; tags.push('🔧有一定技术'); }
+        else { techScore = 0; }
+      } else {
+        // 非科技行业，技术评分较低但有基础分
+        if (pe > 0 && pe < 20 && q.marketCap > 300) { techScore = 6; tags.push('🏭工艺成熟'); }
+        else { techScore = 2; }
+      }
+
+      // --- 维度4: 全球化程度 ---
+      let globalScore = Math.round(globalCoeff * 10);
+      if (globalCoeff >= 0.7) tags.push('🌍全球化布局');
+      else if (globalCoeff >= 0.5) tags.push('🌐有海外业务');
+      else if (globalCoeff >= 0.3) tags.push('🏠以国内为主');
+      else tags.push('🏘️本地化企业');
+
+      // --- 维度5: 财务稳健性 ---
+      let financeScore = 0;
+      if (pe > 0 && pe < 20) financeScore += 8;
+      else if (pe > 0 && pe < 35) financeScore += 4;
+      else if (pe >= 60 || pe < 0) financeScore -= 5;
+      if (pb > 0 && pb < 2) financeScore += 6;
+      else if (pb >= 5) financeScore -= 4;
+      // 换手率稳定（代表机构认可）
+      if (q.turnover > 0.5 && q.turnover < 8) financeScore += 4;
+      // 涨跌幅适中（不暴涨暴跌=稳健）
+      if (Math.abs(q.changePct) < 3) financeScore += 3;
+      if (q.marketCap > 500) financeScore += 4;
+      if (financeScore >= 15) tags.push('💎财务稳健');
+      else if (financeScore >= 8) tags.push('✅财务正常');
+      else if (financeScore < 0) tags.push('⚠️财务风险');
+
+      // === 原有策略评分 ===
+      if (strategy === 'quality' || strategy === 'balanced') {
+        if (pe > 0 && pe < 25) score += 15;
+        else if (pe >= 25) score -= 10;
+        if (pb > 0 && pb < 3) score += 10;
+        else if (pb >= 5) score -= 10;
+        if (q.marketCap > 300) score += 10;
+        if (q.turnover > 1 && q.turnover < 10) score += 5;
+      }
+
+      if (strategy === 'value' || strategy === 'balanced') {
+        if (pe > 0 && pe < 15) score += 15;
+        else if (pe > 0 && pe < 30) score += 8;
+        if (pb > 0 && pb < 2) score += 10;
+        if (Math.abs(q.changePct) < 3) score += 5;
+      }
+
+      // === 叠加新维度得分（加权） ===
+      score += cycleScore + leaderScore + techScore + globalScore + financeScore;
+
+      candidates.push({
         code, name: q.name, price: q.price,
-        change: q.changePct,
-        pe: q.pe || 999, pb: q.pb || 999,
+        change: q.changePct, pe, pb,
         marketCap: q.marketCap,
-        turnover: q.turnover,
-        score: Math.round(totalScore),
-        fiveDimScore: scores.total,
-        momentum: momentumScore,
-        capitalEff: capitalEffScore,
+        score: Math.round(score),
         sector: sector.name,
         sectorType: sector.type,
         cycle, tags,
-        dims: scores.dims
-      });
-    }
-
-    // === 第三轮：行业分散度控制（每行业最多3只） ===
-    scoredCandidates.sort((a, b) => b.score - a.score);
-    const sectorCount = {};
-    const diversified = [];
-    const maxPerSector = 3;
-    for (const c of scoredCandidates) {
-      const sectorKey = c.sector;
-      sectorCount[sectorKey] = (sectorCount[sectorKey] || 0) + 1;
-      if (sectorCount[sectorKey] <= maxPerSector) {
-        diversified.push(c);
-      }
-      if (diversified.length >= 30) break;
-    }
-
-    // 如果分散后不足15只，放宽限制
-    if (diversified.length < 15) {
-      for (const c of scoredCandidates) {
-        if (!diversified.find(d => d.code === c.code)) {
-          diversified.push(c);
+        dimScores: {
+          cycle: cycleScore, leader: leaderScore, tech: techScore,
+          global: globalScore, finance: financeScore
         }
-        if (diversified.length >= 20) break;
-      }
-    }
+      });
+    });
 
-    this.results = diversified.slice(0, 30);
+    // 排序
+    candidates.sort((a, b) => b.score - a.score);
+    this.results = candidates.slice(0, 30);
 
     // 渲染
-    const riskCount = marketRanking.length - riskFiltered.length;
-    infoEl.innerHTML = `全市场 <b>${marketRanking.length}</b> 只活跃股 → 风控过滤 <b style="color:#ff6b81">${riskCount}</b> 只 → 五维评分+动量+行业分散 → 精选 <b style="color:#00d4ff">${this.results.length}</b> 只`;
+    infoEl.textContent = `全市场 ${Object.keys(allQuotes).length} 只活跃股中，基于行业周期·龙头地位·技术壁垒·全球化·财务稳健 五维精选 ${this.results.length} 只优质标的`;
     
     if (this.results.length === 0) {
-      container.innerHTML = '<div class="empty-tip">当前无符合条件的股票，市场风险较高</div>';
+      container.innerHTML = '<div class="empty-tip">当前无符合条件的股票</div>';
       return;
     }
 
-    // 风控过滤摘要
-    let riskSummaryHtml = '';
-    if (riskWarnings.length > 0) {
-      const riskTypes = {};
-      riskWarnings.forEach(w => { riskTypes[w.reason] = (riskTypes[w.reason] || 0) + 1; });
-      riskSummaryHtml = '<div style="background:rgba(255,71,87,0.1);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#ff6b81">' +
-        '⚠️ 已自动过滤 ' + riskWarnings.length + ' 只风险股：' +
-        Object.entries(riskTypes).map(([r, c]) => r + '(' + c + ')').join('、') +
-        '</div>';
-    }
-
-    container.innerHTML = riskSummaryHtml + this.results.map((s, i) => {
+    container.innerHTML = this.results.map((s, i) => {
       const tagsHtml = s.tags.slice(0, 3).map(t => '<span class="sc-tag">' + t + '</span>').join('');
-      const scoreColor = Utils.scoreColor(s.fiveDimScore);
-      const opAdvice = Watchlist.getAdvice(s.fiveDimScore);
       return `
       <div class="screener-item screener-item-v2" onclick="App.analyzeStock('${s.code}')">
         <div class="sc-rank">${i + 1}</div>
         <div class="sc-info">
-          <div class="sc-name">${s.name} <span style="font-size:10px;color:${scoreColor};background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;margin-left:4px">${opAdvice.text}</span></div>
+          <div class="sc-name">${s.name}</div>
           <div class="sc-code">${s.code} · ${s.sector}</div>
           <div class="sc-tags">${tagsHtml}</div>
         </div>
@@ -2581,18 +2555,18 @@ const Screener = {
             <div class="sc-metric-label">涨跌</div>
           </div>
           <div class="sc-metric">
-            <div class="sc-metric-val" style="color:${scoreColor}">${s.fiveDimScore}</div>
-            <div class="sc-metric-label">量化分</div>
+            <div class="sc-metric-val">${s.pe > 0 ? s.pe.toFixed(1) : '--'}</div>
+            <div class="sc-metric-label">PE</div>
           </div>
           <div class="sc-metric">
-            <div class="sc-metric-val">${s.pe > 0 && s.pe < 200 ? s.pe.toFixed(1) : '--'}</div>
-            <div class="sc-metric-label">PE</div>
+            <div class="sc-metric-val">${s.pb > 0 ? s.pb.toFixed(2) : '--'}</div>
+            <div class="sc-metric-label">PB</div>
           </div>
         </div>
         <div class="sc-score">
-          <div class="sc-score-label">综合</div>
-          <div class="sc-score-val" style="color:${scoreColor}">${s.score}</div>
-          <div class="sc-score-stars">${Utils.scoreLevel(s.fiveDimScore)}</div>
+          <div class="sc-score-label">量化评分</div>
+          <div class="sc-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
+          <div class="sc-score-stars">${Utils.scoreLevel(s.score)}</div>
         </div>
       </div>`;
     }).join('');
@@ -3102,7 +3076,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -3144,14 +3118,6 @@ const App = {
 
       // 然后渲染七维度评分
       this.renderSevenDim(scores);
-
-      // 渲染技术指标图表
-      if (klines.length > 10) {
-        this.renderTechnicalCharts(klines, quote);
-      }
-
-      // 风险预警检测
-      this.renderRiskWarning(quote, klines);
 
       // 持仓诊断详细模块
       this.renderDiagnostic(report);
@@ -3446,251 +3412,6 @@ const App = {
         }
       ]
     });
-  },
-
-  /** 渲染技术指标图表（MACD/RSI/量能） */
-  renderTechnicalCharts(klines, quote) {
-    this.showSection('techChartCard', true);
-    const chartDom = document.getElementById('techChartContent');
-    const infoEl = document.getElementById('techChartInfo');
-    
-    // 取最近60个交易日
-    const data = klines.slice(-60);
-    const closes = data.map(k => k.close);
-    const volumes = data.map(k => k.volume);
-    const dates = data.map(k => k.date ? k.date.slice(5) : '');
-    
-    // MACD计算
-    const macd = Utils.calcMACD(closes);
-    const macdBars = macd.macd || [];
-    const difLine = macd.dif || [];
-    const deaLine = macd.dea || [];
-    
-    // RSI计算
-    const rsi6 = Utils.calcRSI(closes, 6);
-    const rsi14 = Utils.calcRSI(closes, 14);
-    const rsi6Arr = [];
-    const rsi14Arr = [];
-    for (let i = 0; i < closes.length; i++) {
-      const sub = closes.slice(0, i + 1);
-      if (sub.length >= 7) rsi6Arr.push(Utils.calcRSI(sub, 6));
-      else rsi6Arr.push(null);
-      if (sub.length >= 15) rsi14Arr.push(Utils.calcRSI(sub, 14));
-      else rsi14Arr.push(null);
-    }
-
-    if (this.techChart) this.techChart.dispose();
-    this.techChart = echarts.init(chartDom, 'dark');
-
-    // 当前tab
-    let currentTab = 'macd';
-    
-    const renderChart = (tab) => {
-      let option = {};
-      const baseGrid = { left: '8%', right: '4%', top: '12%', bottom: '15%' };
-      const baseXAxis = { type: 'category', data: dates, axisLabel: { fontSize: 9, color: '#8a8e9b', interval: Math.floor(dates.length/6) }, axisLine: { lineStyle: { color: '#2a2e3e' } } };
-      const baseYAxis = { splitLine: { lineStyle: { color: 'rgba(42,46,62,0.5)' } }, axisLabel: { fontSize: 9, color: '#8a8e9b' } };
-
-      if (tab === 'macd') {
-        // MACD: DIF线 + DEA线 + MACD柱
-        option = {
-          backgroundColor: 'transparent',
-          grid: baseGrid,
-          tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, backgroundColor: 'rgba(26,31,46,0.9)', borderColor: '#00d4ff', textStyle: { color: '#fff', fontSize: 11 } },
-          xAxis: baseXAxis,
-          yAxis: { ...baseYAxis, scale: true },
-          series: [
-            { name: 'MACD', type: 'bar', data: macdBars.slice(-60).map((v, i) => ({ value: v, itemStyle: { color: v >= 0 ? 'rgba(255,71,87,0.7)' : 'rgba(0,230,118,0.7)' } })), barWidth: '60%' },
-            { name: 'DIF', type: 'line', data: difLine.slice(-60), lineStyle: { width: 1.5, color: '#00d4ff' }, symbol: 'none', smooth: true },
-            { name: 'DEA', type: 'line', data: deaLine.slice(-60), lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true }
-          ]
-        };
-        // MACD状态判断
-        const lastMacd = macdBars[macdBars.length - 1] || 0;
-        const prevMacd = macdBars[macdBars.length - 2] || 0;
-        let macdState = '';
-        if (lastMacd > 0 && prevMacd <= 0) macdState = '🔴 MACD金叉，短期偏多';
-        else if (lastMacd < 0 && prevMacd >= 0) macdState = '🟢 MACD死叉，短期偏空';
-        else if (lastMacd > 0) macdState = '🔴 MACD多头区域（DIF在DEA上方）';
-        else macdState = '🟢 MACD空头区域（DIF在DEA下方）';
-        infoEl.textContent = `MACD(12,26,9) | DIF: ${(difLine[difLine.length-1]||0).toFixed(3)} | DEA: ${(deaLine[deaLine.length-1]||0).toFixed(3)} | ${macdState}`;
-      } else if (tab === 'rsi') {
-        option = {
-          backgroundColor: 'transparent',
-          grid: baseGrid,
-          tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, backgroundColor: 'rgba(26,31,46,0.9)', borderColor: '#00d4ff', textStyle: { color: '#fff', fontSize: 11 } },
-          xAxis: baseXAxis,
-          yAxis: { ...baseYAxis, min: 0, max: 100 },
-          series: [
-            { name: 'RSI(6)', type: 'line', data: rsi6Arr, lineStyle: { width: 1.5, color: '#00d4ff' }, symbol: 'none', smooth: true },
-            { name: 'RSI(14)', type: 'line', data: rsi14Arr, lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true },
-            { name: '超买线', type: 'line', markLine: { silent: true, lineStyle: { color: 'rgba(255,71,87,0.5)', type: 'dashed' }, data: [{ yAxis: 70 }], label: { formatter: '超买70', color: '#ff6b81', fontSize: 9 } }, data: [] },
-            { name: '超卖线', type: 'line', markLine: { silent: true, lineStyle: { color: 'rgba(0,230,118,0.5)', type: 'dashed' }, data: [{ yAxis: 30 }], label: { formatter: '超卖30', color: '#00e676', fontSize: 9 } }, data: [] }
-          ]
-        };
-        const lastRsi = rsi14Arr.filter(v => v !== null).pop() || 50;
-        let rsiState = '';
-        if (lastRsi >= 80) rsiState = '⚠️ 极度超买，回调风险极高';
-        else if (lastRsi >= 70) rsiState = '🔴 超买区域，注意回调风险';
-        else if (lastRsi <= 20) rsiState = '⚠️ 极度超卖，可能存在反弹机会';
-        else if (lastRsi <= 30) rsiState = '🟢 超卖区域，关注反弹信号';
-        else rsiState = '⚖️ RSI中性区域';
-        infoEl.textContent = `RSI(6)≈${rsi6.toFixed(1)} | RSI(14)≈${rsi14.toFixed(1)} | ${rsiState}`;
-      } else if (tab === 'vol') {
-        // 量能图：成交量柱状图 + 5日均量线
-        const volColors = data.map(k => k.close >= k.open ? 'rgba(255,71,87,0.6)' : 'rgba(0,230,118,0.6)');
-        const ma5vol = [];
-        for (let i = 0; i < volumes.length; i++) {
-          if (i >= 4) {
-            let sum = 0;
-            for (let j = i-4; j <= i; j++) sum += volumes[j];
-            ma5vol.push(sum / 5);
-          } else ma5vol.push(null);
-        }
-        option = {
-          backgroundColor: 'transparent',
-          grid: baseGrid,
-          tooltip: { trigger: 'axis', backgroundColor: 'rgba(26,31,46,0.9)', borderColor: '#00d4ff', textStyle: { color: '#fff', fontSize: 11 } },
-          xAxis: baseXAxis,
-          yAxis: { ...baseYAxis, axisLabel: { formatter: (v) => (v/10000).toFixed(0) + '万' } },
-          series: [
-            { name: '成交量', type: 'bar', data: volumes.map((v, i) => ({ value: v, itemStyle: { color: volColors[i] } })), barWidth: '60%' },
-            { name: 'MA5均量', type: 'line', data: ma5vol, lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true }
-          ]
-        };
-        const avgVol = volumes.slice(-5).reduce((a,b)=>a+b,0) / 5;
-        const prevAvgVol = volumes.slice(-10, -5).reduce((a,b)=>a+b,0) / 5;
-        const volChange = prevAvgVol > 0 ? ((avgVol - prevAvgVol) / prevAvgVol * 100).toFixed(1) : 0;
-        const volState = volChange > 30 ? '🔥 显著放量' : volChange > 10 ? '📈 温和放量' : volChange < -30 ? '📉 明显缩量' : volChange < -10 ? '⬇️ 温和缩量' : '⚖️ 量能平稳';
-        infoEl.textContent = `近5日均量: ${(avgVol/10000).toFixed(0)}万手 | 较前5日: ${volChange > 0 ? '+' : ''}${volChange}% | ${volState}`;
-      }
-      this.techChart.setOption(option, true);
-    };
-
-    // 初始渲染MACD
-    renderChart('macd');
-
-    // Tab切换事件
-    document.querySelectorAll('.tech-tab').forEach(btn => {
-      btn.onclick = () => {
-        document.querySelectorAll('.tech-tab').forEach(b => {
-          b.style.background = 'rgba(255,255,255,0.05)';
-          b.style.borderColor = 'rgba(255,255,255,0.1)';
-          b.style.color = '#8a8e9b';
-          b.classList.remove('active');
-        });
-        btn.style.background = 'rgba(0,212,255,0.15)';
-        btn.style.borderColor = 'rgba(0,212,255,0.3)';
-        btn.style.color = '#00d4ff';
-        btn.classList.add('active');
-        currentTab = btn.dataset.tab;
-        renderChart(currentTab);
-      };
-    });
-  },
-
-  /** 渲染风险预警 */
-  renderRiskWarning(quote, klines) {
-    const alerts = [];
-    const closes = klines.map(k => k.close);
-    const volumes = klines.map(k => k.volume);
-    const changes = klines.map(k => k.changePct || 0);
-
-    // === 风险1: 连续跌停检测 ===
-    let consecutiveLimitDown = 0;
-    for (let i = klines.length - 1; i >= Math.max(0, klines.length - 10); i--) {
-      if (klines[i].changePct <= -9.5) consecutiveLimitDown++;
-      else break;
-    }
-    if (consecutiveLimitDown >= 2) {
-      alerts.push({ level: 'critical', icon: '🔴', title: '连续跌停', desc: `连续${consecutiveLimitDown}个交易日跌停，流动性极差，切勿抄底` });
-    } else if (consecutiveLimitDown === 1) {
-      alerts.push({ level: 'warning', icon: '🟠', title: '今日跌停', desc: '当日跌停封板，明日存在继续低开风险' });
-    }
-
-    // === 风险2: 异常换手率 ===
-    if (quote.turnover > 20) {
-      alerts.push({ level: 'critical', icon: '🔴', title: '异常换手率', desc: `换手率${quote.turnover.toFixed(1)}%远超正常水平，可能是游资对倒或主力出货，风险极高` });
-    } else if (quote.turnover > 12) {
-      alerts.push({ level: 'warning', icon: '🟠', title: '换手率偏高', desc: `换手率${quote.turnover.toFixed(1)}%处于高位，筹码松动，注意控制仓位` });
-    }
-
-    // === 风险3: RSI极端值 ===
-    if (closes.length >= 15) {
-      const rsi = Utils.calcRSI(closes, 14);
-      if (rsi >= 85) {
-        alerts.push({ level: 'critical', icon: '🔴', title: 'RSI极度超买', desc: `RSI(14)=${rsi.toFixed(1)}，处于极度超买区域，短期回调概率极高` });
-      } else if (rsi >= 75) {
-        alerts.push({ level: 'warning', icon: '🟠', title: 'RSI超买', desc: `RSI(14)=${rsi.toFixed(1)}，已进入超买区域，追高风险加大` });
-      } else if (rsi <= 15) {
-        alerts.push({ level: 'warning', icon: '🟡', title: 'RSI极度超卖', desc: `RSI(14)=${rsi.toFixed(1)}，极度超卖但可能是基本面恶化，不宜盲目抄底` });
-      }
-    }
-
-    // === 风险4: 跌破关键支撑位 ===
-    if (klines.length >= 20) {
-      const sr = Utils.calcSupportResistance(klines);
-      const current = quote.price;
-      if (sr.support && current < sr.support) {
-        const breakPct = ((current - sr.support) / sr.support * 100).toFixed(1);
-        alerts.push({ level: 'critical', icon: '🔴', title: '跌破支撑位', desc: `当前价${current.toFixed(2)}已跌破关键支撑${sr.support.toFixed(2)}，跌幅${breakPct}%，下方缺乏有效支撑` });
-      }
-    }
-
-    // === 风险5: 放量下跌 ===
-    if (klines.length >= 5) {
-      const recent3 = klines.slice(-3);
-      const avgVol3 = recent3.reduce((s, k) => s + k.volume, 0) / 3;
-      const prevVol5 = klines.slice(-8, -3);
-      const avgVolPrev = prevVol5.length > 0 ? prevVol5.reduce((s, k) => s + k.volume, 0) / prevVol5.length : avgVol3;
-      const isDown3 = recent3.every(k => k.close < k.open);
-      if (isDown3 && avgVol3 > avgVolPrev * 1.5) {
-        alerts.push({ level: 'critical', icon: '🔴', title: '放量连续下跌', desc: '近3日持续下跌且成交量显著放大，空方力量集中释放，短期不宜介入' });
-      }
-    }
-
-    // === 风险6: 高位长上影线 ===
-    if (klines.length >= 20) {
-      const last = klines[klines.length - 1];
-      const body = Math.abs(last.close - last.open);
-      const upperShadow = last.high - Math.max(last.close, last.open);
-      const high20 = Math.max(...klines.slice(-20).map(k => k.high));
-      const isNearHigh = last.high >= high20 * 0.97;
-      if (upperShadow > body * 2 && isNearHigh && body > 0) {
-        alerts.push({ level: 'warning', icon: '🟠', title: '高位长上影线', desc: '股价触及近期高点后大幅回落，上方抛压沉重，短线见顶信号' });
-      }
-    }
-
-    // === 风险7: MA5跌破MA20（死叉）===
-    if (closes.length >= 20) {
-      const ma5 = closes.slice(-5).reduce((a,b) => a+b, 0) / 5;
-      const ma20 = closes.slice(-20).reduce((a,b) => a+b, 0) / 20;
-      const prevCloses = closes.slice(0, -1);
-      if (prevCloses.length >= 20) {
-        const prevMa5 = prevCloses.slice(-5).reduce((a,b) => a+b, 0) / 5;
-        const prevMa20 = prevCloses.slice(-20).reduce((a,b) => a+b, 0) / 20;
-        if (prevMa5 >= prevMa20 && ma5 < ma20) {
-          alerts.push({ level: 'warning', icon: '🟠', title: '均线死叉', desc: 'MA5下穿MA20形成死叉，短期趋势转弱' });
-        }
-      }
-    }
-
-    // 渲染
-    if (alerts.length === 0) {
-      this.showSection('riskAlertCard', false);
-      return;
-    }
-
-    this.showSection('riskAlertCard', true);
-    const levelColors = { critical: '#ff4757', warning: '#ffa502', info: '#ffc312' };
-    const levelBg = { critical: 'rgba(255,71,87,0.08)', warning: 'rgba(255,165,2,0.08)', info: 'rgba(255,195,18,0.08)' };
-    const html = alerts.map(a => `
-      <div style="background:${levelBg[a.level]};border-left:3px solid ${levelColors[a.level]};border-radius:6px;padding:10px 12px;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:600;color:${levelColors[a.level]}">${a.icon} ${a.title}</div>
-        <div style="font-size:11px;color:#a0a4b0;margin-top:4px;line-height:1.5">${a.desc}</div>
-      </div>
-    `).join('');
-    document.getElementById('riskAlertContent').innerHTML = html;
   },
 
   /** 渲染诊断报告 */

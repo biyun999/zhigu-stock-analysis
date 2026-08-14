@@ -131,6 +131,24 @@
         </div>
       </section>
 
+      <!-- 技术指标可视化 -->
+      <section class="card" id="techChartCard" style="display:none">
+        <div class="card-title">📈 技术指标</div>
+        <div class="tech-chart-tabs" style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="tech-tab active" data-tab="macd" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(0,212,255,0.3);background:rgba(0,212,255,0.15);color:#00d4ff;font-size:12px;cursor:pointer">MACD</button>
+          <button class="tech-tab" data-tab="rsi" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">RSI</button>
+          <button class="tech-tab" data-tab="vol" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">量能</button>
+        </div>
+        <div id="techChartContent" style="width:100%;height:220px"></div>
+        <div id="techChartInfo" style="font-size:11px;color:#8a8e9b;margin-top:8px;text-align:center"></div>
+      </section>
+
+      <!-- 风险预警 -->
+      <section class="card" id="riskAlertCard" style="display:none">
+        <div class="card-title">🚨 风险预警</div>
+        <div id="riskAlertContent"></div>
+      </section>
+
       <!-- 持仓诊断8大模块 -->
       <section id="diagnosticResult" style="display:none">
         <div class="card">
