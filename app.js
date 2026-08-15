@@ -1074,6 +1074,26 @@ const Utils = {
 // 4. DataAPI - 数据获取API
 // ============================================================
 const DataAPI = {
+  // === 数据缓存层 ===
+  _cache: {},
+  _cacheTTL: {
+    quote: 15000,      // 实时行情15秒
+    kline: 60000,      // K线60秒
+    marketRanking: 30000, // 排行30秒
+    capitalFlow: 30000,   // 资金流向30秒
+    news: 120000      // 新闻120秒
+  },
+  _cacheGet(key, type) {
+    const c = this._cache[key];
+    if (!c) return null;
+    const ttl = this._cacheTTL[type] || 30000;
+    if (Date.now() - c.ts > ttl) return null;
+    return c.data;
+  },
+  _cacheSet(key, type, data) {
+    this._cache[key] = { ts: Date.now(), data };
+  },
+
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
@@ -1152,6 +1172,7 @@ const DataAPI = {
         } catch(e) { console.warn('[fetchQuotes] 东方财富API获取北交所失败:', code, e.message); }
       }
 
+      this._cacheSet(cacheKey, 'quote', results);
       return results;
     } catch (e) {
       console.error('fetchQuotes error:', e);
@@ -1256,13 +1277,17 @@ const DataAPI = {
   /** 获取全市场股票排行（按成交额排序，取前N只） */
   async fetchMarketRanking(topN) {
     topN = topN || 300;
+    const cacheKey = 'ranking_' + topN;
+    const cached = this._cacheGet(cacheKey, 'marketRanking');
+    if (cached) return cached;
     try {
       // 东方财富全市场排行API：fs覆盖沪市主板+深市主板+中小板+创业板+科创板+北交所
       const url = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23';
       const resp = await fetch(url);
       const data = await resp.json();
+      let result = [];
       if (data && data.data && data.data.diff) {
-        return data.data.diff.map(item => {
+        result = data.data.diff.map(item => {
           const code = item.f12;
           let prefix = 'sz';
           if (code.startsWith('6')) prefix = 'sh';
@@ -1289,7 +1314,8 @@ const DataAPI = {
           };
         }).filter(d => d.price > 0 && d.name && !d.name.includes('ST'));
       }
-      return [];
+      this._cacheSet(cacheKey, 'marketRanking', result);
+      return result;
     } catch (e) {
       console.error('fetchMarketRanking error:', e);
       return [];
@@ -1298,25 +1324,30 @@ const DataAPI = {
 
   /** 获取资金流向（近5日） */
   async fetchCapitalFlow(code) {
+    const cacheKey = 'capitalFlow_' + code;
+    const cached = this._cacheGet(cacheKey, 'capitalFlow');
+    if (cached) return cached;
     try {
       const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`; // 北交所(sz/bj)均用market=0
       const url = `${CONFIG.EM_CAPITAL}?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&klt=101&lmt=5`;
       const resp = await fetch(url);
       const data = await resp.json();
+      let result = [];
       if (data && data.data && data.data.klines) {
-        return data.data.klines.map(line => {
+        result = data.data.klines.map(line => {
           const f = line.split(',');
           return {
             date: f[0],
-            mainIn: +f[1], // 主力净流入
-            smallIn: +f[2], // 小单净流入
-            medIn: +f[3], // 中单净流入
-            bigIn: +f[4], // 大单净流入
-            superIn: +f[5] // 超大单净流入
+            mainIn: +f[1],
+            smallIn: +f[2],
+            medIn: +f[3],
+            bigIn: +f[4],
+            superIn: +f[5]
           };
         });
       }
-      return [];
+      this._cacheSet(cacheKey, 'capitalFlow', result);
+      return result;
     } catch (e) {
       console.error('fetchCapitalFlow error:', e);
       return [];
@@ -1325,13 +1356,17 @@ const DataAPI = {
 
   /** 获取公告新闻 */
   async fetchNews(code) {
+    const cacheKey = 'news_' + code;
+    const cached = this._cacheGet(cacheKey, 'news');
+    if (cached) return cached;
     try {
       const stockCode = code.substring(2);
       const url = `${CONFIG.EM_NEWS}?cb=&sr=-1&page_size=10&page_index=1&ann_type=A&client_source=&stock_list=${stockCode}&f_node=0&s_node=0`;
       const resp = await fetch(url);
       const data = await resp.json();
+      let result = [];
       if (data && data.data && data.data.list) {
-        return data.data.list.map(item => ({
+        result = data.data.list.map(item => ({
           title: item.title || '',
           time: item.notice_date || '',
           type: item.columns ? item.columns[0]?.column_name : '公告'
@@ -1621,7 +1656,7 @@ const SevenDimAnalyzer = {
     if (quote.marketCap > 800) score += 10;
     else if (quote.marketCap > 300) score += 5;
     else if (quote.marketCap < 50) score -= 10;
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 基本面评分 */
@@ -1641,7 +1676,7 @@ const SevenDimAnalyzer = {
     if (quote.marketCap > 500) score += 10;
     else if (quote.marketCap > 100) score += 5;
     else score -= 5;
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 技术面评分 */
@@ -1670,7 +1705,7 @@ const SevenDimAnalyzer = {
     if (rsi > 30 && rsi < 70) score += 5;
     else if (rsi >= 80) score -= 10;
     else if (rsi <= 20) score += 5; // 超卖反弹机会
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 资金面评分 */
@@ -1680,9 +1715,9 @@ const SevenDimAnalyzer = {
     const recent5 = capitalFlow.slice(-5);
     const totalFlow = recent5.reduce((sum, d) => sum + d.mainIn, 0);
     if (totalFlow > 0) {
-      score += Math.min(30, totalFlow / 1e8 * 3);
+      score += Math.min(30, Math.round(totalFlow / 1e8 * 3));
     } else {
-      score += Math.max(-30, totalFlow / 1e8 * 3);
+      score += Math.max(-30, Math.round(totalFlow / 1e8 * 3));
     }
     // 连续流入天数
     let consecIn = 0;
@@ -1692,7 +1727,7 @@ const SevenDimAnalyzer = {
     }
     if (consecIn >= 3) score += 10;
     if (consecIn === 0) score -= 5;
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 情绪面评分 */
@@ -1716,7 +1751,7 @@ const SevenDimAnalyzer = {
     // 涨跌幅情绪
     if (quote.changePct > 5) score -= 5; // 短期过热
     if (quote.changePct < -5) score += 5; // 超跌
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 消息面评分（基于基本面指标推算，无独立新闻API） */
@@ -1726,7 +1761,7 @@ const SevenDimAnalyzer = {
     if (quote.changePct > 3) score += 10;
     if (quote.changePct < -3) score -= 10;
     if (quote.turnover > 8) score += 5; // 高关注度
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 宏观面评分（基于固定宏观数据） */
@@ -1742,7 +1777,7 @@ const SevenDimAnalyzer = {
     if (m.lpr_5y < 4) score += 10;
     // GDP增速
     if (m.gdp > 5) score += 10;
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   },
 
   /** 风险面评分（越低风险越高） */
@@ -1765,7 +1800,7 @@ const SevenDimAnalyzer = {
       const ma20 = Utils.calcMA(closes, 20);
       if (ma20 && quote.price < ma20 * 0.95) score -= 10;
     }
-    return Math.max(0, Math.min(100, score));
+    return Math.round(Math.max(0, Math.min(100, score)));
   }
 };
 
