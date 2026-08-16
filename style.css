@@ -2367,3 +2367,147 @@ body {
   white-space: nowrap;
   text-align: center;
 }
+
+/* ========== 短线潜力 TOP10 样式 ========== */
+.st-top-sectors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.sector-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(59,130,246,0.12);
+  border: 1px solid rgba(59,130,246,0.25);
+  color: #93c5fd;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+.sector-tag b { color: #dbeafe; font-weight: 600; }
+.sector-tag .up { color: #ef4444; font-weight: 700; }
+.sector-tag .down { color: #22c55e; font-weight: 700; }
+
+.st-card {
+  flex-direction: column !important;
+  align-items: stretch !important;
+  padding: 10px !important;
+  margin-bottom: 8px;
+}
+.st-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.st-cat-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  margin-left: 4px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.cat-day {
+  background: rgba(239,68,68,0.18);
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.35);
+}
+.cat-wave {
+  background: rgba(59,130,246,0.18);
+  color: #93c5fd;
+  border: 1px solid rgba(59,130,246,0.35);
+}
+.st-dims {
+  display: flex;
+  justify-content: space-around;
+  margin: 8px 0;
+  padding: 6px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.05);
+}
+.st-dim {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+.st-dim-label {
+  font-size: 10px;
+  color: #94a3b8;
+}
+.st-dim-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: #fbbf24;
+}
+.st-section {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 6px;
+}
+.st-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.st-logic-title { color: #f59e0b; }
+.st-risk-title { color: #ef4444; }
+.st-logic-item {
+  font-size: 11px;
+  color: #fcd34d;
+  line-height: 1.5;
+  padding: 1px 0;
+}
+.st-risk-item {
+  font-size: 11px;
+  color: #fca5a5;
+  line-height: 1.5;
+  padding: 1px 0;
+}
+.st-risk-control {
+  margin-top: 12px;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(239,68,68,0.08), rgba(59,130,246,0.05));
+  border: 1px solid rgba(239,68,68,0.25);
+  border-radius: 10px;
+}
+.st-rc-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fbbf24;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.st-rc-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 4px;
+  font-size: 12px;
+  border-bottom: 1px dashed rgba(255,255,255,0.06);
+}
+.st-rc-row:last-of-type { border-bottom: none; }
+.st-rc-label {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+.st-rc-val {
+  color: #e2e8f0;
+  text-align: right;
+}
+.st-rc-tip {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  font-size: 11px;
+  color: #f87171;
+  text-align: center;
+  line-height: 1.5;
+}

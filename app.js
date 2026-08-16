@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.1 - A股七维度智能分析系统
+ * 智股分析 v2.2 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -1376,6 +1376,119 @@ const DataAPI = {
     } catch (e) {
       console.error('fetchNews error:', e);
       return [];
+    }
+  },
+
+  /** 获取板块排行（行业板块按涨幅排序，取topN个） */
+  async fetchSectorRank(topN = 10) {
+    const cacheKey = 'sectorRank_' + topN;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+    try {
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?cb=&fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&fs=m:90+t:2&fields=f2,f3,f4,f8,f12,f14,f104,f105,f128,f136,f140,f141`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
+      const list = (json && json.data && json.data.diff) || [];
+      const result = list.map(item => ({
+        code: item.f12,              // 板块代码 BKxxxxxx
+        name: item.f14,              // 板块名称
+        changePct: parseFloat(item.f3) || 0,   // 板块涨跌幅%
+        mainFlow: parseFloat(item.f62) || 0,   // 板块主力净流入（元）
+        turnoverPct: parseFloat(item.f8) || 0, // 换手率%
+        upCount: parseInt(item.f104) || 0,     // 板块内上涨家数
+        downCount: parseInt(item.f105) || 0,   // 板块内下跌家数
+      })).filter(s => s.code && s.name);
+      this._cacheSet(cacheKey, result, 60);  // 板块数据缓存60秒
+      return result;
+    } catch (e) {
+      console.error('fetchSectorRank error:', e);
+      return [];
+    }
+  },
+
+  /** 获取板块内成分股（按主力净流入排序，取topN只） */
+  async fetchSectorStocks(sectorCode, topN = 4) {
+    const cacheKey = 'sectorStocks_' + sectorCode + '_' + topN;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+    try {
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?cb=&fid=f62&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&fs=b:${sectorCode}+f:!50&fields=f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f14,f15,f16,f17,f20,f23,f62,f184,f225`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
+      const list = (json && json.data && json.data.diff) || [];
+      const result = list.map(item => {
+        const rawCode = String(item.f12 || '');
+        const price = parseFloat(item.f2);
+        if (!rawCode || !(price > 0)) return null;
+        // 判断交易所前缀
+        let prefix = 'sz';
+        if (rawCode.startsWith('6')) prefix = 'sh';
+        else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
+        return {
+          code: prefix + rawCode,
+          rawCode: rawCode,
+          name: item.f14,
+          price: price,
+          changePct: parseFloat(item.f3) || 0,
+          volume: parseFloat(item.f5) || 0,       // 成交量（手）
+          amount: parseFloat(item.f6) || 0,       // 成交额（元）
+          amplitude: parseFloat(item.f7) || 0,    // 振幅%
+          turnover: parseFloat(item.f8) || 0,     // 换手率%
+          pe: parseFloat(item.f9) || 0,
+          mainFlow: parseFloat(item.f62) || 0,    // 主力净流入（元）
+          superFlow: parseFloat(item.f66) || 0,   // 超大单净流入
+          bigFlow: parseFloat(item.f72) || 0,     // 大单净流入
+          midFlow: parseFloat(item.f78) || 0,     // 中单净流入
+          smallFlow: parseFloat(item.f84) || 0,   // 小单净流入
+          pb: parseFloat(item.f23) || 0,
+          marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,  // 总市值（亿）
+        };
+      }).filter(Boolean);
+      this._cacheSet(cacheKey, result, 45);
+      return result;
+    } catch (e) {
+      console.error('fetchSectorStocks error:', e);
+      return [];
+    }
+  },
+
+  /** 获取单只股票近N日主力资金流向（用于近2日累计） */
+  async fetchCapitalFlowStock(code, days = 3) {
+    const cacheKey = 'cf_' + code + '_' + days;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+    try {
+      const rawCode = code.replace(/^(sh|sz|bj)/, '');
+      const secid = (code.startsWith('sh') ? '1.' : '0.') + rawCode;
+      const url = `https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get?cb=&secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&lmt=${days}`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
+      const klines = (json && json.data && json.data.klines) || [];
+      // 解析每日数据: 日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
+      const flows = klines.map(line => {
+        const parts = line.split(',');
+        return {
+          date: parts[0],
+          main: parseFloat(parts[1]) || 0,       // 主力净流入
+          small: parseFloat(parts[2]) || 0,      // 小单
+          mid: parseFloat(parts[3]) || 0,        // 中单
+          big: parseFloat(parts[4]) || 0,        // 大单
+          superBig: parseFloat(parts[5]) || 0,   // 超大单
+        };
+      });
+      // 计算近2日主力累计
+      const recent2 = flows.slice(-2);
+      const mainFlowSum2 = recent2.reduce((s, f) => s + f.main, 0);
+      // 今日主力/成交额（用行情估算）
+      const today = flows.length > 0 ? flows[flows.length - 1] : null;
+      this._cacheSet(cacheKey, { flows, mainFlowSum2, today }, 30);
+      return { flows, mainFlowSum2, today };
+    } catch (e) {
+      console.error('fetchCapitalFlowStock error:', e);
+      return { flows: [], mainFlowSum2: 0, today: null };
     }
   },
 
@@ -3023,47 +3136,413 @@ const App = {
     }
   },
 
-  /** 加载热门股票Top20 */
+  /** 加载短线潜力TOP10（板块热度+主力资金+量价技术） */
   async loadHotStocks() {
     const container = document.getElementById('hotStocks');
+    container.innerHTML = '<div class="loading-pulse">正在扫描热门板块与主力资金...</div>';
     try {
-      // 获取行情
-      const quotes = await DataAPI.fetchQuotes(CONFIG.HOT_STOCKS);
-      // 计算评分并排序
-      const scored = [];
-      for (const [code, q] of Object.entries(quotes)) {
-        if (!q.price || q.price <= 0) continue;
-        // 五维量化评分
-        const scoreResult = Utils.fiveDimScore(q, null);
-        scored.push({ code, name: q.name, price: q.price, change: q.changePct, score: scoreResult.total });
+      // 1. 获取当日涨幅靠前的10个行业板块
+      const sectors = await DataAPI.fetchSectorRank(10);
+      if (!sectors || sectors.length === 0) {
+        container.innerHTML = '<div class="empty-tip">未获取到板块行情数据，请稍后重试</div>';
+        return;
       }
-      scored.sort((a, b) => b.score - a.score);
-      const top20 = scored.slice(0, 20);
+      // 筛选有正向涨幅的板块，优先涨停家数多的
+      const hotSectors = sectors
+        .filter(s => s.changePct > 0 || s.mainFlow > 0)
+        .slice(0, 8);
+      if (hotSectors.length === 0) {
+        container.innerHTML = '<div class="empty-tip">当前市场整体偏弱，建议观望</div>';
+        return;
+      }
 
-      container.innerHTML = top20.map((s, i) => {
-        const cls = Utils.colorClass(s.change);
-        const rankCls = i < 3 ? 'rank-top3' : 'rank-normal';
-        return `
-          <div class="hot-stock-item" onclick="App.analyzeStock('${s.code}')">
+      // 2. 每个热门板块拉取主力净流入前4的成分股
+      const sectorStockMap = {};   // sectorCode -> {sector, stocks}
+      const stockMap = {};         // code -> 股票信息（含sectorName）
+      for (const sec of hotSectors) {
+        const stocks = await DataAPI.fetchSectorStocks(sec.code, 4);
+        if (stocks.length > 0) {
+          sectorStockMap[sec.code] = { sector: sec, stocks };
+          for (const st of stocks) {
+            if (!stockMap[st.code]) {
+              stockMap[st.code] = { ...st, sectorCode: sec.code, sectorName: sec.name };
+            }
+          }
+        }
+      }
+
+      const candidates = Object.values(stockMap);
+      if (candidates.length === 0) {
+        container.innerHTML = '<div class="empty-tip">热门板块内暂无活跃个股，请稍后刷新</div>';
+        return;
+      }
+
+      // 3. 对候选股批量拉K线，计算量价技术分；并行拉主力资金3日累计
+      const klinePromises = candidates.map(c => DataAPI.fetchKline(c.code, 60).catch(() => null));
+      const flowPromises = candidates.map(c => DataAPI.fetchCapitalFlowStock(c.code, 3).catch(() => null));
+      const [klinesArr, flowsArr] = await Promise.all([Promise.all(klinePromises), Promise.all(flowPromises)]);
+
+      const scored = [];
+      for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        const klines = klinesArr[i];
+        const flowData = flowsArr[i];
+        // 板块热度分
+        const sectorInfo = sectorStockMap[c.sectorCode];
+        const sector = sectorInfo ? sectorInfo.sector : null;
+        const sectorScore = this._scoreSectorHeat(sector);
+        // 主力资金分（综合板块资金 + 个股近2日主力累计 + 换手率活跃度）
+        const capitalScore = this._scoreCapitalFlow(c, flowData, sector);
+        // 量价技术分
+        const techScore = this._scoreShortTermTech(klines, c);
+        // 总分 = 板块40% + 主力35% + 技术25%
+        const total = Math.round(sectorScore * 0.40 + capitalScore * 0.35 + techScore * 0.25);
+        // 识别短线上涨概率等级
+        let probTag = '观望';
+        if (total >= 85) probTag = '强势';
+        else if (total >= 75) probTag = '偏强';
+        else if (total >= 60) probTag = '中性偏强';
+        else if (total >= 45) probTag = '中性';
+        // 识别日内超短 vs 3-5日波段
+        let category = '波段';
+        if (c.turnover >= 5 && c.amplitude >= 4 && total >= 65) category = '日内';
+        else if (klines && klines.length >= 10) {
+          // 看近3日涨幅累计是否超过8% -> 适合波段
+          const last3 = klines.slice(-3);
+          const cum3 = last3.reduce((s, k, i) => {
+            if (i === 0) return s;
+            return s + (k.close - last3[i-1].close) / last3[i-1].close * 100;
+          }, 0);
+          if (cum3 > 6) category = '波段';
+        }
+        // 下跌风险（至少2条）
+        const risks = this._getShortTermRisks(c, klines, flowData);
+        // 上涨逻辑（对应三维度）
+        const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore);
+
+        scored.push({
+          code: c.code,
+          name: c.name,
+          price: c.price,
+          changePct: c.changePct,
+          sectorName: c.sectorName,
+          turnover: c.turnover,
+          amount: c.amount,
+          pe: c.pe,
+          marketCap: c.marketCap,
+          total, sectorScore, capitalScore, techScore,
+          probTag, category, risks, logic
+        });
+      }
+
+      // 4. 排序取TOP10
+      scored.sort((a, b) => b.total - a.total);
+      const top10 = scored.slice(0, 10);
+
+      // 5. 渲染
+      this.renderShortTermTop10(top10, hotSectors.slice(0, 5));
+    } catch (e) {
+      console.error('loadHotStocks error:', e);
+      container.innerHTML = '<div class="empty-tip">加载失败，请刷新重试</div>';
+    }
+  },
+
+  /** 板块热度评分（0-100） */
+  _scoreSectorHeat(sector) {
+    if (!sector) return 30;
+    let s = 40;
+    const chg = sector.changePct || 0;
+    // 板块涨幅
+    if (chg >= 4) s += 30;
+    else if (chg >= 3) s += 25;
+    else if (chg >= 2) s += 20;
+    else if (chg >= 1) s += 15;
+    else if (chg >= 0.3) s += 8;
+    else if (chg >= 0) s += 3;
+    else s -= 10;
+    // 板块内上涨家数（越多越热）
+    const up = sector.upCount || 0;
+    const down = sector.downCount || 0;
+    if (up >= 20 && up > down * 3) s += 20;      // 板块普涨+涨停家数多
+    else if (up >= 15 && up > down * 2) s += 15;
+    else if (up >= 10) s += 10;
+    else if (up >= 5) s += 5;
+    else s -= 5;
+    // 板块主力净流入
+    const flow = sector.mainFlow || 0;
+    if (flow > 5e9) s += 10;       // 50亿以上
+    else if (flow > 2e9) s += 7;   // 20亿以上
+    else if (flow > 5e8) s += 4;   // 5亿以上
+    else if (flow > 0) s += 1;
+    else s -= 8;
+    return Math.max(0, Math.min(100, s));
+  },
+
+  /** 主力资金评分（0-100）：近2日主力累计 + 游资活跃度（换手率） + 板块资金配合 */
+  _scoreCapitalFlow(stock, flowData, sector) {
+    let s = 40;
+    // 近2日主力累计净流入
+    const flowSum = (flowData && flowData.mainFlowSum2) || 0;
+    const amt = stock.amount || 1;
+    const flowRatio = flowSum / amt;  // 主力净流入 / 成交额
+    if (flowRatio > 0.3) s += 30;        // 主力净流入占成交额30%+
+    else if (flowRatio > 0.2) s += 25;
+    else if (flowRatio > 0.1) s += 20;
+    else if (flowRatio > 0.05) s += 15;
+    else if (flowRatio > 0) s += 8;
+    else if (flowRatio > -0.05) s += 0;
+    else if (flowRatio > -0.15) s -= 10;
+    else s -= 25;
+
+    // 当日主力净流入占比
+    const todayFlow = (flowData && flowData.today && flowData.today.main) || 0;
+    const todayRatio = todayFlow / amt;
+    if (todayRatio > 0.15) s += 10;
+    else if (todayRatio > 0.05) s += 6;
+    else if (todayRatio < -0.1) s -= 8;
+
+    // 游资席位活跃度（换手率）
+    const tr = stock.turnover || 0;
+    if (tr >= 3 && tr <= 10) s += 10;        // 活跃健康
+    else if (tr >= 10 && tr <= 18) s += 5;   // 活跃偏高
+    else if (tr > 18) s -= 5;                // 过度换手，风险
+    else if (tr >= 1 && tr < 3) s += 2;
+    else s -= 8;
+
+    // 板块主力资金配合
+    if (sector && sector.mainFlow > 1e9) s += 5;
+    else if (sector && sector.mainFlow > 0) s += 2;
+    else if (sector && sector.mainFlow < -5e8) s -= 5;
+
+    return Math.max(0, Math.min(100, s));
+  },
+
+  /** 量价技术评分（0-100）：5/10日线企稳 + 缩量回调温和放量 + 不破短期支撑 + MACD绿柱缩短即将金叉 */
+  _scoreShortTermTech(klines, stock) {
+    if (!klines || klines.length < 15) return 40;
+    let s = 40;
+    const closes = klines.map(k => k.close);
+    const vols = klines.map(k => k.volume);
+    const current = closes[closes.length - 1];
+    const prev = closes[closes.length - 2];
+
+    const ma5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
+    const ma10 = closes.slice(-10).reduce((a, b) => a + b, 0) / 10;
+    const ma20 = closes.length >= 20 ? closes.slice(-20).reduce((a, b) => a + b, 0) / 20 : null;
+
+    // 1) 股价回踩5/10日线企稳（关键）
+    const distMA5 = (current - ma5) / ma5 * 100;
+    const distMA10 = (current - ma10) / ma10 * 100;
+    // 当前价贴近MA5/MA10（-2%到+3%之间视为企稳）
+    if (distMA5 >= -2 && distMA5 <= 3) s += 10;
+    if (distMA10 >= -3 && distMA10 <= 4) s += 8;
+    // 今日是上涨（企稳反弹确认）
+    if (current > prev) s += 4;
+    // 跌破MA5且继续走弱 -> 扣分
+    if (distMA5 < -3 && current < prev) s -= 10;
+
+    // 2) 缩量回调后温和放量
+    if (klines.length >= 6) {
+      const volAvg5 = vols.slice(-5).reduce((a, b) => a + b, 0) / 5;
+      const volAvg10 = vols.slice(-10).reduce((a, b) => a + b, 0) / 10;
+      const volToday = vols[vols.length - 1];
+      const volYesterday = vols[vols.length - 2];
+      const volPrev2 = vols[vols.length - 3];
+      // 前几日缩量、今日温和放量（0.8-1.5倍5日均量）
+      if (volYesterday < volAvg10 * 0.85 && volToday >= volAvg5 * 0.85 && volToday <= volAvg5 * 1.6) {
+        s += 10;
+      }
+      // 连续2日缩量、今日放量（完美形态）
+      if (volPrev2 < volAvg10 * 0.8 && volYesterday < volAvg10 * 0.85 && volToday > volAvg5 * 1.0) {
+        s += 6;
+      }
+      // 持续放量（量比>2）但涨幅不大 -> 警惕出货
+      if (volToday > volAvg5 * 2.2 && Math.abs(stock.changePct || 0) < 1.5) s -= 8;
+    }
+
+    // 3) 不破关键短期支撑（MA20或近10日低点）
+    if (ma20 && current >= ma20) s += 5;
+    else if (ma20 && current < ma20) s -= 10;
+    const recentLow = Math.min(...closes.slice(-10));
+    if (current > recentLow * 1.01) s += 3;
+    else s -= 5;
+
+    // 4) MACD绿柱缩短、即将金叉
+    const macd = this.calcMACD(closes);
+    if (macd) {
+      // 绿柱缩短：MACD柱由大负数变小
+      if (macd.macd < 0 && macd.macd > -0.3) s += 8;
+      if (macd.macd > 0 && macd.dif > macd.dea) s += 6;   // 已金叉
+      // DIF上穿DEA -> 即将金叉
+      if (macd.dif > 0 && macd.dea > 0 && macd.dif > macd.dea) s += 5;
+      // 但仍在零轴下方空头区
+      if (macd.dif < 0 && macd.dea < 0 && macd.macd < -0.5) s -= 6;
+    }
+
+    // 5) RSI不要超买
+    const rsi = this.calcRSI(closes, 6);
+    if (rsi >= 40 && rsi <= 65) s += 4;
+    else if (rsi > 75) s -= 8;
+
+    return Math.max(0, Math.min(100, s));
+  },
+
+  /** 短线上涨逻辑（对应三维度） */
+  _getShortTermLogic(stock, sector, flowData, klines, sectorScore, capitalScore, techScore) {
+    const lines = [];
+    // 板块逻辑
+    if (sectorScore >= 75) lines.push(`板块【${sector ? sector.name : ''}】当日领涨，涨幅靠前，题材催化持续`);
+    else if (sectorScore >= 55) lines.push(`所属板块今日偏强，行业资金关注度较高`);
+    else lines.push(`板块热度一般，主要靠个股自身逻辑`);
+    // 资金逻辑
+    const flowSum = (flowData && flowData.mainFlowSum2) || 0;
+    const flowYi = (flowSum / 1e8).toFixed(2);
+    if (capitalScore >= 70) lines.push(`近2日主力累计净流入${flowYi}亿，资金持续加仓`);
+    else if (capitalScore >= 50) lines.push(`近期主力资金小幅净流入，筹码相对稳定`);
+    else if (capitalScore >= 30) lines.push(`主力资金中性，换手率活跃度尚可`);
+    else lines.push(`主力资金呈净流出，需警惕筹码松动`);
+    // 技术逻辑
+    if (techScore >= 70) lines.push(`回踩5/10日线企稳，量价配合良好，MACD即将金叉`);
+    else if (techScore >= 50) lines.push(`短期均线附近震荡，等待放量突破信号`);
+    else lines.push(`量价结构偏弱，尚未企稳`);
+    return lines;
+  },
+
+  /** 短线下跌风险（至少2条） */
+  _getShortTermRisks(stock, klines, flowData) {
+    const risks = [];
+    const tr = stock.turnover || 0;
+    const chg = stock.changePct || 0;
+    const amt = (stock.amount || 0) / 1e8;  // 成交额（亿）
+    const flowSum = (flowData && flowData.mainFlowSum2) || 0;
+    const pe = stock.pe || 0;
+
+    // 1) 板块题材兑现风险
+    if (chg >= 5) risks.push('个股当日大涨，短线获利盘丰厚，次日题材兑现易遭获利回吐');
+    else if (chg >= 2) risks.push('短线已有一定浮盈，盘中震荡洗盘概率上升');
+
+    // 2) 主力出货风险
+    if (tr > 15) risks.push('换手率过高（' + tr.toFixed(1) + '%），游资接力失败风险大，谨防高位砸盘');
+    else if (tr > 10) risks.push('换手率偏高，主力分歧加大，追高易成接盘');
+
+    // 3) 资金流出风险
+    if (flowSum < -1e8) risks.push('近2日主力累计净流出，资金已在离场，反弹持续性存疑');
+    else if (flowSum < 0) risks.push('主力资金小幅流出，筹码松动需警惕');
+
+    // 4) 技术位压力
+    if (klines && klines.length >= 20) {
+      const closes = klines.map(k => k.close);
+      const high20 = Math.max(...closes.slice(-20));
+      if (stock.price >= high20 * 0.98) risks.push('股价接近近20日高点，上方套牢盘和获利盘双重压力');
+    }
+
+    // 5) 估值风险
+    if (pe > 80 || pe < 0) risks.push('当前PE极高或亏损，题材炒作一旦退潮跌幅剧烈');
+    else if (pe > 50) risks.push('估值偏高，业绩证伪后易补跌');
+
+    // 6) 大盘系统性风险（普适）
+    risks.push('若大盘跳水或板块整体走弱，个股难以独善其身');
+
+    // 7) 量能衰减
+    if (klines && klines.length >= 5) {
+      const vols = klines.slice(-5).map(k => k.volume);
+      if (vols[4] < vols[3] * 0.7 && vols[3] < vols[2] * 0.7) {
+        risks.push('连续缩量，量能持续萎缩下反弹难以为继');
+      }
+    }
+
+    // 8) 市值/流动性风险
+    if (stock.marketCap && stock.marketCap < 50 && tr < 2) risks.push('小市值低流动性，易被游资快进快出');
+
+    // 保底至少2条
+    if (risks.length < 2) {
+      risks.push('短线波动剧烈，情绪反转可能带来快速回落');
+      if (risks.length < 2) risks.push('市场整体环境存在不确定性，系统性风险需防范');
+    }
+    return risks.slice(0, 4);  // 最多4条避免过长
+  },
+
+  /** 渲染短线TOP10列表 */
+  renderShortTermTop10(top10, topSectors) {
+    const container = document.getElementById('hotStocks');
+    if (!top10 || top10.length === 0) {
+      container.innerHTML = '<div class="empty-tip">未筛选到符合条件的短线标的，建议观望</div>';
+      return;
+    }
+    // 板块标签
+    const sectorHtml = topSectors.map((s, i) => {
+      const chgCls = s.changePct > 0 ? 'up' : s.changePct < 0 ? 'down' : '';
+      return `<span class="sector-tag"><b>${s.name}</b> <span class="${chgCls}">${s.changePct > 0 ? '+' : ''}${s.changePct.toFixed(2)}%</span></span>`;
+    }).join('');
+
+    // 股票卡片
+    const stockHtml = top10.map((s, i) => {
+      const rankCls = i < 3 ? 'rank-top3' : 'rank-normal';
+      const probColor = s.probTag === '强势' ? '#ef4444' : s.probTag === '偏强' ? '#f59e0b' : s.probTag === '中性偏强' ? '#eab308' : '#94a3b8';
+      const catTag = s.category === '日内'
+        ? '<span class="st-cat-tag cat-day">日内超短</span>'
+        : '<span class="st-cat-tag cat-wave">3-5日波段</span>';
+      const change = s.changePct || 0;
+      const cls = Utils.colorClass(change);
+      const changeStr = (change > 0 ? '+' : '') + change.toFixed(2) + '%';
+
+      const logicHtml = s.logic.map(l => `<div class="st-logic-item">· ${l}</div>`).join('');
+      const riskHtml = s.risks.map(r => `<div class="st-risk-item">⚠ ${r}</div>`).join('');
+
+      return `
+        <div class="hot-stock-item st-card" onclick="App.analyzeStock('${s.code}')">
+          <div class="st-head">
             <div class="rank ${rankCls}">${i + 1}</div>
             <div class="hs-info">
-              <div class="hs-name">${s.name}</div>
-              <div class="hs-code">${s.code}</div>
+              <div class="hs-name">${s.name} ${catTag}</div>
+              <div class="hs-code">${s.code} · ${s.sectorName}</div>
             </div>
             <div class="hs-price">
               <div class="hs-price-val ${cls}">${s.price.toFixed(2)}</div>
-              <div class="hs-change-val ${cls}">${s.change > 0 ? '+' : ''}${s.change.toFixed(2)}%</div>
+              <div class="hs-change-val ${cls}">${changeStr}</div>
             </div>
             <div class="hs-score">
-              <div class="hs-score-label-top">量化评分</div>
-              <div class="hs-score-val" style="color:${Utils.scoreColor(s.score)}">${s.score}</div>
-              <div class="hs-score-label">${Utils.scoreLevel(s.score)}</div>
+              <div class="hs-score-label-top">短线概率</div>
+              <div class="hs-score-val" style="color:${probColor}">${s.total}</div>
+              <div class="hs-score-label" style="color:${probColor}">${s.probTag}</div>
             </div>
-          </div>`;
-      }).join('');
-    } catch (e) {
-      container.innerHTML = '<div class="empty-tip">加载失败，请刷新重试</div>';
-    }
+          </div>
+          <div class="st-dims">
+            <div class="st-dim"><span class="st-dim-label">板块热度</span><span class="st-dim-val">${s.sectorScore}</span></div>
+            <div class="st-dim"><span class="st-dim-label">主力资金</span><span class="st-dim-val">${s.capitalScore}</span></div>
+            <div class="st-dim"><span class="st-dim-label">量价技术</span><span class="st-dim-val">${s.techScore}</span></div>
+          </div>
+          <div class="st-section">
+            <div class="st-section-title st-logic-title">📈 上涨逻辑</div>
+            ${logicHtml}
+          </div>
+          <div class="st-section">
+            <div class="st-section-title st-risk-title">📉 下跌风险（必读）</div>
+            ${riskHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // 统一风控规则
+    const riskControlHtml = `
+      <div class="st-risk-control">
+        <div class="st-rc-title">🛡️ 统一短线风控规则</div>
+        <div class="st-rc-row"><span class="st-rc-label">单只仓位上限</span><span class="st-rc-val">不超过总资金的 <b>10%</b></span></div>
+        <div class="st-rc-row"><span class="st-rc-label">日内超短入场</span><span class="st-rc-val">回踩5日线附近低吸，<b>不追涨</b></span></div>
+        <div class="st-rc-row"><span class="st-rc-label">3-5日波段入场</span><span class="st-rc-val">回踩10日线/布林中轨企稳再介入</span></div>
+        <div class="st-rc-row"><span class="st-rc-label">硬性止损点位</span><span class="st-rc-val">跌破买入价 <b style="color:#ef4444">-3%</b> 立即止损，不抱幻想</span></div>
+        <div class="st-rc-row"><span class="st-rc-label">止盈离场标准</span><span class="st-rc-val">日内+5%分批止盈；波段+10%或放量滞涨离场</span></div>
+        <div class="st-rc-row"><span class="st-rc-label">总账户仓位</span><span class="st-rc-val">短线总仓位不超过 <b>50%</b>，保留现金应对突发</span></div>
+        <div class="st-rc-tip">⚠ 所有标的仅为短线逻辑梳理，<b>不构成投资建议</b>。严格执行止损，不抗单。</div>
+      </div>
+    `;
+
+    container.innerHTML = `
+      <div class="st-top-sectors">${sectorHtml}</div>
+      ${stockHtml}
+      ${riskControlHtml}
+    `;
   },
 
   /** 首页搜索 - 选择股票（回调函数） */
