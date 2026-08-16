@@ -2511,3 +2511,39 @@ body {
   text-align: center;
   line-height: 1.5;
 }
+
+/* 数据源模式标签 & 刷新按钮 */
+.st-source-mode {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  color: #94a3b8;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+  border: 1px dashed rgba(255,255,255,0.08);
+}
+.st-retry-btn {
+  background: linear-gradient(135deg, #3b82f6, #2563eb);
+  color: #fff;
+  border: none;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.st-retry-btn:active {
+  transform: scale(0.95);
+  opacity: 0.85;
+}
+.empty-tip {
+  text-align: center;
+  padding: 20px 10px;
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.8;
+}

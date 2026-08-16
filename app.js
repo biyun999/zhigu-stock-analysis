@@ -1379,27 +1379,49 @@ const DataAPI = {
     }
   },
 
-  /** 获取板块排行（行业板块按涨幅排序，取topN个） */
+  /** 通用解析东方财富API响应（兼容JSON/JSONP/带cb=/不带cb=等多种格式） */
+  _parseEastMoneyResp(text) {
+    if (!text) return null;
+    let s = text.trim();
+    // 移除开头/结尾空白
+    s = s.replace(/^\s+|\s+$/g, '');
+    // 移除 JSONP 回调: xxx({...}) 或 xxx({...});
+    const m = s.match(/^\w+\s*\(\s*([\s\S]+?)\s*\);?$/);
+    if (m) s = m[1];
+    // 移除末尾分号
+    s = s.replace(/;\s*$/, '');
+    try {
+      return JSON.parse(s);
+    } catch (e) {
+      console.warn('_parseEastMoneyResp JSON parse failed, raw=', text.substring(0, 200));
+      return null;
+    }
+  },
+
+  /** 获取板块排行（行业板块 m:90+t:2，按涨幅排序） */
   async fetchSectorRank(topN = 10) {
-    const cacheKey = 'sectorRank_' + topN;
+    const cacheKey = 'sectorRank_industry_' + topN;
     const cached = this._cacheGet(cacheKey);
     if (cached) return cached;
     try {
-      const url = `https://push2.eastmoney.com/api/qt/clist/get?cb=&fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&fs=m:90+t:2&fields=f2,f3,f4,f8,f12,f14,f104,f105,f128,f136,f140,f141`;
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
       const resp = await fetch(url);
       const text = await resp.text();
-      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
-      const list = (json && json.data && json.data.diff) || [];
-      const result = list.map(item => ({
-        code: item.f12,              // 板块代码 BKxxxxxx
-        name: item.f14,              // 板块名称
-        changePct: parseFloat(item.f3) || 0,   // 板块涨跌幅%
-        mainFlow: parseFloat(item.f62) || 0,   // 板块主力净流入（元）
-        turnoverPct: parseFloat(item.f8) || 0, // 换手率%
-        upCount: parseInt(item.f104) || 0,     // 板块内上涨家数
-        downCount: parseInt(item.f105) || 0,   // 板块内下跌家数
+      const json = this._parseEastMoneyResp(text);
+      if (!json || !json.data || !Array.isArray(json.data.diff)) {
+        console.warn('fetchSectorRank 响应异常:', text.substring(0, 150));
+        return [];
+      }
+      const result = json.data.diff.map(item => ({
+        code: String(item.f12 || ''),
+        name: String(item.f14 || ''),
+        changePct: parseFloat(item.f3) || 0,
+        mainFlow: parseFloat(item.f62) || 0,
+        turnoverPct: parseFloat(item.f8) || 0,
+        upCount: parseInt(item.f104) || 0,
+        downCount: parseInt(item.f105) || 0,
       })).filter(s => s.code && s.name);
-      this._cacheSet(cacheKey, result, 60);  // 板块数据缓存60秒
+      this._cacheSet(cacheKey, result, 60);
       return result;
     } catch (e) {
       console.error('fetchSectorRank error:', e);
@@ -1407,49 +1429,118 @@ const DataAPI = {
     }
   },
 
-  /** 获取板块内成分股（按主力净流入排序，取topN只） */
+  /** 获取概念板块排行（m:90+t:3，行业板块失败时的降级方案） */
+  async fetchConceptSectors(topN = 10) {
+    const cacheKey = 'sectorRank_concept_' + topN;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+    try {
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const json = this._parseEastMoneyResp(text);
+      if (!json || !json.data || !Array.isArray(json.data.diff)) return [];
+      const result = json.data.diff.map(item => ({
+        code: String(item.f12 || ''),
+        name: String(item.f14 || ''),
+        changePct: parseFloat(item.f3) || 0,
+        mainFlow: parseFloat(item.f62) || 0,
+        turnoverPct: parseFloat(item.f8) || 0,
+        upCount: parseInt(item.f104) || 0,
+        downCount: parseInt(item.f105) || 0,
+      })).filter(s => s.code && s.name);
+      this._cacheSet(cacheKey, result, 60);
+      return result;
+    } catch (e) {
+      console.error('fetchConceptSectors error:', e);
+      return [];
+    }
+  },
+
+  /** 获取板块内成分股（按主力净流入排序） */
   async fetchSectorStocks(sectorCode, topN = 4) {
     const cacheKey = 'sectorStocks_' + sectorCode + '_' + topN;
     const cached = this._cacheGet(cacheKey);
     if (cached) return cached;
     try {
-      const url = `https://push2.eastmoney.com/api/qt/clist/get?cb=&fid=f62&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&fs=b:${sectorCode}+f:!50&fields=f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f14,f15,f16,f17,f20,f23,f62,f184,f225`;
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f62&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=b:${sectorCode}+f:!50&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
       const resp = await fetch(url);
       const text = await resp.text();
-      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
-      const list = (json && json.data && json.data.diff) || [];
-      const result = list.map(item => {
+      const json = this._parseEastMoneyResp(text);
+      if (!json || !json.data || !Array.isArray(json.data.diff)) {
+        console.warn('fetchSectorStocks', sectorCode, '响应异常:', text.substring(0, 150));
+        return [];
+      }
+      const result = json.data.diff.map(item => {
         const rawCode = String(item.f12 || '');
         const price = parseFloat(item.f2);
         if (!rawCode || !(price > 0)) return null;
-        // 判断交易所前缀
         let prefix = 'sz';
         if (rawCode.startsWith('6')) prefix = 'sh';
         else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
         return {
           code: prefix + rawCode,
-          rawCode: rawCode,
-          name: item.f14,
-          price: price,
+          rawCode,
+          name: String(item.f14 || ''),
+          price,
           changePct: parseFloat(item.f3) || 0,
-          volume: parseFloat(item.f5) || 0,       // 成交量（手）
-          amount: parseFloat(item.f6) || 0,       // 成交额（元）
-          amplitude: parseFloat(item.f7) || 0,    // 振幅%
-          turnover: parseFloat(item.f8) || 0,     // 换手率%
+          volume: parseFloat(item.f5) || 0,
+          amount: parseFloat(item.f6) || 0,
+          amplitude: parseFloat(item.f7) || 0,
+          turnover: parseFloat(item.f8) || 0,
           pe: parseFloat(item.f9) || 0,
-          mainFlow: parseFloat(item.f62) || 0,    // 主力净流入（元）
-          superFlow: parseFloat(item.f66) || 0,   // 超大单净流入
-          bigFlow: parseFloat(item.f72) || 0,     // 大单净流入
-          midFlow: parseFloat(item.f78) || 0,     // 中单净流入
-          smallFlow: parseFloat(item.f84) || 0,   // 小单净流入
+          mainFlow: parseFloat(item.f62) || 0,
           pb: parseFloat(item.f23) || 0,
-          marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,  // 总市值（亿）
+          marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
         };
       }).filter(Boolean);
       this._cacheSet(cacheKey, result, 45);
       return result;
     } catch (e) {
       console.error('fetchSectorStocks error:', e);
+      return [];
+    }
+  },
+
+  /** 全市场活跃股（按成交额排序）—— 板块API全部失败时的最终降级 */
+  async fetchTopMarketStocks(topN = 50) {
+    const cacheKey = 'topMarketStocks_' + topN;
+    const cached = this._cacheGet(cacheKey);
+    if (cached) return cached;
+    try {
+      // fs: 沪深A股（主板+创业板+科创板+北交所）
+      const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f6&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
+      const resp = await fetch(url);
+      const text = await resp.text();
+      const json = this._parseEastMoneyResp(text);
+      if (!json || !json.data || !Array.isArray(json.data.diff)) return [];
+      const result = json.data.diff.map(item => {
+        const rawCode = String(item.f12 || '');
+        const price = parseFloat(item.f2);
+        if (!rawCode || !(price > 0)) return null;
+        let prefix = 'sz';
+        if (rawCode.startsWith('6')) prefix = 'sh';
+        else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
+        return {
+          code: prefix + rawCode,
+          rawCode,
+          name: String(item.f14 || ''),
+          price,
+          changePct: parseFloat(item.f3) || 0,
+          volume: parseFloat(item.f5) || 0,
+          amount: parseFloat(item.f6) || 0,
+          amplitude: parseFloat(item.f7) || 0,
+          turnover: parseFloat(item.f8) || 0,
+          pe: parseFloat(item.f9) || 0,
+          mainFlow: parseFloat(item.f62) || 0,
+          pb: parseFloat(item.f23) || 0,
+          marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
+        };
+      }).filter(Boolean);
+      this._cacheSet(cacheKey, result, 45);
+      return result;
+    } catch (e) {
+      console.error('fetchTopMarketStocks error:', e);
       return [];
     }
   },
@@ -3136,48 +3227,139 @@ const App = {
     }
   },
 
-  /** 加载短线潜力TOP10（板块热度+主力资金+量价技术） */
+  /** 加载短线潜力TOP10（板块热度+主力资金+量价技术）
+   *  多数据源多级降级：行业板块 → 概念板块 → 全市场活跃股 → 腾讯静态热门 */
   async loadHotStocks() {
     const container = document.getElementById('hotStocks');
     container.innerHTML = '<div class="loading-pulse">正在扫描热门板块与主力资金...</div>';
+
+    let hotSectors = [];
+    let candidates = [];
+    let fallbackMode = 'normal';  // normal / concept / market / static
+
     try {
-      // 1. 获取当日涨幅靠前的10个行业板块
-      const sectors = await DataAPI.fetchSectorRank(10);
-      if (!sectors || sectors.length === 0) {
-        container.innerHTML = '<div class="empty-tip">未获取到板块行情数据，请稍后重试</div>';
-        return;
+      // ====== 第1步：多源获取板块数据（带降级）======
+      // 源1：行业板块
+      let sectors = await DataAPI.fetchSectorRank(10).catch(e => { console.warn('行业板块失败', e); return []; });
+      if (sectors.length > 0) {
+        hotSectors = sectors.filter(s => s.changePct > 0 || s.mainFlow > 0).slice(0, 8);
       }
-      // 筛选有正向涨幅的板块，优先涨停家数多的
-      const hotSectors = sectors
-        .filter(s => s.changePct > 0 || s.mainFlow > 0)
-        .slice(0, 8);
+      // 源2：概念板块（行业板块失败时降级）
       if (hotSectors.length === 0) {
-        container.innerHTML = '<div class="empty-tip">当前市场整体偏弱，建议观望</div>';
-        return;
+        console.warn('[短线TOP10] 行业板块为空，降级到概念板块');
+        const concepts = await DataAPI.fetchConceptSectors(12).catch(e => { console.warn('概念板块失败', e); return []; });
+        if (concepts.length > 0) {
+          hotSectors = concepts.filter(s => s.changePct > 0 || s.mainFlow > 0).slice(0, 8);
+          fallbackMode = 'concept';
+        }
+      }
+      // 源3：全市场活跃股（概念板块也失败时的最终降级）
+      if (hotSectors.length === 0) {
+        console.warn('[短线TOP10] 板块接口全部失败，降级到全市场活跃股');
+        const topStocks = await DataAPI.fetchTopMarketStocks(60).catch(e => { console.warn('全市场排行失败', e); return []; });
+        if (topStocks.length > 0) {
+          // 用本地SECTORS映射给每只股票补板块信息
+          const stockSectorMap = {};  // sectorName -> {name, changePct, mainFlow, upCount, downCount}
+          for (const st of topStocks) {
+            const sectorInfo = CONFIG.SECTORS[st.code];
+            const sectorName = sectorInfo ? sectorInfo.name : '全市场活跃';
+            st.sectorName = sectorName;
+            st.sectorCode = 'fallback_' + sectorName;
+            if (!stockSectorMap[sectorName]) {
+              stockSectorMap[sectorName] = {
+                name: sectorName, changePct: st.changePct || 0,
+                mainFlow: st.mainFlow || 0, upCount: 0, downCount: 0
+              };
+            } else {
+              stockSectorMap[sectorName].upCount++;
+            }
+          }
+          hotSectors = Object.values(stockSectorMap)
+            .sort((a, b) => (b.mainFlow || 0) - (a.mainFlow || 0))
+            .slice(0, 8);
+          candidates = topStocks.slice(0, 40);
+          fallbackMode = 'market';
+        }
       }
 
-      // 2. 每个热门板块拉取主力净流入前4的成分股
-      const sectorStockMap = {};   // sectorCode -> {sector, stocks}
-      const stockMap = {};         // code -> 股票信息（含sectorName）
-      for (const sec of hotSectors) {
-        const stocks = await DataAPI.fetchSectorStocks(sec.code, 4);
-        if (stocks.length > 0) {
-          sectorStockMap[sec.code] = { sector: sec, stocks };
-          for (const st of stocks) {
-            if (!stockMap[st.code]) {
-              stockMap[st.code] = { ...st, sectorCode: sec.code, sectorName: sec.name };
+      // 源4：腾讯静态热门（所有API都失败时的最后保底）
+      if (hotSectors.length === 0) {
+        console.warn('[短线TOP10] 所有接口失败，最终降级到静态热门池');
+        const quotes = await DataAPI.fetchQuotes(CONFIG.HOT_STOCKS).catch(e => []);
+        const arr = [];
+        for (const [code, q] of Object.entries(quotes || {})) {
+          if (!q.price || q.price <= 0) continue;
+          const sectorInfo = CONFIG.SECTORS[code];
+          arr.push({
+            code, name: q.name, price: q.price,
+            changePct: q.changePct || 0,
+            volume: q.volume || 0,
+            amount: q.amount || 0,
+            amplitude: Math.abs(q.changePct || 0) * 1.2,
+            turnover: q.turnover || 0,
+            pe: q.pe || 0,
+            mainFlow: 0,
+            pb: q.pb || 0,
+            marketCap: q.marketCap || 0,
+            sectorName: sectorInfo ? sectorInfo.name : '热门蓝筹',
+            sectorCode: 'static',
+          });
+        }
+        candidates = arr;
+        hotSectors = [{ name: '热门蓝筹', changePct: 0, mainFlow: 0, upCount: 0, downCount: 0 }];
+        fallbackMode = 'static';
+      }
+
+      // ====== 第2步：从板块获取成分股（仅 normal/concept 模式）======
+      const sectorInfoMap = {};  // 保存板块完整信息用于评分
+      if (fallbackMode === 'normal' || fallbackMode === 'concept') {
+        const sectorStockMap = {};
+        const stockMap = {};
+        for (const sec of hotSectors) {
+          sectorInfoMap[sec.code] = sec;  // 保存板块对象
+          const stocks = await DataAPI.fetchSectorStocks(sec.code, 4).catch(e => {
+            console.warn('板块', sec.name, '成分股失败', e); return [];
+          });
+          if (stocks.length > 0) {
+            sectorStockMap[sec.code] = { sector: sec, stocks };
+            for (const st of stocks) {
+              if (!stockMap[st.code]) {
+                stockMap[st.code] = { ...st, sectorCode: sec.code, sectorName: sec.name };
+              }
             }
+          }
+        }
+        candidates = Object.values(stockMap);
+
+        // 板块成分股全部失败时，再降级到全市场活跃股
+        if (candidates.length === 0) {
+          console.warn('[短线TOP10] 板块成分股全部失败，降级到全市场活跃股');
+          const topStocks = await DataAPI.fetchTopMarketStocks(60).catch(e => []);
+          if (topStocks.length > 0) {
+            candidates = topStocks.map(st => {
+              const sectorInfo = CONFIG.SECTORS[st.code];
+              return {
+                ...st,
+                sectorName: sectorInfo ? sectorInfo.name : '全市场活跃',
+                sectorCode: 'market_fallback'
+              };
+            });
+            fallbackMode = 'market';
+            hotSectors = [{ name: '全市场活跃', changePct: 0, mainFlow: 0, upCount: 0, downCount: 0 }];
           }
         }
       }
 
-      const candidates = Object.values(stockMap);
       if (candidates.length === 0) {
-        container.innerHTML = '<div class="empty-tip">热门板块内暂无活跃个股，请稍后刷新</div>';
+        container.innerHTML = `
+          <div class="empty-tip">
+            未获取到行情数据，可能网络或数据源异常<br>
+            <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 点击重试</button>
+          </div>`;
         return;
       }
 
-      // 3. 对候选股批量拉K线，计算量价技术分；并行拉主力资金3日累计
+      // ====== 第3步：拉K线+资金流，计算三维评分 ======
       const klinePromises = candidates.map(c => DataAPI.fetchKline(c.code, 60).catch(() => null));
       const flowPromises = candidates.map(c => DataAPI.fetchCapitalFlowStock(c.code, 3).catch(() => null));
       const [klinesArr, flowsArr] = await Promise.all([Promise.all(klinePromises), Promise.all(flowPromises)]);
@@ -3187,63 +3369,62 @@ const App = {
         const c = candidates[i];
         const klines = klinesArr[i];
         const flowData = flowsArr[i];
-        // 板块热度分
-        const sectorInfo = sectorStockMap[c.sectorCode];
-        const sector = sectorInfo ? sectorInfo.sector : null;
+        // 构造板块信息用于评分（优先用真实板块，降级模式构造虚拟板块）
+        let sector = sectorInfoMap[c.sectorCode] || null;
+        if (!sector) {
+          sector = {
+            name: c.sectorName || '全市场',
+            changePct: c.changePct || 0,
+            mainFlow: c.mainFlow || 0,
+            upCount: 10,
+            downCount: 5,
+          };
+        }
         const sectorScore = this._scoreSectorHeat(sector);
-        // 主力资金分（综合板块资金 + 个股近2日主力累计 + 换手率活跃度）
         const capitalScore = this._scoreCapitalFlow(c, flowData, sector);
-        // 量价技术分
         const techScore = this._scoreShortTermTech(klines, c);
-        // 总分 = 板块40% + 主力35% + 技术25%
         const total = Math.round(sectorScore * 0.40 + capitalScore * 0.35 + techScore * 0.25);
-        // 识别短线上涨概率等级
+
         let probTag = '观望';
         if (total >= 85) probTag = '强势';
         else if (total >= 75) probTag = '偏强';
         else if (total >= 60) probTag = '中性偏强';
         else if (total >= 45) probTag = '中性';
-        // 识别日内超短 vs 3-5日波段
+
         let category = '波段';
         if (c.turnover >= 5 && c.amplitude >= 4 && total >= 65) category = '日内';
         else if (klines && klines.length >= 10) {
-          // 看近3日涨幅累计是否超过8% -> 适合波段
           const last3 = klines.slice(-3);
-          const cum3 = last3.reduce((s, k, i) => {
-            if (i === 0) return s;
-            return s + (k.close - last3[i-1].close) / last3[i-1].close * 100;
-          }, 0);
+          let cum3 = 0;
+          for (let j = 1; j < last3.length; j++) {
+            cum3 += (last3[j].close - last3[j-1].close) / last3[j-1].close * 100;
+          }
           if (cum3 > 6) category = '波段';
         }
-        // 下跌风险（至少2条）
+
         const risks = this._getShortTermRisks(c, klines, flowData);
-        // 上涨逻辑（对应三维度）
         const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore);
 
         scored.push({
-          code: c.code,
-          name: c.name,
-          price: c.price,
-          changePct: c.changePct,
-          sectorName: c.sectorName,
-          turnover: c.turnover,
-          amount: c.amount,
-          pe: c.pe,
-          marketCap: c.marketCap,
+          code: c.code, name: c.name, price: c.price, changePct: c.changePct,
+          sectorName: c.sectorName || '全市场',
+          turnover: c.turnover, amount: c.amount, pe: c.pe, marketCap: c.marketCap,
           total, sectorScore, capitalScore, techScore,
           probTag, category, risks, logic
         });
       }
 
-      // 4. 排序取TOP10
+      // ====== 第4步：排序取TOP10并渲染 ======
       scored.sort((a, b) => b.total - a.total);
       const top10 = scored.slice(0, 10);
-
-      // 5. 渲染
-      this.renderShortTermTop10(top10, hotSectors.slice(0, 5));
+      this.renderShortTermTop10(top10, hotSectors.slice(0, 5), fallbackMode);
     } catch (e) {
-      console.error('loadHotStocks error:', e);
-      container.innerHTML = '<div class="empty-tip">加载失败，请刷新重试</div>';
+      console.error('[短线TOP10] 整体异常:', e);
+      container.innerHTML = `
+        <div class="empty-tip">
+          加载异常：${e.message || '未知错误'}<br>
+          <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 点击重试</button>
+        </div>`;
     }
   },
 
@@ -3463,12 +3644,19 @@ const App = {
   },
 
   /** 渲染短线TOP10列表 */
-  renderShortTermTop10(top10, topSectors) {
+  renderShortTermTop10(top10, topSectors, fallbackMode) {
     const container = document.getElementById('hotStocks');
     if (!top10 || top10.length === 0) {
       container.innerHTML = '<div class="empty-tip">未筛选到符合条件的短线标的，建议观望</div>';
       return;
     }
+    // 数据源标签
+    const modeLabel = {
+      'normal': '🟢 行业板块数据',
+      'concept': '🟡 概念板块数据（行业板块降级）',
+      'market': '🟠 全市场活跃股（板块接口降级）',
+      'static': '⚪ 静态热门池（全部接口降级）'
+    }[fallbackMode] || '🟢 行业板块数据';
     // 板块标签
     const sectorHtml = topSectors.map((s, i) => {
       const chgCls = s.changePct > 0 ? 'up' : s.changePct < 0 ? 'down' : '';
@@ -3539,6 +3727,7 @@ const App = {
     `;
 
     container.innerHTML = `
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button></div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${stockHtml}
       ${riskControlHtml}
