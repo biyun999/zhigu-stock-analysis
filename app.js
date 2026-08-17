@@ -704,11 +704,17 @@ const Utils = {
   calcSupportResistance(klines, currentPrice) {
     if (!klines || klines.length < 5) return { support: 0, resistance: 0 };
     const recent = klines.slice(-20);
-    const lows = recent.map(k => k[3]); // 最低价
-    const highs = recent.map(k => k[2]); // 最高价
-    const closes = recent.map(k => k[4]);
+    // 兼容数组格式和对象格式
+    const getLow = k => Array.isArray(k) ? k[3] : (k.low || 0);
+    const getHigh = k => Array.isArray(k) ? k[2] : (k.high || 0);
+    const getClose = k => Array.isArray(k) ? k[4] : (k.close || 0);
     
-    // 支撑位：近期最低收盘价
+    const lows = recent.map(getLow).filter(v => v > 0);
+    const highs = recent.map(getHigh).filter(v => v > 0);
+    
+    if (lows.length === 0 || highs.length === 0) return { support: 0, resistance: 0 };
+    
+    // 支撑位：近期最低价
     const support = Math.min(...lows) * 1.005;
     // 压力位：近期最高价
     const resistance = Math.max(...highs) * 0.995;
@@ -1330,7 +1336,8 @@ const DataAPI = {
       const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`; // 北交所(sz/bj)均用market=0
       const url = `${CONFIG.EM_CAPITAL}?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&klt=101&lmt=5`;
       const resp = await fetch(url);
-      const data = await resp.json();
+      const text = await resp.text();
+      const data = this._parseEastMoneyResp(text);
       let result = [];
       if (data && data.data && data.data.klines) {
         result = data.data.klines.map(line => {
@@ -1552,10 +1559,10 @@ const DataAPI = {
     try {
       const rawCode = code.replace(/^(sh|sz|bj)/, '');
       const secid = (code.startsWith('sh') ? '1.' : '0.') + rawCode;
-      const url = `https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get?cb=&secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&lmt=${days}`;
+      const url = `https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&lmt=${days}`;
       const resp = await fetch(url);
       const text = await resp.text();
-      const json = JSON.parse(text.replace(/^[^(]*\(/, '').replace(/\);?$/, '') || text);
+      const json = this._parseEastMoneyResp(text);
       const klines = (json && json.data && json.data.klines) || [];
       // 解析每日数据: 日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
       const flows = klines.map(line => {
