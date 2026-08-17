@@ -1172,7 +1172,6 @@ const DataAPI = {
         } catch(e) { console.warn('[fetchQuotes] 东方财富API获取北交所失败:', code, e.message); }
       }
 
-      this._cacheSet(cacheKey, 'quote', results);
       return results;
     } catch (e) {
       console.error('fetchQuotes error:', e);
@@ -1401,7 +1400,7 @@ const DataAPI = {
   /** 获取板块排行（行业板块 m:90+t:2，按涨幅排序） */
   async fetchSectorRank(topN = 10) {
     const cacheKey = 'sectorRank_industry_' + topN;
-    const cached = this._cacheGet(cacheKey);
+    const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
     try {
       const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
@@ -1421,7 +1420,7 @@ const DataAPI = {
         upCount: parseInt(item.f104) || 0,
         downCount: parseInt(item.f105) || 0,
       })).filter(s => s.code && s.name);
-      this._cacheSet(cacheKey, result, 60);
+      this._cacheSet(cacheKey, 'sectorRank', result);
       return result;
     } catch (e) {
       console.error('fetchSectorRank error:', e);
@@ -1432,7 +1431,7 @@ const DataAPI = {
   /** 获取概念板块排行（m:90+t:3，行业板块失败时的降级方案） */
   async fetchConceptSectors(topN = 10) {
     const cacheKey = 'sectorRank_concept_' + topN;
-    const cached = this._cacheGet(cacheKey);
+    const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
     try {
       const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
@@ -1449,7 +1448,7 @@ const DataAPI = {
         upCount: parseInt(item.f104) || 0,
         downCount: parseInt(item.f105) || 0,
       })).filter(s => s.code && s.name);
-      this._cacheSet(cacheKey, result, 60);
+      this._cacheSet(cacheKey, 'sectorRank', result);
       return result;
     } catch (e) {
       console.error('fetchConceptSectors error:', e);
@@ -1460,7 +1459,7 @@ const DataAPI = {
   /** 获取板块内成分股（按主力净流入排序） */
   async fetchSectorStocks(sectorCode, topN = 4) {
     const cacheKey = 'sectorStocks_' + sectorCode + '_' + topN;
-    const cached = this._cacheGet(cacheKey);
+    const cached = this._cacheGet(cacheKey, 'sectorStocks');
     if (cached) return cached;
     try {
       const url = `https://push2.eastmoney.com/api/qt/clist/get?fid=f62&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=b:${sectorCode}+f:!50&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
@@ -1494,7 +1493,7 @@ const DataAPI = {
           marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
         };
       }).filter(Boolean);
-      this._cacheSet(cacheKey, result, 45);
+      this._cacheSet(cacheKey, 'sectorStocks', result);
       return result;
     } catch (e) {
       console.error('fetchSectorStocks error:', e);
@@ -1505,7 +1504,7 @@ const DataAPI = {
   /** 全市场活跃股（按成交额排序）—— 板块API全部失败时的最终降级 */
   async fetchTopMarketStocks(topN = 50) {
     const cacheKey = 'topMarketStocks_' + topN;
-    const cached = this._cacheGet(cacheKey);
+    const cached = this._cacheGet(cacheKey, 'topMarketStocks');
     if (cached) return cached;
     try {
       // fs: 沪深A股（主板+创业板+科创板+北交所）
@@ -1537,7 +1536,7 @@ const DataAPI = {
           marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
         };
       }).filter(Boolean);
-      this._cacheSet(cacheKey, result, 45);
+      this._cacheSet(cacheKey, 'topMarketStocks', result);
       return result;
     } catch (e) {
       console.error('fetchTopMarketStocks error:', e);
@@ -1548,7 +1547,7 @@ const DataAPI = {
   /** 获取单只股票近N日主力资金流向（用于近2日累计） */
   async fetchCapitalFlowStock(code, days = 3) {
     const cacheKey = 'cf_' + code + '_' + days;
-    const cached = this._cacheGet(cacheKey);
+    const cached = this._cacheGet(cacheKey, 'capitalFlowStock');
     if (cached) return cached;
     try {
       const rawCode = code.replace(/^(sh|sz|bj)/, '');
@@ -1575,7 +1574,7 @@ const DataAPI = {
       const mainFlowSum2 = recent2.reduce((s, f) => s + f.main, 0);
       // 今日主力/成交额（用行情估算）
       const today = flows.length > 0 ? flows[flows.length - 1] : null;
-      this._cacheSet(cacheKey, { flows, mainFlowSum2, today }, 30);
+      this._cacheSet(cacheKey, 'capitalFlowStock', { flows, mainFlowSum2, today });
       return { flows, mainFlowSum2, today };
     } catch (e) {
       console.error('fetchCapitalFlowStock error:', e);
