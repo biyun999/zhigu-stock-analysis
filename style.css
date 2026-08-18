@@ -2421,6 +2421,58 @@ body {
   color: #93c5fd;
   border: 1px solid rgba(59,130,246,0.35);
 }
+.st-quant-op-row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 4px 0;
+  align-items: stretch;
+}
+.st-quant-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.st-qb-label {
+  font-size: 10px;
+  color: #94a3b8;
+  margin-bottom: 2px;
+}
+.st-qb-val {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.st-qb-stars {
+  font-size: 10px;
+  margin-left: 3px;
+  opacity: 0.85;
+}
+.st-op-box {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.st-ob-label {
+  font-size: 10px;
+  opacity: 0.75;
+  margin-bottom: 2px;
+}
+.st-ob-val {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+}
 .st-dims {
   display: flex;
   justify-content: space-around;

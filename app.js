@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.2 - A股七维度智能分析系统
+ * 智股分析 v2.3 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -1367,9 +1367,10 @@ const DataAPI = {
     if (cached) return cached;
     try {
       const stockCode = code.substring(2);
-      const url = `${CONFIG.EM_NEWS}?cb=&sr=-1&page_size=10&page_index=1&ann_type=A&client_source=&stock_list=${stockCode}&f_node=0&s_node=0`;
+      const url = `${CONFIG.EM_NEWS}?sr=-1&page_size=10&page_index=1&ann_type=A&stock_list=${stockCode}&f_node=0&s_node=0`;
       const resp = await fetch(url);
-      const data = await resp.json();
+      const text = await resp.text();
+      const data = this._parseEastMoneyResp(text);
       let result = [];
       if (data && data.data && data.data.list) {
         result = data.data.list.map(item => ({
@@ -1378,7 +1379,8 @@ const DataAPI = {
           type: item.columns ? item.columns[0]?.column_name : '公告'
         }));
       }
-      return [];
+      this._cacheSet(cacheKey, 'news', result);
+      return result;
     } catch (e) {
       console.error('fetchNews error:', e);
       return [];
@@ -2834,11 +2836,13 @@ const Screener = {
       const tagsHtml = s.tags.slice(0, 3).map(t => '<span class="sc-tag">' + t + '</span>').join('');
       const scoreColor = Utils.scoreColor(s.fiveDimScore);
       const opAdvice = Watchlist.getAdvice(s.fiveDimScore);
+      const opBg = s.fiveDimScore >= 70 ? 'rgba(0,200,83,0.15)' : s.fiveDimScore >= 40 ? 'rgba(255,165,0,0.15)' : 'rgba(255,71,87,0.15)';
+      const opColor = s.fiveDimScore >= 70 ? '#00c853' : s.fiveDimScore >= 40 ? '#ffa500' : '#ff4757';
       return `
       <div class="screener-item screener-item-v2" onclick="App.analyzeStock('${s.code}')">
         <div class="sc-rank">${i + 1}</div>
         <div class="sc-info">
-          <div class="sc-name">${s.name} <span style="font-size:10px;color:${scoreColor};background:rgba(0,0,0,0.3);padding:1px 5px;border-radius:3px;margin-left:4px">${opAdvice.text}</span></div>
+          <div class="sc-name">${s.name}</div>
           <div class="sc-code">${s.code} · ${s.sector}</div>
           <div class="sc-tags">${tagsHtml}</div>
         </div>
@@ -2848,12 +2852,12 @@ const Screener = {
             <div class="sc-metric-label">涨跌</div>
           </div>
           <div class="sc-metric">
-            <div class="sc-metric-val" style="color:${scoreColor}">${s.fiveDimScore}</div>
+            <div class="sc-metric-val" style="color:${scoreColor}">${s.fiveDimScore}<span style="font-size:9px;margin-left:2px">${Utils.scoreLevel(s.fiveDimScore)}</span></div>
             <div class="sc-metric-label">量化分</div>
           </div>
           <div class="sc-metric">
-            <div class="sc-metric-val">${s.pe > 0 && s.pe < 200 ? s.pe.toFixed(1) : '--'}</div>
-            <div class="sc-metric-label">PE</div>
+            <div class="sc-metric-val" style="color:${opColor};font-size:11px">${opAdvice.icon}${opAdvice.text}</div>
+            <div class="sc-metric-label">操作分</div>
           </div>
         </div>
         <div class="sc-score">
@@ -3166,7 +3170,7 @@ const App = {
     // 加载首页数据
     this.loadHotStocks();
 
-    // 定时刷新（60秒）
+    // 定时刷新（5分钟）
     setInterval(() => {
       if (Navigation.currentPage === 'home') {
         this.loadHotStocks();
@@ -3174,7 +3178,7 @@ const App = {
       if (Navigation.currentPage === 'watchlist') {
         Watchlist.render();
       }
-    }, 60000);
+    }, 300000);
 
     // 退出确认：防止误关闭
     window.addEventListener('beforeunload', (e) => {
@@ -3411,12 +3415,18 @@ const App = {
         const risks = this._getShortTermRisks(c, klines, flowData);
         const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore);
 
+        // 计算五维量化分和操作分
+        const fiveDim = Utils.fiveDimScore(c, klines);
+        const quantScore = fiveDim.total;
+        const opAdvice = Watchlist.getAdvice(quantScore);
+
         scored.push({
           code: c.code, name: c.name, price: c.price, changePct: c.changePct,
           sectorName: c.sectorName || '全市场',
           turnover: c.turnover, amount: c.amount, pe: c.pe, marketCap: c.marketCap,
           total, sectorScore, capitalScore, techScore,
-          probTag, category, risks, logic
+          probTag, category, risks, logic,
+          quantScore, opAdvice
         });
       }
 
@@ -3683,6 +3693,14 @@ const App = {
       const logicHtml = s.logic.map(l => `<div class="st-logic-item">· ${l}</div>`).join('');
       const riskHtml = s.risks.map(r => `<div class="st-risk-item">⚠ ${r}</div>`).join('');
 
+      // 量化分和操作分
+      const quantScore = s.quantScore || 0;
+      const quantColor = Utils.scoreColor(quantScore);
+      const quantStars = Utils.scoreLevel(quantScore);
+      const opAdvice = s.opAdvice || { icon: '⚖️', text: '观望' };
+      const opBg = quantScore >= 70 ? 'rgba(0,200,83,0.15)' : quantScore >= 40 ? 'rgba(255,165,0,0.15)' : 'rgba(255,71,87,0.15)';
+      const opColor = quantScore >= 70 ? '#00c853' : quantScore >= 40 ? '#ffa500' : '#ff4757';
+
       return `
         <div class="hot-stock-item st-card" onclick="App.analyzeStock('${s.code}')">
           <div class="st-head">
@@ -3699,6 +3717,16 @@ const App = {
               <div class="hs-score-label-top">短线概率</div>
               <div class="hs-score-val" style="color:${probColor}">${s.total}</div>
               <div class="hs-score-label" style="color:${probColor}">${s.probTag}</div>
+            </div>
+          </div>
+          <div class="st-quant-op-row">
+            <div class="st-quant-box">
+              <div class="st-qb-label">量化分</div>
+              <div class="st-qb-val" style="color:${quantColor}">${quantScore}<span class="st-qb-stars">${quantStars}</span></div>
+            </div>
+            <div class="st-op-box" style="background:${opBg};color:${opColor}">
+              <div class="st-ob-label">操作分</div>
+              <div class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</div>
             </div>
           </div>
           <div class="st-dims">
@@ -3856,40 +3884,51 @@ const App = {
       }
 
       // 渲染股票概要
-      this.renderStockSummary(quote, code);
+      try { this.renderStockSummary(quote, code); } catch(e) { console.warn('[分析] renderStockSummary异常:', e); }
 
       // 七维度评分
-      const scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow);
+      let scores;
+      try {
+        scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow);
+      } catch(e) {
+        console.warn('[分析] 七维度评分异常:', e);
+        scores = { total: 50, dims: { fundamental: 50, technical: 50, capital: 50, valuation: 50, sentiment: 50 }, message: '', macro: 50, risk: 50 };
+      }
 
       // 持仓诊断
-      const report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores);
+      let report;
+      try {
+        report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores);
+      } catch(e) {
+        console.warn('[分析] 诊断报告异常:', e);
+        report = { mod1: '', mod2: '', mod3: '', mod4: '', mod5: { html: '', risks: [] }, mod6: '', mod7: '', mod8: '', riskSummary: '' };
+      }
 
       // ===== 结论前置：先渲染操作建议摘要和主力成本 =====
-      // 操作建议摘要
-      this.renderConclusionSummary(quote, klines, capitalFlow, scores);
+      try { this.renderConclusionSummary(quote, klines, capitalFlow, scores); } catch(e) { console.warn('[分析] renderConclusionSummary异常:', e); }
 
       // 主力成本（VWAP）
-      if (klines.length > 0) {
-        this.renderVWAP(klines, quote);
+      if (klines && klines.length > 0) {
+        try { this.renderVWAP(klines, quote); } catch(e) { console.warn('[分析] renderVWAP异常:', e); }
       }
 
       // 然后渲染七维度评分
-      this.renderSevenDim(scores);
+      try { this.renderSevenDim(scores); } catch(e) { console.warn('[分析] renderSevenDim异常:', e); }
 
       // 渲染技术指标图表
-      if (klines.length > 10) {
-        this.renderTechnicalCharts(klines, quote);
+      if (klines && klines.length > 10) {
+        try { this.renderTechnicalCharts(klines, quote); } catch(e) { console.warn('[分析] renderTechnicalCharts异常:', e); }
       }
 
       // 风险预警检测
-      this.renderRiskWarning(quote, klines);
+      try { this.renderRiskWarning(quote, klines); } catch(e) { console.warn('[分析] renderRiskWarning异常:', e); }
 
       // 持仓诊断详细模块
-      this.renderDiagnostic(report);
+      try { this.renderDiagnostic(report); } catch(e) { console.warn('[分析] renderDiagnostic异常:', e); }
 
       // 新闻公告
-      if (news.length > 0) {
-        this.renderNews(news);
+      if (news && news.length > 0) {
+        try { this.renderNews(news); } catch(e) { console.warn('[分析] renderNews异常:', e); }
       }
 
     } catch (e) {
