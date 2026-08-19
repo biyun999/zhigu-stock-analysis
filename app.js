@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.3 - A股七维度智能分析系统
+ * 智股分析 v2.4 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -686,6 +686,26 @@ const Utils = {
     if (losses === 0) return 100;
     const rs = (gains / period) / (losses / period);
     return 100 - 100 / (1 + rs);
+  },
+
+  /** 计算KDJ指标（9,3,3） */
+  calcKDJ(closes, n = 9) {
+    if (closes.length < n + 2) return { k: 50, d: 50, j: 50 };
+    let rsvArr = [];
+    for (let i = n - 1; i < closes.length; i++) {
+      const slice = closes.slice(i - n + 1, i + 1);
+      const low = Math.min(...slice);
+      const high = Math.max(...slice);
+      const rsv = high === low ? 50 : (closes[i] - low) / (high - low) * 100;
+      rsvArr.push(rsv);
+    }
+    let k = 50, d = 50;
+    for (const rsv of rsvArr) {
+      k = 2 / 3 * k + 1 / 3 * rsv;
+      d = 2 / 3 * d + 1 / 3 * k;
+    }
+    const j = 3 * k - 2 * d;
+    return { k, d, j };
   },
 
   /** 计算VWAP（主力成本估算） */
@@ -3266,7 +3286,7 @@ const App = {
       // 源3：全市场活跃股（概念板块也失败时的最终降级）
       if (hotSectors.length === 0) {
         console.warn('[短线TOP10] 板块接口全部失败，降级到全市场活跃股');
-        const topStocks = await DataAPI.fetchTopMarketStocks(60).catch(e => { console.warn('全市场排行失败', e); return []; });
+        const topStocks = await DataAPI.fetchTopMarketStocks(100).catch(e => { console.warn('全市场排行失败', e); return []; });
         if (topStocks.length > 0) {
           // 用本地SECTORS映射给每只股票补板块信息
           const stockSectorMap = {};  // sectorName -> {name, changePct, mainFlow, upCount, downCount}
@@ -3327,7 +3347,7 @@ const App = {
         const stockMap = {};
         for (const sec of hotSectors) {
           sectorInfoMap[sec.code] = sec;  // 保存板块对象
-          const stocks = await DataAPI.fetchSectorStocks(sec.code, 4).catch(e => {
+          const stocks = await DataAPI.fetchSectorStocks(sec.code, 8).catch(e => {
             console.warn('板块', sec.name, '成分股失败', e); return [];
           });
           if (stocks.length > 0) {
@@ -3344,7 +3364,7 @@ const App = {
         // 板块成分股全部失败时，再降级到全市场活跃股
         if (candidates.length === 0) {
           console.warn('[短线TOP10] 板块成分股全部失败，降级到全市场活跃股');
-          const topStocks = await DataAPI.fetchTopMarketStocks(60).catch(e => []);
+          const topStocks = await DataAPI.fetchTopMarketStocks(100).catch(e => []);
           if (topStocks.length > 0) {
             candidates = topStocks.map(st => {
               const sectorInfo = CONFIG.SECTORS[st.code];
@@ -3393,7 +3413,8 @@ const App = {
         const sectorScore = this._scoreSectorHeat(sector);
         const capitalScore = this._scoreCapitalFlow(c, flowData, sector);
         const techScore = this._scoreShortTermTech(klines, c);
-        const total = Math.round(sectorScore * 0.40 + capitalScore * 0.35 + techScore * 0.25);
+        const trendScore = this._scoreTrendPrediction(klines, c, flowData);
+        const total = Math.round(sectorScore * 0.20 + capitalScore * 0.25 + techScore * 0.20 + trendScore * 0.35);
 
         let probTag = '观望';
         if (total >= 85) probTag = '强势';
@@ -3413,7 +3434,7 @@ const App = {
         }
 
         const risks = this._getShortTermRisks(c, klines, flowData);
-        const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore);
+        const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore, trendScore);
 
         // 计算五维量化分和操作分
         const fiveDim = Utils.fiveDimScore(c, klines);
@@ -3424,7 +3445,7 @@ const App = {
           code: c.code, name: c.name, price: c.price, changePct: c.changePct,
           sectorName: c.sectorName || '全市场',
           turnover: c.turnover, amount: c.amount, pe: c.pe, marketCap: c.marketCap,
-          total, sectorScore, capitalScore, techScore,
+          total, sectorScore, capitalScore, techScore, trendScore,
           probTag, category, risks, logic,
           quantScore, opAdvice
         });
@@ -3584,8 +3605,131 @@ const App = {
     return Math.max(0, Math.min(100, s));
   },
 
+  /** 趋势动量评分（0-100）：预判未来上涨概率的核心指标 */
+  _scoreTrendMomentum(klines, stock) {
+    if (!klines || klines.length < 20) return 40;
+    let s = 45;
+    const closes = klines.map(k => k.close);
+    const vols = klines.map(k => k.volume);
+    const current = closes[closes.length - 1];
+    const prev = closes[closes.length - 2];
+
+    // 1) 短期价格动量（近3日涨幅方向+加速度）
+    const chg1 = (current - prev) / prev * 100;
+    const chg3 = closes.length >= 4
+      ? (current - closes[closes.length - 4]) / closes[closes.length - 4] * 100
+      : chg1;
+    // 温和上涨最佳（每日0.5%-3%），避免暴涨暴跌
+    if (chg1 > 0 && chg1 <= 3 && chg3 > 0 && chg3 <= 8) s += 15;
+    else if (chg1 > 0 && chg3 > 0) s += 8;
+    else if (chg1 < -3) s -= 12;
+    else if (chg1 < 0) s -= 5;
+
+    // 2) MACD柱变化趋势（核心预判信号）
+    const macd = this.calcMACD(closes);
+    if (macd) {
+      // 绿柱缩短→红柱将至（最典型的上攻信号）
+      if (macd.macd < 0 && macd.macd > -0.25) s += 12;
+      // 金叉且DIF向上
+      if (macd.dif > macd.dea && macd.macd > 0) s += 10;
+      // 刚金叉（DIF刚超DEA）
+      if (macd.dif > 0 && macd.dea > -0.1 && macd.dif > macd.dea) s += 6;
+      // 零轴上方死叉前兆（DIF下穿DEA风险）
+      if (macd.dif < macd.dea && macd.dif > 0 && macd.macd < 0) s -= 8;
+      // 零轴下方持续恶化
+      if (macd.dif < 0 && macd.dea < 0 && macd.macd < -0.5) s -= 8;
+    }
+
+    // 3) KDJ金叉（比MACD更灵敏的短期信号）
+    const kdj = this.calcKDJ(closes);
+    // 金叉：K上穿D，且J值合理（非超买区）
+    if (kdj.k > kdj.d && kdj.j < 80) s += 10;
+    // J值从超卖区回升（J<0后开始拐头）
+    if (kdj.j < 20 && kdj.k > kdj.d) s += 8;
+    // 超买风险
+    if (kdj.j > 100) s -= 6;
+    // KDJ死叉
+    if (kdj.k < kdj.d && kdj.j > 80) s -= 5;
+
+    // 4) 量能趋势（量价配合）
+    if (klines.length >= 6) {
+      const volAvg5 = vols.slice(-5).reduce((a, b) => a + b, 0) / 5;
+      const volToday = vols[vols.length - 1];
+      const volYesterday = vols[vols.length - 2];
+      const volRatio = volToday / (volYesterday || 1);
+      // 今日放量+价格上涨（有效放量）
+      if (volRatio > 1.3 && chg1 > 0) s += 10;
+      // 缩量且价格下跌（弱势）
+      else if (volRatio < 0.7 && chg1 < 0) s -= 8;
+      // 温和放量（健康）
+      else if (volRatio > 1.0 && volRatio < 2.0 && chg1 > 0) s += 5;
+      // 暴涨放量（警惕出货）
+      if (volRatio > 3 && chg1 > 5) s -= 5;
+    }
+
+    // 5) 均线多头排列（趋势方向确认）
+    const ma5 = this.calcMA(closes, 5);
+    const ma10 = this.calcMA(closes, 10);
+    const ma20 = this.calcMA(closes, 20);
+    if (ma5 && ma10 && ma20) {
+      // 完美多头排列
+      if (ma5 > ma10 && ma10 > ma20 && current > ma5) s += 12;
+      // MA5上穿MA10（即将多头排列）
+      else if (ma5 > ma10 && current > ma5) s += 8;
+      // 空头排列
+      else if (ma5 < ma10 && ma10 < ma20) s -= 10;
+      // 价格在MA20之下
+      if (current < ma20) s -= 5;
+    }
+
+    // 6) 连续阳线（短线强势信号）
+    if (klines.length >= 3) {
+      const upDays = [0, 1, 2].filter(i => {
+        const c = closes[closes.length - 1 - i];
+        const p = closes[closes.length - 2 - i];
+        return c > p;
+      }).length;
+      if (upDays === 3) s += 6;       // 三连阳
+      else if (upDays === 2) s += 3;
+      const downDays = [0, 1, 2].filter(i => {
+        const c = closes[closes.length - 1 - i];
+        const p = closes[closes.length - 2 - i];
+        return c < p;
+      }).length;
+      if (downDays === 3) s -= 6;
+    }
+
+    return Math.max(0, Math.min(100, s));
+  },
+
+  /** 综合趋势预测评分（0-100）：预判未来上涨概率 */
+  _scoreTrendPrediction(klines, stock, flowData) {
+    let s = 0;
+    // 动量信号（最重要）
+    const momentum = this._scoreTrendMomentum(klines, stock);
+    s += momentum * 0.55;
+    // 资金面配合（主力资金方向验证）
+    if (flowData && flowData.flows && flowData.flows.length > 0) {
+      const flows = flowData.flows;
+      const mainSum = flows.reduce((acc, f) => acc + (f.main || 0), 0);
+      const todayMain = flows.length > 0 ? flows[flows.length - 1].main : 0;
+      // 连续多日主力净流入（强势蓄力）
+      const inflowDays = flows.filter(f => f.main > 0).length;
+      if (inflowDays === flows.length && flows.length >= 3) s += 20;
+      else if (inflowDays >= flows.length * 0.66) s += 12;
+      else if (mainSum > 0) s += 6;
+      else s -= 8;
+      // 今日主力资金方向与动量一致（加分）
+      if (todayMain > 0 && momentum >= 60) s += 8;
+      else if (todayMain < -1e8 && momentum < 40) s -= 5;
+    } else {
+      s += 40 * 0.45; // 无资金数据时给中性分
+    }
+    return Math.max(0, Math.min(100, Math.round(s)));
+  },
+
   /** 短线上涨逻辑（对应三维度） */
-  _getShortTermLogic(stock, sector, flowData, klines, sectorScore, capitalScore, techScore) {
+  _getShortTermLogic(stock, sector, flowData, klines, sectorScore, capitalScore, techScore, trendScore) {
     const lines = [];
     // 板块逻辑
     if (sectorScore >= 75) lines.push(`板块【${sector ? sector.name : ''}】当日领涨，涨幅靠前，题材催化持续`);
@@ -3602,6 +3746,11 @@ const App = {
     if (techScore >= 70) lines.push(`回踩5/10日线企稳，量价配合良好，MACD即将金叉`);
     else if (techScore >= 50) lines.push(`短期均线附近震荡，等待放量突破信号`);
     else lines.push(`量价结构偏弱，尚未企稳`);
+    // 趋势预测逻辑
+    if (trendScore >= 75) lines.push(`趋势预测：MACD/KDJ共振向好，量价配合，上涨概率较高`);
+    else if (trendScore >= 60) lines.push(`趋势预测：短期动量偏多，技术指标偏正面`);
+    else if (trendScore >= 45) lines.push(`趋势预测：方向尚不明确，多空信号交织`);
+    else lines.push(`趋势预测：短期动量偏弱，技术指标偏空，谨慎追高`);
     return lines;
   },
 
@@ -3729,10 +3878,11 @@ const App = {
               <div class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</div>
             </div>
           </div>
-          <div class="st-dims">
+          <div class="st-dims" style="grid-template-columns: repeat(4, 1fr);">
             <div class="st-dim"><span class="st-dim-label">板块热度</span><span class="st-dim-val">${s.sectorScore}</span></div>
             <div class="st-dim"><span class="st-dim-label">主力资金</span><span class="st-dim-val">${s.capitalScore}</span></div>
             <div class="st-dim"><span class="st-dim-label">量价技术</span><span class="st-dim-val">${s.techScore}</span></div>
+            <div class="st-dim"><span class="st-dim-label">趋势预测</span><span class="st-dim-val" style="color:${s.trendScore >= 60 ? '#00c853' : s.trendScore >= 40 ? '#ffa500' : '#ef4444'}">${s.trendScore}</span></div>
           </div>
           <div class="st-section">
             <div class="st-section-title st-logic-title">📈 上涨逻辑</div>
