@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.4 - A股七维度智能分析系统
+ * 智股分析 v2.5 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -2433,126 +2433,82 @@ const DiagnosticEngine = {
     return { html, risks };
   },
 
-  /** 模块6：持仓优化处置方案 */
+  /** 模块6：操作处置方案（合并原模块8场景指引） */
   module6_Optimization(data) {
     const { quote, klines, scores } = data;
     const totalScore = scores.total;
+    const current = quote.price;
+    const sr = Utils.calcSupportResistance(klines, current);
     let html = '';
 
-    // 量化评分判断
-    let action = '';
-    let actionCls = '';
-    let detail = '';
-
+    // 处置建议
+    let action = '', actionCls = '', detail = '';
     if (totalScore >= 80) {
-      action = '持有/加仓';
-      actionCls = 'action-hold';
-      detail = '量化评分优秀，基本面和技术面均表现良好，建议持有或逢低加仓。';
+      action = '持有/加仓'; actionCls = 'action-hold';
+      detail = '基本面与技术面均表现良好，建议持有或逢低加仓。';
     } else if (totalScore >= 65) {
-      action = '逢低建仓';
-      actionCls = 'action-hold';
+      action = '逢低建仓'; actionCls = 'action-hold';
       detail = '量化评分较高，可分批建仓，以20日VWAP为参考成本线。';
     } else if (totalScore >= 50) {
-      action = '观望为主';
-      actionCls = 'action-reduce';
-      detail = '量化评分中等，建议观望，等待放量突破或回踩支撑位再决策。';
+      action = '观望为主'; actionCls = 'action-reduce';
+      detail = '部分指标出现预警信号，建议等待放量突破或回踩支撑位再决策。';
     } else if (totalScore >= 35) {
-      action = '谨慎减仓';
-      actionCls = 'action-reduce';
-      detail = '量化评分偏低，存在一定风险，建议逢高减仓降低风险敞口。';
+      action = '谨慎减仓'; actionCls = 'action-reduce';
+      detail = '多项指标偏弱，建议逢高减仓降低风险敞口，空仓者暂勿入场。';
     } else {
-      action = '回避/止损';
-      actionCls = 'action-sell';
-      detail = '量化评分较低，风险因子较多，建议果断止损离场。';
+      action = '回避/止损'; actionCls = 'action-sell';
+      detail = '风险因子较多，建议果断止损离场，不补仓摊低成本。';
     }
 
     html += `<div class="conclusion">🎯 处置建议：<span class="action-tag ${actionCls}">${action}</span></div>`;
     html += `<p>${detail}</p>`;
 
-    html += '<p><strong>【评分依据】</strong></p>';
-    html += `<div class="metric-row">
-      <span class="metric-label">量化评分</span>
-      <span class="metric-val" style="color:${Utils.scoreColor(totalScore)}">${totalScore}分</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">评分等级</span>
-      <span class="metric-val">${Utils.scoreLevel(totalScore)}</span>
-    </div>`;
-
-    html += '<p><strong>【处置逻辑】</strong></p>';
-    if (totalScore >= 80) {
-      html += '<p>✅ 基本面扎实 + 技术面趋势向好 + 资金面主力流入 → 持有/加仓逻辑成立。</p>';
-      html += '<p>操作建议：维持或增加仓位，设好止损线，回调至支撑位可加仓。</p>';
-    } else if (totalScore >= 65) {
-      html += '<p>✅ 基本面较好 + 技术面偏多 → 可逢低分批建仓。</p>';
-      html += '<p>操作建议：分2-3次建仓降低风险，以VWAP为成本参考，严格止损。</p>';
-    } else if (totalScore >= 50) {
-      html += '<p>📊 部分指标出现预警信号，需控制风险。</p>';
-      html += '<p>操作建议：观望为主，等待放量突破信号，不急于入场。</p>';
+    // 分场景简要操作提示（精简合并，不展开长段落）
+    html += '<p style="margin-top:10px"><strong>【分场景操作提示】</strong></p>';
+    if (totalScore >= 65) {
+      // 适合建仓/持有
+      html += '<p>📌 <b>空仓待入：</b>';
+      if (current <= sr.support * 1.02) {
+        html += `当前接近支撑位，可试探性建仓，首次不超过计划仓位1/3，止损${Math.min(sr.support, current * 0.92).toFixed(2)}。</p>`;
+      } else {
+        html += `等待回调至${(sr.support * 1.01).toFixed(2)}-${(sr.support * 1.05).toFixed(2)}区间再入场，不追高。</p>`;
+      }
+      html += '<p>📌 <b>已持仓：</b>到达压力位附近减仓1/3锁定利润，止损上移至成本价上方保本。</p>';
     } else if (totalScore >= 35) {
-      html += '<p>📊 多项指标偏弱，风险收益比不佳。</p>';
-      html += '<p>操作建议：持仓者逢高减仓1/3~1/2，空仓者暂勿入场。</p>';
+      // 中性偏弱
+      html += '<p>📌 <b>空仓：</b>评分中等，等待明确突破信号再入场。</p>';
+      html += '<p>📌 <b>已持仓：</b>逢高减仓1/3~1/2，跌破止损价果断离场。</p>';
     } else {
-      html += '<p>⚠️ 多项指标亮红灯，继续持有风险极大。</p>';
-      html += '<p>操作建议：尽快清仓止损，不要补仓摊低成本。等企稳后再考虑重新介入。</p>';
+      // 高风险
+      html += '<p>📌 <b>空仓：</b>风险较高，暂勿入场。</p>';
+      html += `<p>📌 <b>已持仓：</b>建议尽快止损，止损价${Math.min(sr.support, current * 0.92).toFixed(2)}，不要补仓摊低成本。</p>`;
     }
+
     return html;
   },
 
-  /** 模块7：统一标准化风控指标 */
-  module7_RiskControl({ quote, klines }) {
+  /** 模块7：仓位管理（止损/支撑/压力已在顶部摘要卡片显示，此处不重复） */
+  module7_RiskControl({ quote }) {
     let html = '';
-    const current = quote.price;
-    const sr = Utils.calcSupportResistance(klines, current);
-
-    // 刚性止损价
-    const stopLoss = Math.min(sr.support, current * 0.92);
-    const stopLossPct = ((stopLoss - current) / current * 100).toFixed(1);
-
-    html += '<p><strong>【刚性止损价】</strong></p>';
-    html += `<div class="metric-row">
-      <span class="metric-label">止损价</span>
-      <span class="metric-val key-price">${stopLoss.toFixed(2)}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">止损幅度</span>
-      <span class="metric-val color-down">${stopLossPct}%</span>
-    </div>`;
-    html += '<p style="font-size:12px;color:var(--text-secondary)">说明：取支撑位与-8%中的较低值，一旦触及必须执行止损，不抱侥幸心理。</p>';
-
     // 单票仓位上限
-    html += '<p><strong>【单票仓位上限】</strong></p>';
     let maxPosition = 20;
     if (quote.marketCap && quote.marketCap > 500) maxPosition = 25;
     if (quote.pe > 40 || quote.pb > 5) maxPosition = Math.min(maxPosition, 15);
     html += `<div class="metric-row">
-      <span class="metric-label">建议最大仓位</span>
+      <span class="metric-label">单票仓位上限</span>
       <span class="metric-val">${maxPosition}%</span>
     </div>`;
-    html += '<p style="font-size:12px;color:var(--text-secondary)">说明：单只股票不建议超过总资金的20%，高估值个股建议降至15%以下。</p>';
-
+    if (quote.pe > 40 || quote.pb > 5) {
+      html += '<p style="font-size:12px;color:var(--text-secondary)">⚠ 高估值个股（PE>40或PB>5），建议仓位降至15%以下。</p>';
+    } else {
+      html += '<p style="font-size:12px;color:var(--text-secondary)">单只股票建议不超过总资金20%，大盘蓝筹可放宽至25%。</p>';
+    }
     // 总仓位管控
-    html += '<p><strong>【总仓位管控】</strong></p>';
     html += `<div class="metric-row">
       <span class="metric-label">建议总仓位</span>
       <span class="metric-val">50%-70%</span>
     </div>`;
-    html += '<p style="font-size:12px;color:var(--text-secondary)">说明：当前市场环境下，建议总仓位控制在50%-70%，保留30%-50%现金应对系统性风险。</p>';
-
-    // 核心数值汇总
-    html += '<p><strong>【核心风控数值汇总】</strong></p>';
-    html += `<div class="metric-row">
-      <span class="metric-label">刚性止损价</span>
-      <span class="metric-val key-price">${stopLoss.toFixed(2)}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">短期支撑位</span>
-      <span class="metric-val key-price">${sr.support}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">短期压力位</span>
-      <span class="metric-val key-price">${sr.resistance}</span>
-    </div>`;
+    html += '<p style="font-size:12px;color:var(--text-secondary)">保留30%-50%现金应对系统性风险，不追满仓操作。</p>';
     return html;
   },
 
@@ -4057,10 +4013,7 @@ const App = {
       // ===== 结论前置：先渲染操作建议摘要和主力成本 =====
       try { this.renderConclusionSummary(quote, klines, capitalFlow, scores); } catch(e) { console.warn('[分析] renderConclusionSummary异常:', e); }
 
-      // 主力成本（VWAP）
-      if (klines && klines.length > 0) {
-        try { this.renderVWAP(klines, quote); } catch(e) { console.warn('[分析] renderVWAP异常:', e); }
-      }
+      // VWAP已在conclusionSummary中显示，不再单独渲染vwapCard
 
       // 然后渲染七维度评分
       try { this.renderSevenDim(scores); } catch(e) { console.warn('[分析] renderSevenDim异常:', e); }
@@ -4616,12 +4569,14 @@ const App = {
   /** 渲染诊断报告 */
   renderDiagnostic(report) {
     this.showSection('diagnosticResult', true);
-    // 模块1-4和6-8是HTML字符串
-    const htmlModules = { 1: report.mod1, 2: report.mod2, 3: report.mod3, 4: report.mod4, 6: report.mod6, 7: report.mod7, 8: report.mod8 };
+    // 模块1-4和6-7是HTML字符串（模块8已合并到模块6，不再单独显示）
+    const htmlModules = { 1: report.mod1, 2: report.mod2, 3: report.mod3, 4: report.mod4, 6: report.mod6, 7: report.mod7 };
     Object.entries(htmlModules).forEach(([num, html]) => {
       document.getElementById(`diagMod${num}`).style.display = '';
       document.getElementById(`mod${num}Content`).innerHTML = html;
     });
+    // 隐藏模块8（内容已并入模块6）
+    document.getElementById('diagMod8').style.display = 'none';
     // 模块5特殊处理（返回{html, risks}）
     document.getElementById('diagMod5').style.display = '';
     document.getElementById('mod5Content').innerHTML = report.mod5.html;
