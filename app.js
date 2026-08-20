@@ -3787,7 +3787,6 @@ const App = {
     // 股票卡片
     const stockHtml = top10.map((s, i) => {
       const rankCls = i < 3 ? 'rank-top3' : 'rank-normal';
-      const probColor = s.probTag === '强势' ? '#ef4444' : s.probTag === '偏强' ? '#f59e0b' : s.probTag === '中性偏强' ? '#eab308' : '#94a3b8';
       const catTag = s.category === '日内'
         ? '<span class="st-cat-tag cat-day">日内超短</span>'
         : '<span class="st-cat-tag cat-wave">3-5日波段</span>';
@@ -3798,13 +3797,13 @@ const App = {
       const logicHtml = s.logic.map(l => `<div class="st-logic-item">· ${l}</div>`).join('');
       const riskHtml = s.risks.map(r => `<div class="st-risk-item">⚠ ${r}</div>`).join('');
 
-      // 量化分和操作分
+      // 量化分和操作分（统一阈值80/65/50/35）
       const quantScore = s.quantScore || 0;
       const quantColor = Utils.scoreColor(quantScore);
       const quantStars = Utils.scoreLevel(quantScore);
       const opAdvice = s.opAdvice || { icon: '⚖️', text: '观望' };
-      const opBg = quantScore >= 70 ? 'rgba(0,200,83,0.15)' : quantScore >= 40 ? 'rgba(255,165,0,0.15)' : 'rgba(255,71,87,0.15)';
-      const opColor = quantScore >= 70 ? '#00c853' : quantScore >= 40 ? '#ffa500' : '#ff4757';
+      const opBg = quantScore >= 80 ? 'rgba(0,200,83,0.15)' : quantScore >= 65 ? 'rgba(0,200,83,0.1)' : quantScore >= 50 ? 'rgba(255,165,0,0.15)' : quantScore >= 35 ? 'rgba(255,120,0,0.15)' : 'rgba(255,71,87,0.15)';
+      const opColor = Utils.scoreColor(quantScore);
 
       return `
         <div class="hot-stock-item st-card" onclick="App.analyzeStock('${s.code}')">
@@ -3818,11 +3817,6 @@ const App = {
               <div class="hs-price-val ${cls}">${s.price.toFixed(2)}</div>
               <div class="hs-change-val ${cls}">${changeStr}</div>
             </div>
-            <div class="hs-score">
-              <div class="hs-score-label-top">短线概率</div>
-              <div class="hs-score-val" style="color:${probColor}">${s.total}</div>
-              <div class="hs-score-label" style="color:${probColor}">${s.probTag}</div>
-            </div>
           </div>
           <div class="st-quant-op-row">
             <div class="st-quant-box">
@@ -3833,12 +3827,6 @@ const App = {
               <div class="st-ob-label">操作分</div>
               <div class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</div>
             </div>
-          </div>
-          <div class="st-dims" style="grid-template-columns: repeat(4, 1fr);">
-            <div class="st-dim"><span class="st-dim-label">板块热度</span><span class="st-dim-val">${s.sectorScore}</span></div>
-            <div class="st-dim"><span class="st-dim-label">主力资金</span><span class="st-dim-val">${s.capitalScore}</span></div>
-            <div class="st-dim"><span class="st-dim-label">量价技术</span><span class="st-dim-val">${s.techScore}</span></div>
-            <div class="st-dim"><span class="st-dim-label">趋势预测</span><span class="st-dim-val" style="color:${s.trendScore >= 60 ? '#00c853' : s.trendScore >= 40 ? '#ffa500' : '#ef4444'}">${s.trendScore}</span></div>
           </div>
           <div class="st-section">
             <div class="st-section-title st-logic-title">📈 上涨逻辑</div>
