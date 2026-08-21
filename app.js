@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.5 - A股七维度智能分析系统
+ * 智股分析 v2.7 - A股智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -740,6 +740,113 @@ const Utils = {
     const resistance = Math.max(...highs) * 0.995;
     
     return { support: +support.toFixed(2), resistance: +resistance.toFixed(2) };
+  },
+
+  /**
+   * 筹码结构分析（基于N日K线成交量价分布估算）
+   * @param {Array} klines K线数组（对象格式 {date,open,high,low,close,volume}）
+   * @param {number} currentPrice 当前价
+   * @returns {Object} {profitRatio, avgCost, concentration, supportChip, resistanceChip, pressureDistance}
+   */
+  calcChipDistribution(klines, currentPrice) {
+    if (!klines || klines.length < 10 || !currentPrice || currentPrice <= 0) {
+      return { profitRatio: 50, avgCost: 0, concentration: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50 };
+    }
+    // 使用近60日K线（若不足则全部）
+    const period = klines.slice(-60);
+    // 价格区间
+    let pMin = Infinity, pMax = -Infinity;
+    period.forEach(k => {
+      if (k.low < pMin) pMin = k.low;
+      if (k.high > pMax) pMax = k.high;
+    });
+    if (pMin >= pMax) return { profitRatio: 50, avgCost: 0, concentration: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50 };
+
+    // 分50个价格桶
+    const BUCKETS = 50;
+    const step = (pMax - pMin) / BUCKETS;
+    const bins = new Array(BUCKETS).fill(0);
+    let totalVol = 0;
+    let weightedPrice = 0;
+    period.forEach(k => {
+      // 当日典型价格
+      const typ = (k.open + k.high + k.low + k.close) / 4;
+      let idx = Math.floor((typ - pMin) / step);
+      if (idx < 0) idx = 0;
+      if (idx >= BUCKETS) idx = BUCKETS - 1;
+      // 成交量分布到 [low, high] 区间的桶
+      const loIdx = Math.max(0, Math.floor((k.low - pMin) / step));
+      const hiIdx = Math.min(BUCKETS - 1, Math.floor((k.high - pMin) / step));
+      const span = Math.max(1, hiIdx - loIdx + 1);
+      for (let bi = loIdx; bi <= hiIdx; bi++) {
+        bins[bi] += k.volume / span;
+      }
+      totalVol += k.volume;
+      weightedPrice += typ * k.volume;
+    });
+    if (totalVol === 0) return { profitRatio: 50, avgCost: 0, concentration: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50 };
+
+    const avgCost = weightedPrice / totalVol;
+
+    // 获利盘比例：价格低于当前价的桶的成交量占比
+    let belowVol = 0;
+    for (let i = 0; i < BUCKETS; i++) {
+      const bucketPrice = pMin + (i + 0.5) * step;
+      if (bucketPrice < currentPrice) belowVol += bins[i];
+    }
+    const profitRatio = Math.round(belowVol / totalVol * 100);
+
+    // 找到最大成交量峰（筹码主峰）
+    let maxBin = 0, maxIdx = 0;
+    bins.forEach((v, i) => { if (v > maxBin) { maxBin = v; maxIdx = i; } });
+    const peakPrice = pMin + (maxIdx + 0.5) * step;
+
+    // 筹码支撑位：当前价下方最近的高量峰
+    let supportChip = 0, supportVol = 0;
+    const curBin = Math.floor((currentPrice - pMin) / step);
+    for (let i = Math.min(curBin, BUCKETS - 1); i >= 0; i--) {
+      if (bins[i] > supportVol) {
+        supportVol = bins[i];
+        supportChip = pMin + (i + 0.5) * step;
+      }
+    }
+    // 筹码压力位：当前价上方最近的高量峰
+    let resistanceChip = 0, resistanceVol = 0;
+    for (let i = Math.max(curBin, 0); i < BUCKETS; i++) {
+      if (bins[i] > resistanceVol) {
+        resistanceVol = bins[i];
+        resistanceChip = pMin + (i + 0.5) * step;
+      }
+    }
+
+    // 90%筹码集中度：找到包含90%成交量的最窄价格区间
+    const sortedBins = bins.map((v, i) => ({ v, i })).sort((a, b) => b.v - a.v);
+    let cumVol = 0, minI = BUCKETS, maxI = 0;
+    for (const item of sortedBins) {
+      cumVol += item.v;
+      if (item.i < minI) minI = item.i;
+      if (item.i > maxI) maxI = item.i;
+      if (cumVol >= totalVol * 0.9) break;
+    }
+    const concLow = pMin + minI * step;
+    const concHigh = pMin + (maxI + 1) * step;
+    const concentration = +((concHigh - concLow) / currentPrice * 100).toFixed(1);
+
+    // 距压力位涨幅空间
+    const pressureDistance = resistanceChip > currentPrice
+      ? +((resistanceChip - currentPrice) / currentPrice * 100).toFixed(1)
+      : 0;
+
+    return {
+      profitRatio,
+      avgCost: +avgCost.toFixed(2),
+      concentration,
+      supportChip: +supportChip.toFixed(2),
+      resistanceChip: +resistanceChip.toFixed(2),
+      pressureDistance,
+      belowRatio: profitRatio,
+      peakPrice: +peakPrice.toFixed(2)
+    };
   },
 
   /** 评分转等级文字 */
@@ -3345,16 +3452,20 @@ const App = {
         return;
       }
 
-      // ====== 第3步：拉K线+资金流，计算三维评分 ======
+      // ====== 第3步：拉K线+资金流+新闻，计算四维评分 ======
       const klinePromises = candidates.map(c => DataAPI.fetchKline(c.code, 60).catch(() => null));
       const flowPromises = candidates.map(c => DataAPI.fetchCapitalFlowStock(c.code, 3).catch(() => null));
-      const [klinesArr, flowsArr] = await Promise.all([Promise.all(klinePromises), Promise.all(flowPromises)]);
+      const newsPromises = candidates.map(c => DataAPI.fetchNews(c.code).catch(() => []));
+      const [klinesArr, flowsArr, newsArr] = await Promise.all([
+        Promise.all(klinePromises), Promise.all(flowPromises), Promise.all(newsPromises)
+      ]);
 
       const scored = [];
       for (let i = 0; i < candidates.length; i++) {
         const c = candidates[i];
         const klines = klinesArr[i];
         const flowData = flowsArr[i];
+        const news = newsArr[i] || [];
         // 构造板块信息用于评分（优先用真实板块，降级模式构造虚拟板块）
         let sector = sectorInfoMap[c.sectorCode] || null;
         if (!sector) {
@@ -3366,11 +3477,29 @@ const App = {
             downCount: 5,
           };
         }
-        const sectorScore = this._scoreSectorHeat(sector);
-        const capitalScore = this._scoreCapitalFlow(c, flowData, sector);
-        const techScore = this._scoreShortTermTech(klines, c);
-        const trendScore = this._scoreTrendPrediction(klines, c, flowData);
-        const total = Math.round(sectorScore * 0.20 + capitalScore * 0.25 + techScore * 0.20 + trendScore * 0.35);
+        const capitalScore = this._scoreCapitalMovement(c, flowData);
+        const sectorScore = this._scoreSectorTrend(sector, klines);
+        const policyScore = this._scorePolicyImpact(news);
+        const newsScore = this._scoreCompanyNews(news, c);
+        // 筹码结构 + 压力位分析
+        const chip = Utils.calcChipDistribution(klines, c.price);
+        const sr = Utils.calcSupportResistance(klines, c.price);
+        // 筹码调整因子（-8 ~ +8）：获利盘适中+集中度高+有上涨空间加分；高位获利盘过多/上方重压扣分
+        let chipAdj = 0;
+        if (chip.profitRatio >= 50 && chip.profitRatio <= 80) chipAdj += 4;          // 获利盘适中，健康
+        else if (chip.profitRatio > 90) chipAdj -= 6;                               // 获利盘过多，抛压风险
+        else if (chip.profitRatio < 20) chipAdj -= 3;                               // 套牢盘过多，上行阻力大
+        if (chip.concentration > 0 && chip.concentration < 15) chipAdj += 3;         // 筹码集中，主力控盘
+        else if (chip.concentration > 30) chipAdj -= 2;                             // 筹码分散
+        if (chip.pressureDistance >= 5 && chip.pressureDistance <= 15) chipAdj += 3; // 距上方筹码压力有合理空间
+        else if (chip.pressureDistance > 0 && chip.pressureDistance < 2) chipAdj -= 4; // 紧贴压力位
+        if (sr.resistance > c.price) {
+          const distSR = (sr.resistance - c.price) / c.price * 100;
+          if (distSR >= 3 && distSR <= 12) chipAdj += 2;
+          else if (distSR < 1.5) chipAdj -= 3;
+        }
+        const rawTotal = capitalScore * 0.30 + sectorScore * 0.25 + policyScore * 0.25 + newsScore * 0.20;
+        const total = Math.max(0, Math.min(100, Math.round(rawTotal + chipAdj)));
 
         let probTag = '观望';
         if (total >= 85) probTag = '强势';
@@ -3389,8 +3518,8 @@ const App = {
           if (cum3 > 6) category = '波段';
         }
 
-        const risks = this._getShortTermRisks(c, klines, flowData);
-        const logic = this._getShortTermLogic(c, sector, flowData, klines, sectorScore, capitalScore, techScore, trendScore);
+        const risks = this._getShortTermRisks(c, klines, flowData, chip, sr);
+        const logic = this._getShortTermLogic(c, sector, flowData, klines, capitalScore, sectorScore, policyScore, newsScore, news, chip, sr);
 
         // 计算五维量化分和操作分
         const fiveDim = Utils.fiveDimScore(c, klines);
@@ -3401,7 +3530,8 @@ const App = {
           code: c.code, name: c.name, price: c.price, changePct: c.changePct,
           sectorName: c.sectorName || '全市场',
           turnover: c.turnover, amount: c.amount, pe: c.pe, marketCap: c.marketCap,
-          total, sectorScore, capitalScore, techScore, trendScore,
+          total, capitalScore, sectorScore, policyScore, newsScore,
+          chip, sr,
           probTag, category, risks, logic,
           quantScore, opAdvice
         });
@@ -3419,6 +3549,219 @@ const App = {
           <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 点击重试</button>
         </div>`;
     }
+  },
+
+  /** 主力动向评分（0-100）：权重30% — 今日主力净流入+连续流入+大单占比+加速流入 */
+  _scoreCapitalMovement(stock, flowData) {
+    let s = 35;
+    const amt = (stock && stock.amount) || 1;
+    const flows = (flowData && flowData.flows) || [];
+    const today = flowData && flowData.today;
+
+    // 1) 今日主力净流入金额/占比（最重要）
+    const todayMain = (today && today.main) || 0;
+    const todayRatio = todayMain / amt;
+    if (todayRatio > 0.15) s += 25;
+    else if (todayRatio > 0.10) s += 20;
+    else if (todayRatio > 0.05) s += 15;
+    else if (todayRatio > 0.02) s += 10;
+    else if (todayRatio > 0) s += 5;
+    else if (todayRatio > -0.05) s -= 5;
+    else if (todayRatio > -0.10) s -= 12;
+    else s -= 20;
+
+    // 2) 连续净流入天数加分
+    if (flows.length >= 2) {
+      let contDays = 0;
+      for (let i = flows.length - 1; i >= 0; i--) {
+        if (flows[i].main > 0) contDays++;
+        else break;
+      }
+      if (contDays >= 3) s += 15;
+      else if (contDays === 2) s += 10;
+      else if (contDays === 1) s += 3;
+      else s -= 5; // 连续流出
+    }
+
+    // 3) 超大单+大单占比（主力强度）
+    if (today) {
+      const superBig = today.superBig || 0;
+      const big = today.big || 0;
+      const bigTotal = superBig + big;
+      const bigRatio = amt > 0 ? bigTotal / amt : 0;
+      if (bigRatio > 0.12) s += 12;
+      else if (bigRatio > 0.08) s += 8;
+      else if (bigRatio > 0.04) s += 4;
+      else if (bigRatio < -0.08) s -= 8;
+    }
+
+    // 4) 资金流入加速（今日>昨日>前日）加分
+    if (flows.length >= 3) {
+      const d0 = flows[flows.length - 1].main;
+      const d1 = flows[flows.length - 2].main;
+      const d2 = flows[flows.length - 3].main;
+      if (d0 > d1 && d1 > d2 && d0 > 0) s += 10;
+      else if (d0 > d1 && d0 > 0) s += 5;
+      else if (d0 < d1 && d1 < d2 && d0 < 0) s -= 8;
+    }
+
+    return Math.max(0, Math.min(100, Math.round(s)));
+  },
+
+  /** 板块趋势评分（0-100）：权重25% — 板块涨幅+资金+涨家数占比+个股共振 */
+  _scoreSectorTrend(sector, klines) {
+    if (!sector) return 35;
+    let s = 40;
+    const chg = sector.changePct || 0;
+
+    // 1) 板块当日涨跌幅（温和上涨1-3%最佳，暴涨防回调）
+    if (chg >= 1 && chg <= 3) s += 20;          // 温和上涨最佳
+    else if (chg > 3 && chg <= 5) s += 15;      // 偏强
+    else if (chg > 5) s += 8;                   // 暴涨扣分防回调
+    else if (chg >= 0.3 && chg < 1) s += 10;    // 小涨
+    else if (chg >= 0 && chg < 0.3) s += 4;     // 平盘偏强
+    else if (chg >= -1) s -= 5;                 // 小跌
+    else if (chg >= -3) s -= 12;                // 偏弱
+    else s -= 20;                               // 大跌
+
+    // 2) 板块主力净流入
+    const flow = sector.mainFlow || 0;
+    if (flow > 5e9) s += 15;        // 50亿+
+    else if (flow > 2e9) s += 10;   // 20亿+
+    else if (flow > 5e8) s += 6;    // 5亿+
+    else if (flow > 0) s += 2;
+    else if (flow < -5e8) s -= 8;
+    else if (flow < -2e9) s -= 12;
+
+    // 3) 板块上涨家数占比
+    const up = sector.upCount || 0;
+    const down = sector.downCount || 0;
+    const total = up + down;
+    if (total > 0) {
+      const upRatio = up / total;
+      if (upRatio >= 0.8) s += 15;
+      else if (upRatio >= 0.65) s += 10;
+      else if (upRatio >= 0.5) s += 5;
+      else if (upRatio < 0.3) s -= 8;
+    }
+
+    // 4) 个股K线与板块共振（板块上涨+个股也上涨=共振加分）
+    if (klines && klines.length >= 2) {
+      const last = klines[klines.length - 1];
+      const prev = klines[klines.length - 2];
+      const stockChg = (last.close - prev.close) / prev.close * 100;
+      if (chg > 0 && stockChg > 0) {
+        // 共振上涨
+        if (stockChg <= chg * 1.2 && stockChg >= chg * 0.5) s += 8;  // 跟涨
+        else if (stockChg > chg * 1.2) s += 5;                       // 强于板块
+      } else if (chg > 0 && stockChg < 0) {
+        s -= 4;  // 板块涨个股跌，背离
+      } else if (chg < 0 && stockChg > 0) {
+        s += 6;  // 逆势上涨，独立行情
+      }
+    }
+
+    return Math.max(0, Math.min(100, Math.round(s)));
+  },
+
+  /** 政策影响评分（0-100）：权重25% — 新闻标题关键词匹配政策利好/利空 */
+  _scorePolicyImpact(news) {
+    let s = 40; // 无相关新闻给基础分40
+    if (!news || news.length === 0) return s;
+
+    const policyGoodKeywords = [
+      '国务院', '央行', '证监会', '发改委', '财政部',
+      '支持', '鼓励', '扶持', '补贴', '减税', '降准', '降息',
+      '新能源', '人工智能', '数字经济', '绿色', '碳中和',
+      '改革', '开放', '创新', '发展战略', '规划', '意见', '通知', '指导意见'
+    ];
+    const policyBadKeywords = [
+      '监管收紧', '限制', '禁止', '处罚', '整改', '核查'
+    ];
+
+    let goodCount = 0;
+    let badCount = 0;
+    const matchedGood = new Set();
+    const matchedBad = new Set();
+
+    for (const item of news) {
+      const title = (item.title || '');
+      // 政策利好匹配
+      for (const kw of policyGoodKeywords) {
+        if (title.includes(kw)) {
+          matchedGood.add(kw);
+          goodCount++;
+        }
+      }
+      // 政策利空匹配
+      for (const kw of policyBadKeywords) {
+        if (title.includes(kw)) {
+          matchedBad.add(kw);
+          badCount++;
+        }
+      }
+    }
+
+    // 利好加分（每条6-10分，设上限）
+    if (goodCount >= 3) s += 25;
+    else if (goodCount === 2) s += 18;
+    else if (goodCount === 1) s += 10;
+
+    // 关键词多样性加分（不同类型政策）
+    if (matchedGood.size >= 4) s += 8;
+    else if (matchedGood.size >= 2) s += 4;
+
+    // 利空扣分
+    if (badCount >= 2) s -= 20;
+    else if (badCount === 1) s -= 12;
+
+    // 总上限：最高不超过95
+    return Math.max(0, Math.min(95, Math.round(s)));
+  },
+
+  /** 公司消息评分（0-100）：权重20% — 新闻标题关键词匹配公司利好/利空 */
+  _scoreCompanyNews(news, stock) {
+    let s = 35; // 无相关新闻给基础分35
+    if (!news || news.length === 0) return s;
+
+    const companyGoodKeywords = [
+      '业绩预增', '扭亏', '超预期', '净利润增长', '中标', '合同',
+      '订单', '签约', '增持', '回购', '股权激励', '获批', '通过',
+      '认定', '突破', '机构调研', '评级上调', '买入', '战略合作', '分红', '送转'
+    ];
+    const companyBadKeywords = [
+      '减持', '亏损', '下滑', '下降', '处罚', '违规', '警示',
+      '退市风险', '诉讼', '纠纷', '质押', '冻结'
+    ];
+
+    let goodCount = 0;
+    let badCount = 0;
+
+    for (const item of news) {
+      const title = (item.title || '');
+      let isGood = false;
+      let isBad = false;
+      for (const kw of companyGoodKeywords) {
+        if (title.includes(kw)) { isGood = true; break; }
+      }
+      for (const kw of companyBadKeywords) {
+        if (title.includes(kw)) { isBad = true; break; }
+      }
+      if (isGood) goodCount++;
+      if (isBad) badCount++;
+    }
+
+    // 每条利好+8~12分（数量越多单条越高，但递减）
+    if (goodCount >= 3) s += 28;
+    else if (goodCount === 2) s += 20;
+    else if (goodCount === 1) s += 10;
+
+    // 每条利空-8~-12分
+    if (badCount >= 2) s -= 22;
+    else if (badCount === 1) s -= 12;
+
+    // 多空抵消后极端值限制
+    return Math.max(0, Math.min(95, Math.round(s)));
   },
 
   /** 板块热度评分（0-100） */
@@ -3684,34 +4027,75 @@ const App = {
     return Math.max(0, Math.min(100, Math.round(s)));
   },
 
-  /** 短线上涨逻辑（对应三维度） */
-  _getShortTermLogic(stock, sector, flowData, klines, sectorScore, capitalScore, techScore, trendScore) {
+  /** 短线上涨逻辑（对应新四维度：主力动向+板块趋势+政策影响+公司消息） */
+  _getShortTermLogic(stock, sector, flowData, klines, capitalScore, sectorScore, policyScore, newsScore, news, chip, sr) {
     const lines = [];
-    // 板块逻辑
-    if (sectorScore >= 75) lines.push(`板块【${sector ? sector.name : ''}】当日领涨，涨幅靠前，题材催化持续`);
-    else if (sectorScore >= 55) lines.push(`所属板块今日偏强，行业资金关注度较高`);
-    else lines.push(`板块热度一般，主要靠个股自身逻辑`);
-    // 资金逻辑
-    const flowSum = (flowData && flowData.mainFlowSum2) || 0;
-    const flowYi = (flowSum / 1e8).toFixed(2);
-    if (capitalScore >= 70) lines.push(`近2日主力累计净流入${flowYi}亿，资金持续加仓`);
-    else if (capitalScore >= 50) lines.push(`近期主力资金小幅净流入，筹码相对稳定`);
-    else if (capitalScore >= 30) lines.push(`主力资金中性，换手率活跃度尚可`);
-    else lines.push(`主力资金呈净流出，需警惕筹码松动`);
-    // 技术逻辑
-    if (techScore >= 70) lines.push(`回踩5/10日线企稳，量价配合良好，MACD即将金叉`);
-    else if (techScore >= 50) lines.push(`短期均线附近震荡，等待放量突破信号`);
-    else lines.push(`量价结构偏弱，尚未企稳`);
-    // 趋势预测逻辑
-    if (trendScore >= 75) lines.push(`趋势预测：MACD/KDJ共振向好，量价配合，上涨概率较高`);
-    else if (trendScore >= 60) lines.push(`趋势预测：短期动量偏多，技术指标偏正面`);
-    else if (trendScore >= 45) lines.push(`趋势预测：方向尚不明确，多空信号交织`);
-    else lines.push(`趋势预测：短期动量偏弱，技术指标偏空，谨慎追高`);
+    // 主力动向逻辑
+    const todayMain = (flowData && flowData.today && flowData.today.main) || 0;
+    const todayYi = (todayMain / 1e8).toFixed(2);
+    if (capitalScore >= 75) lines.push(`主力资金大幅净流入${todayYi}亿，超大单大单持续抢筹，资金加速进场`);
+    else if (capitalScore >= 60) lines.push(`主力资金净流入${todayYi}亿，筹码集中度提升，资金面偏多`);
+    else if (capitalScore >= 40) lines.push(`主力资金整体中性，多空力量相对均衡`);
+    else lines.push(`主力资金呈净流出态势，需警惕筹码松动风险`);
+    // 板块趋势逻辑
+    if (sectorScore >= 75) lines.push(`所属【${sector ? sector.name : ''}】板块趋势向好，资金+涨家数共振，板块效应强`);
+    else if (sectorScore >= 55) lines.push(`所属【${sector ? sector.name : ''}】板块偏强，行业景气度较高`);
+    else lines.push(`板块趋势一般，主要依赖个股自身驱动`);
+    // 政策影响逻辑
+    if (policyScore >= 75) lines.push(`政策面利好密集催化，顶层政策+产业规划双重加持`);
+    else if (policyScore >= 60) lines.push(`有相关政策利好支持，行业发展环境改善`);
+    else if (policyScore >= 45) lines.push(`政策面整体中性，暂无明显利好或利空`);
+    else lines.push(`政策面存在一定利空因素，需关注监管风险`);
+    // 公司消息逻辑
+    if (newsScore >= 70) {
+      const goodNews = (news || []).filter(n => {
+        const kws = ['业绩预增', '扭亏', '超预期', '净利润增长', '中标', '合同', '订单', '签约', '增持', '回购', '股权激励', '获批', '突破', '战略合作'];
+        return kws.some(kw => (n.title || '').includes(kw));
+      });
+      if (goodNews.length > 0) {
+        lines.push(`公司消息面利好：${goodNews[0].title.substring(0, 25)}，基本面催化明确`);
+      } else {
+        lines.push(`公司基本面出现积极信号，消息面偏多`);
+      }
+    } else if (newsScore >= 50) {
+      lines.push(`公司消息面整体平稳，暂无重大利好或利空`);
+    } else {
+      const badNews = (news || []).filter(n => {
+        const kws = ['减持', '亏损', '下滑', '下降', '处罚', '违规', '警示', '退市风险', '诉讼', '质押', '冻结'];
+        return kws.some(kw => (n.title || '').includes(kw));
+      });
+      if (badNews.length > 0) {
+        lines.push(`公司消息面需谨慎：${badNews[0].title.substring(0, 25)}`);
+      } else {
+        lines.push(`公司消息面偏空，需关注潜在风险`);
+      }
+    }
+    // 筹码结构逻辑
+    if (chip) {
+      const pr = chip.profitRatio;
+      const conc = chip.concentration;
+      const rChip = chip.resistanceChip;
+      const cur = stock.price;
+      if (pr >= 50 && pr <= 80 && conc > 0 && conc < 15) {
+        lines.push(`筹码结构健康：获利盘${pr}%，筹码集中（集中度${conc}%），主力控盘明显`);
+      } else if (pr > 90) {
+        lines.push(`获利盘高达${pr}%，短线获利盘丰厚，注意获利回吐`);
+      } else if (pr < 30) {
+        lines.push(`上方套牢盘较多（获利盘仅${pr}%），反弹需放量突破`);
+      } else if (conc > 0 && conc < 15) {
+        lines.push(`筹码集中度${conc}%，主力吸筹迹象明显`);
+      }
+      if (rChip > cur) {
+        const dist = ((rChip - cur) / cur * 100).toFixed(1);
+        if (dist < 2) lines.push(`当前价紧贴上方筹码峰${rChip.toFixed(2)}，突破需放量确认`);
+        else if (dist <= 8) lines.push(`上方第一压力位${rChip.toFixed(2)}（+${dist}%），空间内阻力较小`);
+      }
+    }
     return lines;
   },
 
   /** 短线下跌风险（至少2条） */
-  _getShortTermRisks(stock, klines, flowData) {
+  _getShortTermRisks(stock, klines, flowData, chip, sr) {
     const risks = [];
     const tr = stock.turnover || 0;
     const chg = stock.changePct || 0;
@@ -3731,21 +4115,35 @@ const App = {
     if (flowSum < -1e8) risks.push('近2日主力累计净流出，资金已在离场，反弹持续性存疑');
     else if (flowSum < 0) risks.push('主力资金小幅流出，筹码松动需警惕');
 
-    // 4) 技术位压力
+    // 4) 筹码结构风险
+    if (chip) {
+      if (chip.profitRatio > 92) risks.push('获利盘' + chip.profitRatio + '%，高位筹码松动，获利回吐压力大');
+      else if (chip.profitRatio < 25) risks.push('套牢盘占比高（获利盘仅' + chip.profitRatio + '%），反弹易遭解套抛压');
+      if (chip.resistanceChip > stock.price) {
+        const gap = ((chip.resistanceChip - stock.price) / stock.price * 100).toFixed(1);
+        if (gap < 2) risks.push('上方' + chip.resistanceChip.toFixed(2) + '处筹码峰密集，强压力位需放量突破');
+      }
+    }
+
+    // 5) 技术位压力（与筹码压力互为补充）
     if (klines && klines.length >= 20) {
       const closes = klines.map(k => k.close);
       const high20 = Math.max(...closes.slice(-20));
       if (stock.price >= high20 * 0.98) risks.push('股价接近近20日高点，上方套牢盘和获利盘双重压力');
     }
+    if (sr && sr.resistance > stock.price) {
+      const gap = (sr.resistance - stock.price) / stock.price * 100;
+      if (gap < 1.5) risks.push('当前价距技术压力位' + sr.resistance.toFixed(2) + '仅' + gap.toFixed(1) + '%，上行空间有限');
+    }
 
-    // 5) 估值风险
+    // 6) 估值风险
     if (pe > 80 || pe < 0) risks.push('当前PE极高或亏损，题材炒作一旦退潮跌幅剧烈');
     else if (pe > 50) risks.push('估值偏高，业绩证伪后易补跌');
 
-    // 6) 大盘系统性风险（普适）
+    // 7) 大盘系统性风险（普适）
     risks.push('若大盘跳水或板块整体走弱，个股难以独善其身');
 
-    // 7) 量能衰减
+    // 8) 量能衰减
     if (klines && klines.length >= 5) {
       const vols = klines.slice(-5).map(k => k.volume);
       if (vols[4] < vols[3] * 0.7 && vols[3] < vols[2] * 0.7) {
@@ -3753,7 +4151,7 @@ const App = {
       }
     }
 
-    // 8) 市值/流动性风险
+    // 9) 市值/流动性风险
     if (stock.marketCap && stock.marketCap < 50 && tr < 2) risks.push('小市值低流动性，易被游资快进快出');
 
     // 保底至少2条
@@ -3761,7 +4159,7 @@ const App = {
       risks.push('短线波动剧烈，情绪反转可能带来快速回落');
       if (risks.length < 2) risks.push('市场整体环境存在不确定性，系统性风险需防范');
     }
-    return risks.slice(0, 4);  // 最多4条避免过长
+    return risks.slice(0, 5);  // 最多5条（新增筹码风险）
   },
 
   /** 渲染短线TOP10列表 */
@@ -3797,6 +4195,47 @@ const App = {
       const logicHtml = s.logic.map(l => `<div class="st-logic-item">· ${l}</div>`).join('');
       const riskHtml = s.risks.map(r => `<div class="st-risk-item">⚠ ${r}</div>`).join('');
 
+      // 筹码结构 + 压力位信息
+      const chip = s.chip || {};
+      const sr = s.sr || {};
+      const profitRatio = chip.profitRatio != null ? chip.profitRatio : 50;
+      const profitColor = profitRatio >= 50 && profitRatio <= 80 ? '#00c853' : profitRatio > 90 ? '#ef4444' : profitRatio < 20 ? '#ff8c00' : '#ffa500';
+      const concentration = chip.concentration || 0;
+      const concText = concentration > 0 && concentration < 15 ? '集中' : concentration > 30 ? '分散' : concentration > 0 ? '适中' : '--';
+      const concColor = concentration > 0 && concentration < 15 ? '#00c853' : concentration > 30 ? '#ff8c00' : '#ffa500';
+      const supportChip = chip.supportChip || 0;
+      const resistanceChip = chip.resistanceChip || 0;
+      const pressureDistance = chip.pressureDistance || 0;
+      const srResistance = sr.resistance || 0;
+      const srSupport = sr.support || 0;
+      // 取最近且更保守的压力位
+      const nearestResistance = (resistanceChip > 0 && srResistance > 0)
+        ? Math.min(resistanceChip, srResistance)
+        : (resistanceChip || srResistance || 0);
+      const nearestSupport = (supportChip > 0 && srSupport > 0)
+        ? Math.max(supportChip, srSupport)
+        : (supportChip || srSupport || 0);
+      const chipHtml = `
+        <div class="st-chip-row">
+          <div class="st-chip-item">
+            <span class="st-chip-label">获利盘</span>
+            <span class="st-chip-val" style="color:${profitColor}">${profitRatio}%</span>
+          </div>
+          <div class="st-chip-item">
+            <span class="st-chip-label">筹码</span>
+            <span class="st-chip-val" style="color:${concColor}">${concText}</span>
+          </div>
+          <div class="st-chip-item">
+            <span class="st-chip-label">筹码支撑</span>
+            <span class="st-chip-val" style="color:#00c853">${supportChip ? supportChip.toFixed(2) : '--'}</span>
+          </div>
+          <div class="st-chip-item">
+            <span class="st-chip-label">压力位</span>
+            <span class="st-chip-val" style="color:#ef4444">${nearestResistance ? nearestResistance.toFixed(2) : '--'}</span>
+          </div>
+          ${pressureDistance > 0 ? `<div class="st-chip-item"><span class="st-chip-label">上行空间</span><span class="st-chip-val" style="color:#00d4ff">+${pressureDistance}%</span></div>` : ''}
+        </div>`;
+
       // 量化分和操作分（统一阈值80/65/50/35）
       const quantScore = s.quantScore || 0;
       const quantColor = Utils.scoreColor(quantScore);
@@ -3828,6 +4267,7 @@ const App = {
               <div class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</div>
             </div>
           </div>
+          ${chipHtml}
           <div class="st-section">
             <div class="st-section-title st-logic-title">📈 上涨逻辑</div>
             ${logicHtml}

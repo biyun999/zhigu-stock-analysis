@@ -2473,6 +2473,34 @@ body {
   font-weight: 700;
   line-height: 1.2;
 }
+.st-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 4px 0;
+  padding: 8px;
+  background: linear-gradient(135deg, rgba(0,212,255,0.04), rgba(0,200,83,0.03));
+  border-radius: 8px;
+  border: 1px solid rgba(0,212,255,0.12);
+}
+.st-chip-item {
+  flex: 1 1 auto;
+  min-width: 60px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 4px;
+}
+.st-chip-label {
+  font-size: 10px;
+  color: #94a3b8;
+}
+.st-chip-val {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.1;
+}
 .st-dims {
   display: flex;
   justify-content: space-around;
