@@ -15,7 +15,7 @@
   <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
-  <!-- ===== 登录页面 ===== -->
+  <!-- ===== 登录/激活页面 ===== -->
   <div id="page-login" class="login-overlay" style="display:none">
     <div class="login-card">
       <div class="login-logo">
@@ -23,7 +23,9 @@
         <h2>智股分析</h2>
         <p class="login-sub">A股七维度智能分析系统</p>
       </div>
-      <form id="loginForm" onsubmit="return Auth.handleLogin(event)">
+
+      <!-- 登录表单 -->
+      <form id="loginForm" onsubmit="return Auth.handleLogin(event)" class="auth-form">
         <div class="login-field">
           <span class="field-icon">📱</span>
           <input type="tel" id="loginPhone" placeholder="请输入手机号" maxlength="11" pattern="[0-9]{11}" required autocomplete="tel">
@@ -40,6 +42,39 @@
         </div>
         <div id="loginError" class="login-error" style="display:none"></div>
         <button type="submit" class="login-btn">登 录</button>
+        <div class="auth-switch">
+          <span>首次使用？</span>
+          <a href="javascript:void(0)" onclick="Auth.showActivate()">输入授权码激活</a>
+        </div>
+      </form>
+
+      <!-- 激活表单 -->
+      <form id="activateForm" onsubmit="return Auth.handleActivate(event)" class="auth-form" style="display:none">
+        <div class="activate-tip">
+          🔑 本系统需授权使用，请输入主人提供的授权码完成激活。
+        </div>
+        <div class="login-field">
+          <span class="field-icon">🔑</span>
+          <input type="text" id="actCode" placeholder="请输入授权码" required autocomplete="off" style="text-transform:uppercase;letter-spacing:1px">
+        </div>
+        <div class="login-field">
+          <span class="field-icon">📱</span>
+          <input type="tel" id="actPhone" placeholder="设置登录手机号（11位）" maxlength="11" pattern="[0-9]{11}" required autocomplete="tel">
+        </div>
+        <div class="login-field">
+          <span class="field-icon">🔒</span>
+          <input type="password" id="actPassword" placeholder="设置登录密码（至少6位）" minlength="6" required>
+        </div>
+        <div class="login-field">
+          <span class="field-icon">🔒</span>
+          <input type="password" id="actConfirm" placeholder="确认密码" minlength="6" required>
+        </div>
+        <div id="actError" class="login-error" style="display:none"></div>
+        <button type="submit" class="login-btn">激 活</button>
+        <div class="auth-switch">
+          <span>已有账号？</span>
+          <a href="javascript:void(0)" onclick="Auth.showLogin()">返回登录</a>
+        </div>
       </form>
     </div>
   </div>
@@ -270,6 +305,7 @@
             <span>当前登录：</span>
             <span id="settingsCurrentUser" class="settings-phone">--</span>
           </div>
+          <div class="settings-info" id="settingsAuthInfo" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
         </div>
         <div class="settings-section">
           <div class="card-subtitle">修改密码</div>
@@ -287,17 +323,15 @@
           </form>
         </div>
         <div class="settings-section">
-          <div class="card-subtitle">授权手机号管理</div>
-          <div id="phoneList" class="phone-list"></div>
-          <form id="addPhoneForm" onsubmit="return Auth.handleAddPhone(event)">
-            <div class="settings-field">
-              <input type="tel" id="newPhone" placeholder="添加新手机号（11位）" maxlength="11" pattern="[0-9]{11}">
-            </div>
-            <div class="settings-field">
-              <input type="password" id="addPhonePwd" placeholder="输入当前密码确认" required>
-            </div>
-            <button type="submit" class="login-btn settings-btn">添加手机号</button>
-          </form>
+          <div class="card-subtitle">授权管理</div>
+          <div id="adminPanel" style="display:none">
+            <div id="adminUserList" class="phone-list"></div>
+            <button type="button" onclick="Auth.hideAdmin()" class="login-btn settings-btn" style="background:transparent;border:1px solid var(--border-color);color:var(--text-secondary)">收起管理面板</button>
+          </div>
+          <div id="adminEntry">
+            <input type="password" id="adminCode" placeholder="输入主人授权码进入管理" style="width:100%;height:40px;padding:0 12px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-size:14px;outline:none;box-sizing:border-box;margin-bottom:8px">
+            <button type="button" onclick="Auth.showAdmin()" class="login-btn settings-btn" style="background:transparent;border:1px solid var(--accent-cyan);color:var(--accent-cyan)">进入管理</button>
+          </div>
         </div>
         <div class="settings-section">
           <button onclick="Auth.logout()" class="logout-btn">退出登录</button>
@@ -310,7 +344,7 @@
       <section class="card about-card">
         <div class="about-logo">
           <div class="about-icon">智股</div>
-          <h2>智股分析 v2.2</h2>
+          <h2>智股分析 v2.9</h2>
           <p class="about-sub">A股七维度智能分析系统</p>
         </div>
         <div class="about-features">

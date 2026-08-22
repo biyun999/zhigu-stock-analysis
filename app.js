@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.8 - A股智能分析系统
+ * 智股分析 v2.9 - A股智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -5151,24 +5151,27 @@ const App = {
 };
 
 // ============================================================
-// 13. Auth - 登录授权模块
+// 13. Auth - 授权登录模块（v2.9 激活码门控）
 // ============================================================
 const Auth = {
   STORAGE_KEY: 'zhigu_auth',
   SESSION_KEY: 'zhigu_session',
-  DEFAULT_PHONE: '13800138000',
-  DEFAULT_PWD: 'zhigu2026',
-  SESSION_DURATION: 7 * 24 * 60 * 60 * 1000, // 7天
+  RATE_LIMIT_KEY: 'zhigu_rl',
+  SESSION_DURATION: 7 * 24 * 60 * 60 * 1000,   // 7天
+  SHORT_SESSION: 24 * 60 * 60 * 1000,          // 24小时（未勾选记住）
+  ACT_CODE_HASH: 'h1_ntr9g0_14',               // 授权码哈希（原始码由主人分发）
+  ACT_CODE_VERSION: '20260823',                // 授权版本（换码时更新，旧激活自动失效）
+  MAX_ATTEMPTS: 5,                              // 最大失败次数
+  LOCK_DURATION: 15 * 60 * 1000,                // 锁定15分钟
 
-  /** 简单hash（用于密码存储，非安全加密） */
+  /** 简单hash（用于密码/授权码存储，非安全加密） */
   _hash(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       const char = str.charCodeAt(i);
       hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32bit integer
+      hash = hash & hash;
     }
-    // 再做一轮混淆
     return 'h1_' + Math.abs(hash).toString(36) + '_' + str.length;
   },
 
@@ -5176,17 +5179,62 @@ const Auth = {
   _getAuth() {
     try {
       const data = localStorage.getItem(this.STORAGE_KEY);
-      if (data) return JSON.parse(data);
+      if (data) {
+        const parsed = JSON.parse(data);
+        // v2.9安全迁移：无codeVersion或版本不匹配，一律视为未授权，需重新激活
+        if (!parsed.codeVersion || parsed.codeVersion !== this.ACT_CODE_VERSION) {
+          return null;
+        }
+        return parsed;
+      }
     } catch(e) {}
-    // 返回默认授权
-    return {
-      users: [{ phone: this.DEFAULT_PHONE, password: this._hash(this.DEFAULT_PWD) }]
-    };
+    return null;
   },
 
   /** 保存授权数据 */
   _saveAuth(auth) {
     localStorage.setItem(this.STORAGE_KEY, JSON.stringify(auth));
+  },
+
+  /** 获取登录限速记录 */
+  _getRateLimit() {
+    try {
+      const data = localStorage.getItem(this.RATE_LIMIT_KEY);
+      if (data) return JSON.parse(data);
+    } catch(e) {}
+    return { attempts: 0, lockUntil: 0 };
+  },
+
+  _saveRateLimit(rl) {
+    localStorage.setItem(this.RATE_LIMIT_KEY, JSON.stringify(rl));
+  },
+
+  _clearRateLimit() {
+    localStorage.removeItem(this.RATE_LIMIT_KEY);
+  },
+
+  /** 检查是否被锁定 */
+  _isLocked() {
+    const rl = this._getRateLimit();
+    if (rl.lockUntil && rl.lockUntil > Date.now()) {
+      const mins = Math.ceil((rl.lockUntil - Date.now()) / 60000);
+      return { locked: true, minutes: mins };
+    }
+    if (rl.lockUntil && rl.lockUntil <= Date.now()) {
+      this._clearRateLimit(); // 锁定期过，清除
+    }
+    return { locked: false };
+  },
+
+  _recordFailedAttempt() {
+    const rl = this._getRateLimit();
+    rl.attempts = (rl.attempts || 0) + 1;
+    if (rl.attempts >= this.MAX_ATTEMPTS) {
+      rl.lockUntil = Date.now() + this.LOCK_DURATION;
+      rl.attempts = 0;
+    }
+    this._saveRateLimit(rl);
+    return rl;
   },
 
   /** 获取session */
@@ -5205,25 +5253,35 @@ const Auth = {
   _saveSession(phone, remember) {
     const session = {
       phone,
-      expires: remember ? Date.now() + this.SESSION_DURATION : Date.now() + 24 * 60 * 60 * 1000
+      expires: remember ? Date.now() + this.SESSION_DURATION : Date.now() + this.SHORT_SESSION
     };
     localStorage.setItem(this.SESSION_KEY, JSON.stringify(session));
+  },
+
+  /** 验证激活码 */
+  _verifyActCode(code) {
+    const normalized = (code || '').trim().toUpperCase().replace(/\s+/g, '');
+    return this._hash(normalized) === this.ACT_CODE_HASH;
   },
 
   /** 验证密码 */
   _verifyPassword(phone, password) {
     const auth = this._getAuth();
+    if (!auth || !auth.users) return false;
     const hashedPwd = this._hash(password);
     const user = auth.users.find(u => u.phone === phone);
-    if (user && user.password === hashedPwd) return true;
-    // fallback: 如果是默认密码且用户未修改过
-    if (!user && phone === this.DEFAULT_PHONE && hashedPwd === this._hash(this.DEFAULT_PWD)) return true;
-    return false;
+    return !!(user && user.password === hashedPwd);
   },
 
-  /** 检查是否已登录 */
+  /** 检查是否已登录且授权有效 */
   isLoggedIn() {
-    return !!this._getSession();
+    const session = this._getSession();
+    if (!session) return false;
+    // 授权数据必须存在且版本匹配
+    const auth = this._getAuth();
+    if (!auth || !auth.users) return false;
+    // 用户必须仍在授权列表中
+    return !!auth.users.find(u => u.phone === session.phone);
   },
 
   /** 获取当前登录手机号 */
@@ -5232,26 +5290,122 @@ const Auth = {
     return session ? session.phone : null;
   },
 
+  /** 显示UI */
+  _showApp() {
+    document.getElementById('page-login').style.display = 'none';
+    document.getElementById('app-header').style.display = '';
+    document.getElementById('app-content').style.display = '';
+    document.getElementById('app-nav').style.display = '';
+  },
+
+  _showLoginPage() {
+    document.getElementById('page-login').style.display = 'flex';
+    document.getElementById('app-header').style.display = 'none';
+    document.getElementById('app-content').style.display = 'none';
+    document.getElementById('app-nav').style.display = 'none';
+  },
+
+  /** 切换到激活表单 */
+  showActivate() {
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('activateForm').style.display = 'block';
+    const err = document.getElementById('actError');
+    if (err) err.style.display = 'none';
+  },
+
+  /** 切换到登录表单 */
+  showLogin() {
+    document.getElementById('activateForm').style.display = 'none';
+    document.getElementById('loginForm').style.display = 'block';
+    const err = document.getElementById('loginError');
+    if (err) err.style.display = 'none';
+  },
+
   /** 初始化：检查登录状态 */
   init() {
-    const loginPage = document.getElementById('page-login');
-    const appHeader = document.getElementById('app-header');
-    const appContent = document.getElementById('app-content');
-    const appNav = document.getElementById('app-nav');
-
     if (this.isLoggedIn()) {
-      // 已登录，隐藏登录页
-      loginPage.style.display = 'none';
-      appHeader.style.display = '';
-      appContent.style.display = '';
-      appNav.style.display = '';
+      this._showApp();
     } else {
-      // 未登录，显示登录页
-      loginPage.style.display = 'flex';
-      appHeader.style.display = 'none';
-      appContent.style.display = 'none';
-      appNav.style.display = 'none';
+      // 清除过期session
+      localStorage.removeItem(this.SESSION_KEY);
+      this._showLoginPage();
+      // 如果没有任何授权记录，直接显示激活表单
+      const auth = this._getAuth();
+      if (!auth || !auth.users || auth.users.length === 0) {
+        this.showActivate();
+      }
     }
+  },
+
+  /** 处理激活 */
+  handleActivate(event) {
+    event.preventDefault();
+    const code = document.getElementById('actCode').value;
+    const phone = document.getElementById('actPhone').value.trim();
+    const password = document.getElementById('actPassword').value;
+    const confirm = document.getElementById('actConfirm').value;
+    const errorEl = document.getElementById('actError');
+
+    const showErr = (msg) => {
+      errorEl.textContent = msg;
+      errorEl.style.display = 'block';
+    };
+
+    // 限速检查
+    const lockCheck = this._isLocked();
+    if (lockCheck.locked) {
+      showErr('尝试次数过多，请' + lockCheck.minutes + '分钟后再试');
+      return false;
+    }
+
+    // 验证激活码
+    if (!this._verifyActCode(code)) {
+      this._recordFailedAttempt();
+      showErr('授权码无效，请确认后重新输入');
+      return false;
+    }
+
+    // 验证手机号
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      showErr('请输入正确的11位手机号');
+      return false;
+    }
+
+    // 验证密码
+    if (password.length < 6) {
+      showErr('密码至少6位');
+      return false;
+    }
+    if (password !== confirm) {
+      showErr('两次输入的密码不一致');
+      return false;
+    }
+
+    // 检查是否已有该用户
+    let auth = this._getAuth();
+    if (auth && auth.users && auth.users.find(u => u.phone === phone)) {
+      showErr('该手机号已激活，请直接登录');
+      return false;
+    }
+
+    // 创建授权记录
+    auth = auth || {};
+    auth.users = auth.users || [];
+    auth.users.push({
+      phone: phone,
+      password: this._hash(password),
+      activatedAt: new Date().toISOString()
+    });
+    auth.codeVersion = this.ACT_CODE_VERSION;
+    this._saveAuth(auth);
+
+    // 自动登录
+    this._saveSession(phone, true);
+    this._clearRateLimit();
+    errorEl.style.display = 'none';
+    this._showApp();
+    App.init();
+    return false;
   },
 
   /** 处理登录 */
@@ -5262,27 +5416,45 @@ const Auth = {
     const remember = document.getElementById('loginRemember').checked;
     const errorEl = document.getElementById('loginError');
 
-    // 验证手机号
-    if (!/^1[3-9]\d{9}$/.test(phone)) {
-      errorEl.textContent = '请输入正确的11位手机号';
+    const showErr = (msg) => {
+      errorEl.textContent = msg;
       errorEl.style.display = 'block';
+    };
+
+    // 限速检查
+    const lockCheck = this._isLocked();
+    if (lockCheck.locked) {
+      showErr('登录失败次数过多，请' + lockCheck.minutes + '分钟后再试');
+      return false;
+    }
+
+    // 验证手机号格式
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      this._recordFailedAttempt();
+      showErr('请输入正确的11位手机号');
+      return false;
+    }
+
+    // 检查授权是否存在
+    const auth = this._getAuth();
+    if (!auth || !auth.users) {
+      this._recordFailedAttempt();
+      showErr('设备未激活，请先输入授权码激活');
       return false;
     }
 
     // 验证密码
     if (this._verifyPassword(phone, password)) {
       this._saveSession(phone, remember);
+      this._clearRateLimit();
       errorEl.style.display = 'none';
-      // 显示主界面
-      document.getElementById('page-login').style.display = 'none';
-      document.getElementById('app-header').style.display = '';
-      document.getElementById('app-content').style.display = '';
-      document.getElementById('app-nav').style.display = '';
-      // 初始化APP
+      this._showApp();
       App.init();
     } else {
-      errorEl.textContent = '手机号或密码错误';
-      errorEl.style.display = 'block';
+      this._recordFailedAttempt();
+      const rl = this._getRateLimit();
+      const remaining = this.MAX_ATTEMPTS - (rl.attempts || 0);
+      showErr(remaining > 0 ? '手机号或密码错误，还可尝试' + remaining + '次' : '账号已锁定，请15分钟后再试');
     }
     return false;
   },
@@ -5298,7 +5470,6 @@ const Auth = {
       alert('新密码至少6位');
       return false;
     }
-
     if (newPwd !== confirmPwd) {
       alert('两次输入的新密码不一致');
       return false;
@@ -5317,70 +5488,8 @@ const Auth = {
       this._saveAuth(auth);
       alert('密码修改成功');
       document.getElementById('changePwdForm').reset();
-    } else {
-      alert('用户不存在');
     }
     return false;
-  },
-
-  /** 添加手机号 */
-  handleAddPhone(event) {
-    event.preventDefault();
-    const newPhone = document.getElementById('newPhone').value.trim();
-    const pwd = document.getElementById('addPhonePwd').value;
-
-    if (!/^1[3-9]\d{9}$/.test(newPhone)) {
-      alert('请输入正确的11位手机号');
-      return false;
-    }
-
-    const currentUser = this.getCurrentUser();
-    if (!this._verifyPassword(currentUser, pwd)) {
-      alert('密码错误，无法添加');
-      return false;
-    }
-
-    const auth = this._getAuth();
-    if (auth.users.find(u => u.phone === newPhone)) {
-      alert('该手机号已存在');
-      return false;
-    }
-
-    auth.users.push({ phone: newPhone, password: this._hash(this.DEFAULT_PWD) });
-    this._saveAuth(auth);
-    alert('添加成功，初始密码为：' + this.DEFAULT_PWD);
-    document.getElementById('addPhoneForm').reset();
-    this.renderPhoneList();
-    return false;
-  },
-
-  /** 删除手机号 */
-  removePhone(phone) {
-    const currentUser = this.getCurrentUser();
-    if (phone === currentUser) {
-      alert('不能删除当前登录的手机号');
-      return;
-    }
-    if (!confirm('确定删除手机号 ' + phone + ' ？')) return;
-    const auth = this._getAuth();
-    auth.users = auth.users.filter(u => u.phone !== phone);
-    this._saveAuth(auth);
-    this.renderPhoneList();
-  },
-
-  /** 渲染手机号列表 */
-  renderPhoneList() {
-    const auth = this._getAuth();
-    const currentUser = this.getCurrentUser();
-    const container = document.getElementById('phoneList');
-    if (!container) return;
-    
-    container.innerHTML = auth.users.map(u => `
-      <div class="phone-item">
-        <span>📱 ${u.phone}${u.phone === currentUser ? '<span class="phone-tag">(当前)</span>' : ''}</span>
-        ${u.phone !== currentUser ? '<button class="del-btn" onclick="Auth.removePhone(\'' + u.phone + '\')">删除</button>' : ''}
-      </div>
-    `).join('');
   },
 
   /** 退出登录 */
@@ -5390,12 +5499,70 @@ const Auth = {
     location.reload();
   },
 
+  /** 显示管理面板 */
+  showAdmin() {
+    const code = document.getElementById('adminCode').value;
+    if (!this._verifyActCode(code)) {
+      alert('授权码错误');
+      return;
+    }
+    document.getElementById('adminEntry').style.display = 'none';
+    document.getElementById('adminPanel').style.display = 'block';
+    this._renderAdminList();
+  },
+
+  hideAdmin() {
+    document.getElementById('adminPanel').style.display = 'none';
+    document.getElementById('adminEntry').style.display = 'block';
+    document.getElementById('adminCode').value = '';
+  },
+
+  _renderAdminList() {
+    const auth = this._getAuth();
+    const currentUser = this.getCurrentUser();
+    const container = document.getElementById('adminUserList');
+    if (!container || !auth || !auth.users) return;
+
+    container.innerHTML = auth.users.map(u => {
+      const d = u.activatedAt ? new Date(u.activatedAt) : null;
+      const dateStr = d ? (d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')) : '未知';
+      return '<div class="phone-item">' +
+        '<span>📱 ' + u.phone + ' ' + (u.phone === currentUser ? '<span class="phone-tag">(当前)</span>' : '') +
+        '<br><small style="color:var(--text-muted)">激活：' + dateStr + '</small></span>' +
+        (u.phone !== currentUser ? '<button class="del-btn" onclick="Auth.revokeUser(\'' + u.phone + '\')">撤销授权</button>' : '') +
+        '</div>';
+    }).join('');
+  },
+
+  /** 撤销某用户授权（仅本设备） */
+  revokeUser(phone) {
+    if (!confirm('确定撤销 ' + phone + ' 的授权？\n该用户在本设备下次启动时需重新激活。')) return;
+    const auth = this._getAuth();
+    if (!auth) return;
+    auth.users = auth.users.filter(u => u.phone !== phone);
+    this._saveAuth(auth);
+    this._renderAdminList();
+  },
+
   /** 设置页面初始化 */
   initSettingsPage() {
     const currentUser = this.getCurrentUser();
     const phoneEl = document.getElementById('settingsCurrentUser');
     if (phoneEl) phoneEl.textContent = currentUser || '--';
-    this.renderPhoneList();
+
+    const authInfo = document.getElementById('settingsAuthInfo');
+    if (authInfo) {
+      const auth = this._getAuth();
+      const user = auth && auth.users ? auth.users.find(u => u.phone === currentUser) : null;
+      if (user && user.activatedAt) {
+        const d = new Date(user.activatedAt);
+        authInfo.textContent = '授权激活于 ' + d.getFullYear() + '-' +
+          String(d.getMonth()+1).padStart(2,'0') + '-' +
+          String(d.getDate()).padStart(2,'0') + ' · 授权版本 ' + (auth.codeVersion || '未知');
+      } else {
+        authInfo.textContent = '授权版本 ' + (auth ? auth.codeVersion || '未知' : '未激活');
+      }
+    }
   }
 };
 

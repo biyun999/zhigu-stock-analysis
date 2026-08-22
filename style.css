@@ -2219,6 +2219,35 @@ body {
   opacity: 0.8;
 }
 
+/* === 激活/登录切换 === */
+.auth-switch {
+  text-align: center;
+  margin-top: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.auth-switch a {
+  color: var(--accent-cyan);
+  text-decoration: none;
+  margin-left: 4px;
+}
+
+.auth-switch a:active {
+  opacity: 0.7;
+}
+
+.activate-tip {
+  background: rgba(0, 212, 255, 0.08);
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
 /* === 设置页面 === */
 .header-settings-btn {
   background: none;
