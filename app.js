@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.7 - A股智能分析系统
+ * 智股分析 v2.8 - A股智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -3537,10 +3537,13 @@ const App = {
         });
       }
 
-      // ====== 第4步：排序取TOP10并渲染 ======
+      // ====== 第4步：排序取TOP20并渲染 ======
       scored.sort((a, b) => b.total - a.total);
-      const top10 = scored.slice(0, 10);
-      this.renderShortTermTop10(top10, hotSectors.slice(0, 5), fallbackMode);
+      const top20 = scored.slice(0, 20);
+      this._shortTermAll = top20;            // 保存全量供排序切换
+      this._shortTermSortKey = 'composite';  // 默认综合排序
+      this._shortTermCtx = { topSectors: hotSectors.slice(0, 5), fallbackMode };
+      this.renderShortTermTop10(top20, this._shortTermCtx.topSectors, this._shortTermCtx.fallbackMode);
     } catch (e) {
       console.error('[短线TOP10] 整体异常:', e);
       container.innerHTML = `
@@ -4162,8 +4165,50 @@ const App = {
     return risks.slice(0, 5);  // 最多5条（新增筹码风险）
   },
 
-  /** 渲染短线TOP10列表 */
-  renderShortTermTop10(top10, topSectors, fallbackMode) {
+  /** 切换短线TOP20排序方式 */
+  resortShortTerm(sortKey) {
+    if (!this._shortTermAll || !this._shortTermAll.length) return;
+    this._shortTermSortKey = sortKey;
+    const list = this._shortTermAll.slice();
+    switch (sortKey) {
+      case 'capital':   // 主力动向
+        list.sort((a, b) => (b.capitalScore || 0) - (a.capitalScore || 0));
+        break;
+      case 'sector':    // 板块趋势
+        list.sort((a, b) => (b.sectorScore || 0) - (a.sectorScore || 0));
+        break;
+      case 'policy':    // 政策影响
+        list.sort((a, b) => (b.policyScore || 0) - (a.policyScore || 0));
+        break;
+      case 'news':      // 公司消息
+        list.sort((a, b) => (b.newsScore || 0) - (a.newsScore || 0));
+        break;
+      case 'quant':     // 量化分
+        list.sort((a, b) => (b.quantScore || 0) - (a.quantScore || 0));
+        break;
+      case 'change':    // 涨幅
+        list.sort((a, b) => (b.changePct || 0) - (a.changePct || 0));
+        break;
+      case 'profit':    // 获利盘（低到高=套牢少到多，筹码健康度反向不好定义；这里按获利盘适中优先）
+        list.sort((a, b) => {
+          const pa = a.chip ? a.chip.profitRatio : 50;
+          const pb = b.chip ? b.chip.profitRatio : 50;
+          // 离健康中枢65越近越靠前
+          return Math.abs(pb - 65) - Math.abs(pa - 65);
+        });
+        break;
+      case 'composite': // 综合（默认）
+      default:
+        list.sort((a, b) => (b.total || 0) - (a.total || 0));
+        break;
+    }
+    const ctx = this._shortTermCtx || { topSectors: [], fallbackMode: 'normal' };
+    this.renderShortTermTop10(list, ctx.topSectors, ctx.fallbackMode, sortKey);
+  },
+
+  /** 渲染短线TOP20列表 */
+  renderShortTermTop10(top10, topSectors, fallbackMode, sortKey) {
+    sortKey = sortKey || this._shortTermSortKey || 'composite';
     const container = document.getElementById('hotStocks');
     if (!top10 || top10.length === 0) {
       container.innerHTML = '<div class="empty-tip">未筛选到符合条件的短线标的，建议观望</div>';
@@ -4294,9 +4339,30 @@ const App = {
       </div>
     `;
 
+    // 排序工具栏
+    const sortBtns = [
+      { key: 'composite', label: '综合' },
+      { key: 'capital', label: '主力' },
+      { key: 'sector', label: '板块' },
+      { key: 'policy', label: '政策' },
+      { key: 'news', label: '消息' },
+      { key: 'quant', label: '量化分' },
+      { key: 'change', label: '涨幅' },
+      { key: 'profit', label: '筹码' }
+    ];
+    const sortBarHtml = `
+      <div class="st-sort-bar">
+        <span class="st-sort-label">排序：</span>
+        ${sortBtns.map(b => `
+          <button class="st-sort-btn ${sortKey === b.key ? 'active' : ''}"
+                  onclick="App.resortShortTerm('${b.key}')">${b.label}</button>
+        `).join('')}
+      </div>`;
+
     container.innerHTML = `
       <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button></div>
       <div class="st-top-sectors">${sectorHtml}</div>
+      ${sortBarHtml}
       ${stockHtml}
       ${riskControlHtml}
     `;
