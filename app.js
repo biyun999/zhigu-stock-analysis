@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.0 - A股智能分析系统
+ * 智股分析 v3.1 - A股智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -27,7 +27,12 @@ const CONFIG = {
   TENCENT_KLINE: 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get',
   // 东方财富搜索API
   EM_SEARCH: 'https://searchapi.eastmoney.com/api/suggest/get',
-  // 东方财富资金流向API
+  // 东方财富资金流向API（多通道容灾，按优先级排列）
+  EM_CAPITAL_CHANNELS: [
+    'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
+    'https://82.push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
+    'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get'
+  ],
   EM_CAPITAL: 'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
   // 东方财富财务数据API
   EM_FINANCE: 'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get',
@@ -1460,20 +1465,49 @@ const DataAPI = {
     }
   },
 
-  /** 获取资金流向（近5日） */
+  /** 多通道获取东方财富资金流向日K线（三通道容灾，返回 {klines, source} 或 null） */
+  async _fetchEMCapitalKlines(secid, lmt, klt) {
+    klt = klt || 101;
+    const fields1 = 'f1,f2,f3,f7';
+    const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65';
+    const channels = CONFIG.EM_CAPITAL_CHANNELS;
+    const labels = ['主通道', '备用通道1', '备用通道2'];
+    let lastErr = null;
+
+    for (let i = 0; i < channels.length; i++) {
+      try {
+        const url = `${channels[i]}?secid=${secid}&fields1=${fields1}&fields2=${fields2}&klt=${klt}&lmt=${lmt}`;
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000); // 8秒超时切下一通道
+        const resp = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!resp.ok) { lastErr = new Error('HTTP ' + resp.status); continue; }
+        const text = await resp.text();
+        const data = this._parseEastMoneyResp(text);
+        if (data && data.data && data.data.klines && data.data.klines.length > 0) {
+          return { klines: data.data.klines, source: labels[i] };
+        }
+        lastErr = new Error('空数据');
+      } catch (e) {
+        lastErr = e;
+        continue; // 立即切下一通道
+      }
+    }
+    console.warn('所有资金流向通道均失败:', lastErr && lastErr.message);
+    return null;
+  },
+
+  /** 获取资金流向（近5日，三通道容灾） */
   async fetchCapitalFlow(code) {
     const cacheKey = 'capitalFlow_' + code;
     const cached = this._cacheGet(cacheKey, 'capitalFlow');
     if (cached) return cached;
     try {
-      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`; // 北交所(sz/bj)均用market=0
-      const url = `${CONFIG.EM_CAPITAL}?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&klt=101&lmt=5`;
-      const resp = await fetch(url);
-      const text = await resp.text();
-      const data = this._parseEastMoneyResp(text);
+      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`;
+      const res = await this._fetchEMCapitalKlines(secid, 5);
       let result = [];
-      if (data && data.data && data.data.klines) {
-        result = data.data.klines.map(line => {
+      if (res) {
+        result = res.klines.map(line => {
           const f = line.split(',');
           return {
             date: f[0],
@@ -1484,6 +1518,7 @@ const DataAPI = {
             superIn: +f[5]
           };
         });
+        result._source = res.source; // 记录数据来源通道
       }
       this._cacheSet(cacheKey, 'capitalFlow', result);
       return result;
@@ -1686,7 +1721,7 @@ const DataAPI = {
     }
   },
 
-  /** 获取单只股票近N日主力资金流向（用于近2日累计） */
+  /** 获取单只股票近N日主力资金流向（三通道容灾，用于近2日累计） */
   async fetchCapitalFlowStock(code, days = 3) {
     const cacheKey = 'cf_' + code + '_' + days;
     const cached = this._cacheGet(cacheKey, 'capitalFlowStock');
@@ -1694,13 +1729,9 @@ const DataAPI = {
     try {
       const rawCode = code.replace(/^(sh|sz|bj)/, '');
       const secid = (code.startsWith('sh') ? '1.' : '0.') + rawCode;
-      const url = `https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get?secid=${secid}&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&lmt=${days}`;
-      const resp = await fetch(url);
-      const text = await resp.text();
-      const json = this._parseEastMoneyResp(text);
-      const klines = (json && json.data && json.data.klines) || [];
+      const res = await this._fetchEMCapitalKlines(secid, days);
       // 解析每日数据: 日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
-      const flows = klines.map(line => {
+      const flows = (res ? res.klines : []).map(line => {
         const parts = line.split(',');
         return {
           date: parts[0],
@@ -1716,8 +1747,9 @@ const DataAPI = {
       const mainFlowSum2 = recent2.reduce((s, f) => s + f.main, 0);
       // 今日主力/成交额（用行情估算）
       const today = flows.length > 0 ? flows[flows.length - 1] : null;
-      this._cacheSet(cacheKey, 'capitalFlowStock', { flows, mainFlowSum2, today });
-      return { flows, mainFlowSum2, today };
+      const payload = { flows, mainFlowSum2, today, source: res ? res.source : null };
+      this._cacheSet(cacheKey, 'capitalFlowStock', payload);
+      return payload;
     } catch (e) {
       console.error('fetchCapitalFlowStock error:', e);
       return { flows: [], mainFlowSum2: 0, today: null };
@@ -2363,6 +2395,10 @@ const DiagnosticEngine = {
     } else {
       html += '<p>多空力量交替，市场处于震荡博弈阶段，方向不明朗。</p>';
     }
+    // 数据来源标识
+    const src = capitalFlow._source || '主通道';
+    const badgeCls = src === '主通道' ? 'ds-badge ds-ok' : 'ds-badge ds-backup';
+    html += `<div class="data-source-tag"><span class="${badgeCls}">数据来源：东方财富·${src}</span></div>`;
     return html;
   },
 

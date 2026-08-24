@@ -460,6 +460,34 @@ body {
   color: var(--accent-green);
 }
 
+/* 数据来源标识 */
+.data-source-tag {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-color);
+  text-align: right;
+}
+
+.ds-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.ds-badge.ds-ok {
+  background: rgba(0, 230, 118, 0.1);
+  color: var(--accent-green);
+  border: 1px solid rgba(0, 230, 118, 0.25);
+}
+
+.ds-badge.ds-backup {
+  background: rgba(255, 193, 7, 0.1);
+  color: #ffc107;
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
 .stock-meta {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
