@@ -1,5 +1,5 @@
 /**
- * 智股分析 v2.9 - A股智能分析系统
+ * 智股分析 v3.0 - A股智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -617,16 +617,17 @@ const Utils = {
     // 尝试港股5位代码（纯数字5位）
     if (/^\d{5}$/.test(code)) return 'hk' + code;
     if (/^\d{6}$/.test(code)) {
-      // 北交所/新三板：8开头或43/4开头
-      if (code.startsWith('8') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
+      // 北交所/新三板：8开头、4开头（43/83等）、920开头（北交所新代码段）
+      if (code.startsWith('8') || code.startsWith('920') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
       // 沪市ETF/REITs
       if (code.startsWith('51') || code.startsWith('508') || code.startsWith('56')) return 'sh' + code;
       // 深市ETF/可转债
       if (code.startsWith('15') || code.startsWith('12') || code.startsWith('16')) return 'sz' + code;
-      // 沪市主板/科创板/可转债
-      if (code.startsWith('6') || code.startsWith('9')) return 'sh' + code;
+      // 沪市主板/科创板/可转债（6开头=主板，688/689=科创板，9开头=沪市B股）
+      if (code.startsWith('6') || code.startsWith('688')) return 'sh' + code;
       // 沪市可转债 11开头
       if (code.startsWith('11')) return 'sh' + code;
+      // 其余0/3开头为深市
       return 'sz' + code;
     }
     return null;
@@ -1376,28 +1377,33 @@ const DataAPI = {
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
-        return data.QuotationCodeTable.Data.map(item => {
-          let prefix = 'sz';
-          const code = item.Code;
-          const mkt = item.MktNum;
-          // 东方财富MktNum映射: 01=沪市, 02=深市, 0=北交所
-          if (mkt === '01' || mkt === 1) prefix = 'sh';
-          else if (mkt === '0' && code.startsWith('8')) prefix = 'bj';
-          else if (mkt === '0' && code.startsWith('4')) prefix = 'bj';
-          // 根据代码前缀自动判断
-          else if (code.startsWith('6')) prefix = 'sh';
-          else if (code.startsWith('0') || code.startsWith('3')) prefix = 'sz';
-          else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
-          else if (code.startsWith('5')) prefix = 'sh'; // ETF
-          else if (code.startsWith('1')) prefix = 'sz'; // 可转债/ETF
-          return {
-            name: item.Name || code,
-            code: code,
-            market: prefix,
-            fullName: `${item.Name || code}(${code})`,
-            fullCode: prefix + code
-          };
-        }).filter(d => /^\d{6}$/.test(d.code));
+        return data.QuotationCodeTable.Data
+          .filter(item => /^\d{6}$/.test(item.Code)) // 只保留6位A股代码
+          .map(item => {
+            const code = item.Code;
+            let prefix;
+            // 优先用 MktNum 判断交易所（最可靠）
+            const mkt = String(item.MktNum);
+            if (mkt === '1') {
+              prefix = 'sh';
+            } else if (mkt === '0') {
+              // MktNum=0 可能是深市也可能是北交所，用代码前缀区分
+              if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
+              else prefix = 'sz';
+            } else {
+              // 兜底：按代码前缀判断
+              if (code.startsWith('6') || code.startsWith('5') || code.startsWith('11') || code.startsWith('9')) prefix = 'sh';
+              else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
+              else prefix = 'sz';
+            }
+            return {
+              name: item.Name || code,
+              code: code,
+              market: prefix,
+              fullName: `${item.Name || code}(${code})`,
+              fullCode: prefix + code
+            };
+          });
       }
       return [];
     } catch (e) {
@@ -1909,15 +1915,18 @@ const Search = {
     container.innerHTML = '<div class="loading-pulse"><span class="loading-spinner"></span>搜索中...</div>';
 
     let results = [];
-    // 先尝试直接匹配代码
-    const normalized = Utils.normalizeCode(keyword);
-    if (normalized) {
-      const quote = await DataAPI.fetchQuote(normalized);
-      if (quote) {
-        results = [{ name: quote.name, code: normalized, fullCode: normalized, market: normalized.startsWith('sh') ? '上证' : '深证' }];
+    // 纯数字/带前缀代码才走代码直接匹配，中文/拼音直接走搜索
+    const isCodeLike = /^[a-z]{2}\d{5,6}$/i.test(keyword) || /^\d{5,6}$/.test(keyword);
+    if (isCodeLike) {
+      const normalized = Utils.normalizeCode(keyword);
+      if (normalized) {
+        const quote = await DataAPI.fetchQuote(normalized);
+        if (quote) {
+          results = [{ name: quote.name, code: normalized, fullCode: normalized, market: normalized.startsWith('sh') ? '上证' : normalized.startsWith('bj') ? '北交所' : '深证' }];
+        }
       }
     }
-    // 如果代码没匹配到，搜索名称
+    // 如果代码没匹配到，搜索名称/拼音
     if (results.length === 0) {
       results = await DataAPI.searchStockFull(keyword);
     }
@@ -4450,6 +4459,35 @@ const App = {
     await this.runAnalysis(code);
   },
 
+  /** 更新关注按钮状态 */
+  _updateWatchlistBtn(code) {
+    const btn = document.getElementById('btnWatchlist');
+    const icon = document.getElementById('watchlistIcon');
+    const text = document.getElementById('watchlistText');
+    if (!btn || !icon || !text) return;
+    if (Watchlist.has(code)) {
+      btn.classList.add('active');
+      icon.textContent = '★';
+      text.textContent = '已在自选';
+    } else {
+      btn.classList.remove('active');
+      icon.textContent = '☆';
+      text.textContent = '加入自选';
+    }
+  },
+
+  /** 分析页切换关注状态 */
+  toggleWatchlistFromAnalysis() {
+    const code = this.currentStock;
+    if (!code) return;
+    if (Watchlist.has(code)) {
+      Watchlist.remove(code);
+    } else {
+      Watchlist.add(code);
+    }
+    this._updateWatchlistBtn(code);
+  },
+
   /** 执行分析 */
   async runAnalysis(code) {
     // 显示加载状态
@@ -4638,6 +4676,9 @@ const App = {
     const sign = quote.changePct >= 0 ? '+' : '';
     changeEl.textContent = `${sign}${quote.change.toFixed(2)}  ${sign}${quote.changePct.toFixed(2)}%`;
     changeEl.className = 'stock-change ' + Utils.colorClass(quote.changePct);
+
+    // 更新关注按钮状态
+    this._updateWatchlistBtn(code);
 
     // 元数据
     document.getElementById('stockMeta').innerHTML = `
