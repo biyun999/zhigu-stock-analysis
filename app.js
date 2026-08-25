@@ -714,6 +714,127 @@ const Utils = {
     return { k, d, j };
   },
 
+  /** 计算EMA序列（返回与输入等长的数组，前period-1项为null） */
+  calcEMASeries(data, period) {
+    const result = new Array(data.length).fill(null);
+    if (data.length < period) return result;
+    const k = 2 / (period + 1);
+    let ema = data.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    result[period - 1] = ema;
+    for (let i = period; i < data.length; i++) {
+      ema = data[i] * k + ema * (1 - k);
+      result[i] = ema;
+    }
+    return result;
+  },
+
+  /** 计算MA序列（返回与输入等长的数组，前period-1项为null） */
+  calcMASeries(data, period) {
+    const result = new Array(data.length).fill(null);
+    if (data.length < period) return result;
+    let sum = 0;
+    for (let i = 0; i < period; i++) sum += data[i];
+    result[period - 1] = sum / period;
+    for (let i = period; i < data.length; i++) {
+      sum = sum - data[i - period] + data[i];
+      result[i] = sum / period;
+    }
+    return result;
+  },
+
+  /** 计算MACD序列（12,26,9），返回等长dif/dea/macd数组，前段为null */
+  calcMACDSeries(closes) {
+    const n = closes.length;
+    const empty = () => new Array(n).fill(null);
+    if (n < 26) return { dif: empty(), dea: empty(), macd: empty() };
+    const ema12 = this.calcEMASeries(closes, 12);
+    const ema26 = this.calcEMASeries(closes, 26);
+    const dif = empty();
+    for (let i = 25; i < n; i++) {
+      if (ema12[i] !== null && ema26[i] !== null) dif[i] = ema12[i] - ema26[i];
+    }
+    // DEA是DIF的9日EMA，以首个有效DIF为种子
+    const dea = empty();
+    let ema = null;
+    const k = 2 / (9 + 1);
+    for (let i = 0; i < n; i++) {
+      if (dif[i] == null) continue;
+      if (ema === null) ema = dif[i];
+      else ema = dif[i] * k + ema * (1 - k);
+      dea[i] = ema;
+    }
+    const macd = empty();
+    for (let i = 0; i < n; i++) {
+      if (dif[i] !== null && dea[i] !== null) macd[i] = (dif[i] - dea[i]) * 2;
+    }
+    return { dif, dea, macd };
+  },
+
+  /** 计算KDJ序列（9,3,3），返回等长K/D/J数组，前段为null */
+  calcKDJSeries(closes, highs, lows, n = 9) {
+    const len = closes.length;
+    const empty = () => new Array(len).fill(null);
+    if (len < n) return { k: empty(), d: empty(), j: empty() };
+    const kArr = empty(), dArr = empty(), jArr = empty();
+    let k = 50, d = 50, started = false;
+    for (let i = n - 1; i < len; i++) {
+      let low = Infinity, high = -Infinity;
+      for (let j = i - n + 1; j <= i; j++) {
+        if (lows[j] < low) low = lows[j];
+        if (highs[j] > high) high = highs[j];
+      }
+      const rsv = high === low ? 50 : (closes[i] - low) / (high - low) * 100;
+      k = 2 / 3 * k + 1 / 3 * rsv;
+      d = 2 / 3 * d + 1 / 3 * k;
+      kArr[i] = k; dArr[i] = d; jArr[i] = 3 * k - 2 * d;
+      started = true;
+    }
+    return { k: kArr, d: dArr, j: jArr };
+  },
+
+  /** 计算RSI序列，返回等长数组，前段为null */
+  calcRSISeries(closes, period = 14) {
+    const len = closes.length;
+    const result = new Array(len).fill(null);
+    if (len < period + 1) return result;
+    let gainSum = 0, lossSum = 0;
+    for (let i = 1; i <= period; i++) {
+      const diff = closes[i] - closes[i - 1];
+      if (diff >= 0) gainSum += diff; else lossSum -= diff;
+    }
+    let avgGain = gainSum / period, avgLoss = lossSum / period;
+    result[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    for (let i = period + 1; i < len; i++) {
+      const diff = closes[i] - closes[i - 1];
+      const gain = diff > 0 ? diff : 0;
+      const loss = diff < 0 ? -diff : 0;
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+      result[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+    }
+    return result;
+  },
+
+  /** 计算布林带BOLL序列（20,2），返回等长mid/upper/lower数组，前段为null */
+  calcBOLLSeries(closes, period = 20, multiplier = 2) {
+    const len = closes.length;
+    const empty = () => new Array(len).fill(null);
+    if (len < period) return { mid: empty(), upper: empty(), lower: empty() };
+    const mid = this.calcMASeries(closes, period);
+    const upper = empty(), lower = empty();
+    for (let i = period - 1; i < len; i++) {
+      const m = mid[i];
+      let variance = 0;
+      for (let j = i - period + 1; j <= i; j++) {
+        variance += (closes[j] - m) ** 2;
+      }
+      const std = Math.sqrt(variance / period);
+      upper[i] = m + multiplier * std;
+      lower[i] = m - multiplier * std;
+    }
+    return { mid, upper, lower };
+  },
+
   /** 计算VWAP（主力成本估算） */
   calcVWAP(klines) {
     if (!klines || klines.length === 0) return 0;
@@ -3273,7 +3394,12 @@ const Watchlist = {
 const App = {
   currentStock: null,
   klineChart: null,
+  techChart: null,
   sevenDimChart: null,
+  _klineData: null,    // 当前K线原始数据（用于切换指标重绘）
+  _klineQuote: null,   // 当前行情
+  _klineOverlay: 'ma', // K线主图叠加：ma / boll / none
+  _klineCount: 60,     // K线加载根数
 
   /** 初始化应用 */
   _isDirty: false, // 是否有未保存的编辑操作
@@ -4535,7 +4661,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -4559,6 +4685,11 @@ const App = {
 
       // 渲染股票概要
       try { this.renderStockSummary(quote, code); } catch(e) { console.warn('[分析] renderStockSummary异常:', e); }
+
+      // K线图（主图：MA/BOLL叠加 + 成交量副图）
+      if (klines && klines.length > 10) {
+        try { this.renderKline(klines, quote, { count: this._klineCount || 60, overlay: this._klineOverlay || 'ma' }); } catch(e) { console.warn('[分析] renderKline异常:', e); }
+      }
 
       // 七维度评分
       let scores;
@@ -4819,39 +4950,89 @@ const App = {
     });
   },
 
-  /** 渲染K线图 */
-  renderKline(klines, quote) {
+  /** 渲染K线图
+   * @param {Array} klines K线数组
+   * @param {Object} quote 行情
+   * @param {Object} opts { count: 加载根数, overlay: 'ma'|'boll'|'none', reset: 是否重置工具栏状态 }
+   */
+  renderKline(klines, quote, opts) {
+    if (!klines || klines.length === 0) return;
     this.showSection('klineCard', true);
-    if (this.klineChart) this.klineChart.dispose();
+    this._klineData = klines;
+    this._klineQuote = quote;
+    if (opts) {
+      if (opts.count) this._klineCount = opts.count;
+      if (opts.overlay) this._klineOverlay = opts.overlay;
+    }
+
+    if (this.klineChart) { this.klineChart.dispose(); this.klineChart = null; }
     const chartDom = document.getElementById('klineChart');
+    if (!chartDom) return;
     this.klineChart = echarts.init(chartDom, 'dark');
 
     const dates = klines.map(k => k.date);
     const ohlc = klines.map(k => [k.open, k.close, k.low, k.high]);
     const volumes = klines.map(k => k.volume);
     const closes = klines.map(k => k.close);
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
 
-    // 计算均线
-    const ma5 = [], ma10 = [], ma20 = [];
-    for (let i = 0; i < closes.length; i++) {
-      ma5.push(Utils.calcMA(closes.slice(0, i + 1), 5));
-      ma10.push(Utils.calcMA(closes.slice(0, i + 1), 10));
-      ma20.push(Utils.calcMA(closes.slice(0, i + 1), 20));
+    // 主图叠加指标
+    const overlaySeries = [];
+    let legendHtml = '';
+    if (this._klineOverlay === 'ma') {
+      const ma5 = Utils.calcMASeries(closes, 5);
+      const ma10 = Utils.calcMASeries(closes, 10);
+      const ma20 = Utils.calcMASeries(closes, 20);
+      const ma60 = closes.length >= 60 ? Utils.calcMASeries(closes, 60) : null;
+      overlaySeries.push(
+        { name: 'MA5', type: 'line', data: ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#ffd54f' } },
+        { name: 'MA10', type: 'line', data: ma10, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#00d4ff' } },
+        { name: 'MA20', type: 'line', data: ma20, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#b388ff' } }
+      );
+      if (ma60) overlaySeries.push({ name: 'MA60', type: 'line', data: ma60, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#ff8a65' } });
+      const last = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; return null; };
+      const f = (v) => v == null ? '--' : v.toFixed(2);
+      legendHtml = `<span style="color:#ffd54f">MA5 ${f(last(ma5))}</span> <span style="color:#00d4ff">MA10 ${f(last(ma10))}</span> <span style="color:#b388ff">MA20 ${f(last(ma20))}</span>` + (ma60 ? ` <span style="color:#ff8a65">MA60 ${f(last(ma60))}</span>` : '');
+    } else if (this._klineOverlay === 'boll') {
+      const boll = Utils.calcBOLLSeries(closes, 20, 2);
+      overlaySeries.push(
+        { name: 'MID', type: 'line', data: boll.mid, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.1, color: '#ffd54f' } },
+        { name: 'UPPER', type: 'line', data: boll.upper, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.0, color: '#b388ff' }, areaStyle: { color: 'rgba(179,136,255,0.05)', origin: 'start' } },
+        { name: 'LOWER', type: 'line', data: boll.lower, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1.0, color: '#00d4ff' } }
+      );
+      const last = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i]; return null; };
+      const f = (v) => v == null ? '--' : v.toFixed(2);
+      const lastClose = closes[closes.length - 1];
+      const up = last(boll.upper), lo = last(boll.lower), mid = last(boll.mid);
+      let pos = '中轨附近';
+      if (up != null && lo != null && up > lo) {
+        const pct = (lastClose - lo) / (up - lo) * 100;
+        if (pct > 90) pos = '触及上轨，警惕回调';
+        else if (pct > 60) pos = '中轨上方偏强';
+        else if (pct < 10) pos = '触及下轨，关注反弹';
+        else if (pct < 40) pos = '中轨下方偏弱';
+      }
+      legendHtml = `<span style="color:#b388ff">UPPER ${f(up)}</span> <span style="color:#ffd54f">MID ${f(mid)}</span> <span style="color:#00d4ff">LOWER ${f(lo)}</span> <span style="color:#8a8e9b">| ${pos}</span>`;
     }
+
+    const legendEl = document.getElementById('klineLegend');
+    if (legendEl) legendEl.innerHTML = legendHtml;
 
     this.klineChart.setOption({
       backgroundColor: 'transparent',
       animation: false,
       tooltip: {
         trigger: 'axis',
-        axisPointer: { type: 'cross' },
+        axisPointer: { type: 'cross', link: [{ xAxisIndex: 'all' }] },
         backgroundColor: 'rgba(19,23,34,0.95)',
         borderColor: '#2a2e3e',
         textStyle: { color: '#e1e3ea', fontSize: 12 }
       },
+      axisPointer: { link: [{ xAxisIndex: 'all' }] },
       grid: [
-        { left: '10%', right: '3%', top: '5%', height: '55%' },
-        { left: '10%', right: '3%', top: '68%', height: '22%' }
+        { left: '8%', right: '4%', top: '6%', height: '60%' },
+        { left: '8%', right: '4%', top: '74%', height: '18%' }
       ],
       xAxis: [
         { type: 'category', data: dates, gridIndex: 0, axisLabel: { show: false }, axisLine: { lineStyle: { color: '#2a2e3e' } } },
@@ -4862,8 +5043,8 @@ const App = {
         { scale: true, gridIndex: 1, splitLine: { show: false }, axisLabel: { show: false } }
       ],
       dataZoom: [
-        { type: 'inside', xAxisIndex: [0, 1], start: 60, end: 100 },
-        { type: 'slider', xAxisIndex: [0, 1], bottom: '2%', height: 16, borderColor: '#2a2e3e', backgroundColor: '#131722' }
+        { type: 'inside', xAxisIndex: [0, 1], start: 50, end: 100 },
+        { type: 'slider', xAxisIndex: [0, 1], bottom: '1%', height: 14, borderColor: '#2a2e3e', backgroundColor: '#131722', fillerColor: 'rgba(0,212,255,0.12)', handleStyle: { color: '#00d4ff' }, textStyle: { color: '#5a5e6b' } }
       ],
       series: [
         {
@@ -4876,59 +5057,120 @@ const App = {
             borderColor: '#ff4757', borderColor0: '#00e676'
           }
         },
-        { name: 'MA5', type: 'line', data: ma5, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#ffd54f' } },
-        { name: 'MA10', type: 'line', data: ma10, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#00d4ff' } },
-        { name: 'MA20', type: 'line', data: ma20, xAxisIndex: 0, yAxisIndex: 0, smooth: true, showSymbol: false, lineStyle: { width: 1, color: '#b388ff' } },
+        ...overlaySeries,
         {
           name: '成交量',
           type: 'bar',
           data: volumes.map((v, i) => ({
             value: v,
-            itemStyle: { color: klines[i].close >= klines[i].open ? 'rgba(255,71,87,0.5)' : 'rgba(0,230,118,0.5)' }
+            itemStyle: { color: klines[i].close >= klines[i].open ? 'rgba(255,71,87,0.55)' : 'rgba(0,230,118,0.55)' }
           })),
           xAxisIndex: 1, yAxisIndex: 1
         }
       ]
     });
+
+    this._bindKlineToolbar();
   },
 
-  /** 渲染技术指标图表（MACD/RSI/量能） */
+  /** 绑定K线工具栏（周期切换、主图叠加切换） */
+  _bindKlineToolbar() {
+    if (this._klineToolbarBound) return;
+    this._klineToolbarBound = true;
+    const periodBox = document.getElementById('klinePeriods');
+    const indBox = document.getElementById('klineIndicators');
+    if (periodBox) {
+      periodBox.addEventListener('click', async (e) => {
+        const btn = e.target.closest('.kline-period');
+        if (!btn) return;
+        periodBox.querySelectorAll('.kline-period').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const count = parseInt(btn.dataset.count, 10) || 60;
+        this._klineCount = count;
+        if (!this.currentStock) return;
+        try {
+          Utils.toast('加载K线...', 800);
+          const klines = await DataAPI.fetchKline(this.currentStock, count);
+          if (klines && klines.length > 0) this.renderKline(klines, this._klineQuote, { count, overlay: this._klineOverlay });
+        } catch (err) { console.warn('[K线] 周期切换失败', err); }
+      });
+    }
+    if (indBox) {
+      indBox.addEventListener('click', (e) => {
+        const btn = e.target.closest('.kline-ind');
+        if (!btn) return;
+        indBox.querySelectorAll('.kline-ind').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const overlay = btn.dataset.ind || 'ma';
+        this._klineOverlay = overlay;
+        if (this._klineData) this.renderKline(this._klineData, this._klineQuote, { count: this._klineCount, overlay });
+      });
+    }
+  },
+
+  /** 渲染技术指标图表（MACD/KDJ/RSI/BOLL/量能） */
   renderTechnicalCharts(klines, quote) {
     this.showSection('techChartCard', true);
     const chartDom = document.getElementById('techChartContent');
     const infoEl = document.getElementById('techChartInfo');
     
-    // 取最近60个交易日
-    const data = klines.slice(-60);
-    const closes = data.map(k => k.close);
-    const volumes = data.map(k => k.volume);
-    const dates = data.map(k => k.date ? k.date.slice(5) : '');
-    
-    // MACD计算
-    const macd = Utils.calcMACD(closes);
-    const macdBars = macd.macd || [];
-    const difLine = macd.dif || [];
-    const deaLine = macd.dea || [];
-    
-    // RSI计算
-    const rsi6 = Utils.calcRSI(closes, 6);
-    const rsi14 = Utils.calcRSI(closes, 14);
-    const rsi6Arr = [];
-    const rsi14Arr = [];
-    for (let i = 0; i < closes.length; i++) {
-      const sub = closes.slice(0, i + 1);
-      if (sub.length >= 7) rsi6Arr.push(Utils.calcRSI(sub, 6));
-      else rsi6Arr.push(null);
-      if (sub.length >= 15) rsi14Arr.push(Utils.calcRSI(sub, 14));
-      else rsi14Arr.push(null);
-    }
+    // 取最近120个交易日用于指标计算（显示时再截取最近60根，保证指标warm-up充分）
+    const data = klines.slice(-120);
+    const closesAll = data.map(k => k.close);
+    const highsAll = data.map(k => k.high);
+    const lowsAll = data.map(k => k.low);
+    const volumesAll = data.map(k => k.volume);
+
+    // MACD序列
+    const macdSeries = Utils.calcMACDSeries(closesAll);
+    // RSI序列
+    const rsi6All = Utils.calcRSISeries(closesAll, 6);
+    const rsi14All = Utils.calcRSISeries(closesAll, 14);
+    // KDJ序列
+    const kdjAll = Utils.calcKDJSeries(closesAll, highsAll, lowsAll, 9);
+    // BOLL序列
+    const bollAll = Utils.calcBOLLSeries(closesAll, 20, 2);
+    // 成交量MA5
+    const volMa5All = Utils.calcMASeries(volumesAll, 5);
+
+    // 显示最近60根
+    const VIEW = 60;
+    const dates = data.slice(-VIEW).map(k => k.date ? k.date.slice(5) : '');
+    const sliceArr = (arr) => arr.slice(-VIEW);
+    const macdBars = sliceArr(macdSeries.macd);
+    const difLine = sliceArr(macdSeries.dif);
+    const deaLine = sliceArr(macdSeries.dea);
+    const rsi6Arr = sliceArr(rsi6All);
+    const rsi14Arr = sliceArr(rsi14All);
+    const kArr = sliceArr(kdjAll.k);
+    const dArr = sliceArr(kdjAll.d);
+    const jArr = sliceArr(kdjAll.j);
+    const bollUpper = sliceArr(bollAll.upper);
+    const bollMid = sliceArr(bollAll.mid);
+    const bollLower = sliceArr(bollAll.lower);
+    const closesView = sliceArr(closesAll);
+    const volumes = sliceArr(volumesAll);
+    const ma5vol = sliceArr(volMa5All);
+
+    // 当前数值（用于信息栏）
+    const lastNum = (arr) => { for (let i = arr.length - 1; i >= 0; i--) if (arr[i] != null && !isNaN(arr[i])) return arr[i]; return null; };
+    const curMacd = lastNum(macdSeries.macd) || 0;
+    const curDif = lastNum(macdSeries.dif) || 0;
+    const curDea = lastNum(macdSeries.dea) || 0;
+    const curRsi6 = lastNum(rsi6All) || 50;
+    const curRsi14 = lastNum(rsi14All) || 50;
+    const curK = lastNum(kdjAll.k) || 50;
+    const curD = lastNum(kdjAll.d) || 50;
+    const curJ = lastNum(kdjAll.j) || 50;
+    const curBollUp = lastNum(bollAll.upper);
+    const curBollMid = lastNum(bollAll.mid);
+    const curBollLow = lastNum(bollAll.lower);
 
     if (this.techChart) this.techChart.dispose();
     this.techChart = echarts.init(chartDom, 'dark');
 
-    // 当前tab
     let currentTab = 'macd';
-    
+
     const renderChart = (tab) => {
       let option = {};
       const baseGrid = { left: '8%', right: '4%', top: '12%', bottom: '15%' };
@@ -4936,7 +5178,15 @@ const App = {
       const baseYAxis = { splitLine: { lineStyle: { color: 'rgba(42,46,62,0.5)' } }, axisLabel: { fontSize: 9, color: '#8a8e9b' } };
 
       if (tab === 'macd') {
-        // MACD: DIF线 + DEA线 + MACD柱
+        // MACD金叉/死叉标记
+        const markPoints = [];
+        for (let i = 1; i < macdBars.length; i++) {
+          const prev = macdBars[i-1], cur = macdBars[i];
+          if (prev != null && cur != null) {
+            if (prev <= 0 && cur > 0) markPoints.push({ xAxis: i, yAxis: cur, value: '金叉', itemStyle: { color: '#ff4757' }, label: { show: true, formatter: '金', color: '#fff', fontSize: 9, position: 'top' } });
+            else if (prev >= 0 && cur < 0) markPoints.push({ xAxis: i, yAxis: cur, value: '死叉', itemStyle: { color: '#00e676' }, label: { show: true, formatter: '死', color: '#fff', fontSize: 9, position: 'bottom' } });
+          }
+        }
         option = {
           backgroundColor: 'transparent',
           grid: baseGrid,
@@ -4944,20 +5194,44 @@ const App = {
           xAxis: baseXAxis,
           yAxis: { ...baseYAxis, scale: true },
           series: [
-            { name: 'MACD', type: 'bar', data: macdBars.slice(-60).map((v, i) => ({ value: v, itemStyle: { color: v >= 0 ? 'rgba(255,71,87,0.7)' : 'rgba(0,230,118,0.7)' } })), barWidth: '60%' },
-            { name: 'DIF', type: 'line', data: difLine.slice(-60), lineStyle: { width: 1.5, color: '#00d4ff' }, symbol: 'none', smooth: true },
-            { name: 'DEA', type: 'line', data: deaLine.slice(-60), lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true }
+            { name: 'MACD', type: 'bar', data: macdBars.map(v => ({ value: v, itemStyle: { color: v == null ? 'transparent' : (v >= 0 ? 'rgba(255,71,87,0.7)' : 'rgba(0,230,118,0.7)') } })), barWidth: '60%', markPoint: { symbol: 'pin', symbolSize: 28, data: markPoints } },
+            { name: 'DIF', type: 'line', data: difLine, lineStyle: { width: 1.5, color: '#00d4ff' }, symbol: 'none', smooth: true },
+            { name: 'DEA', type: 'line', data: deaLine, lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true }
           ]
         };
-        // MACD状态判断
-        const lastMacd = macdBars[macdBars.length - 1] || 0;
-        const prevMacd = macdBars[macdBars.length - 2] || 0;
-        let macdState = '';
-        if (lastMacd > 0 && prevMacd <= 0) macdState = '🔴 MACD金叉，短期偏多';
-        else if (lastMacd < 0 && prevMacd >= 0) macdState = '🟢 MACD死叉，短期偏空';
-        else if (lastMacd > 0) macdState = '🔴 MACD多头区域（DIF在DEA上方）';
-        else macdState = '🟢 MACD空头区域（DIF在DEA下方）';
-        infoEl.textContent = `MACD(12,26,9) | DIF: ${(difLine[difLine.length-1]||0).toFixed(3)} | DEA: ${(deaLine[deaLine.length-1]||0).toFixed(3)} | ${macdState}`;
+        // 状态判断（用上一根与当前根的DIF/DEA）
+        const lastIdx = difLine.length - 1;
+        let state = '';
+        if (difLine[lastIdx] != null && deaLine[lastIdx] != null && difLine[lastIdx-1] != null && deaLine[lastIdx-1] != null) {
+          if (difLine[lastIdx-1] <= deaLine[lastIdx-1] && difLine[lastIdx] > deaLine[lastIdx]) state = '🔴 MACD金叉，短期偏多';
+          else if (difLine[lastIdx-1] >= deaLine[lastIdx-1] && difLine[lastIdx] < deaLine[lastIdx]) state = '🟢 MACD死叉，短期偏空';
+          else if (difLine[lastIdx] > deaLine[lastIdx]) state = '🔴 多头区域（DIF在DEA上方）';
+          else state = '🟢 空头区域（DIF在DEA下方）';
+        } else state = curDif > curDea ? '🔴 多头区域' : '🟢 空头区域';
+        infoEl.textContent = `MACD(12,26,9) | DIF: ${curDif.toFixed(3)} | DEA: ${curDea.toFixed(3)} | MACD: ${curMacd.toFixed(3)} | ${state}`;
+      } else if (tab === 'kdj') {
+        option = {
+          backgroundColor: 'transparent',
+          grid: baseGrid,
+          tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, backgroundColor: 'rgba(26,31,46,0.9)', borderColor: '#00d4ff', textStyle: { color: '#fff', fontSize: 11 } },
+          xAxis: baseXAxis,
+          yAxis: { ...baseYAxis, min: -10, max: 110 },
+          series: [
+            { name: 'K', type: 'line', data: kArr, lineStyle: { width: 1.5, color: '#00d4ff' }, symbol: 'none', smooth: true },
+            { name: 'D', type: 'line', data: dArr, lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true },
+            { name: 'J', type: 'line', data: jArr, lineStyle: { width: 1.2, color: '#b388ff', type: 'dashed' }, symbol: 'none', smooth: true },
+            { name: '超买', type: 'line', data: [], markLine: { silent: true, lineStyle: { color: 'rgba(255,71,87,0.5)', type: 'dashed' }, data: [{ yAxis: 80 }], label: { formatter: '超买80', color: '#ff6b81', fontSize: 9 } } },
+            { name: '超卖', type: 'line', data: [], markLine: { silent: true, lineStyle: { color: 'rgba(0,230,118,0.5)', type: 'dashed' }, data: [{ yAxis: 20 }], label: { formatter: '超卖20', color: '#00e676', fontSize: 9 } } }
+          ]
+        };
+        let state = '';
+        if (curJ >= 100) state = '⚠️ J值超买(≥100)，短线过热警惕回调';
+        else if (curK >= 80 && curD >= 80) state = '🔴 K/D高位超买区，注意风险';
+        else if (curJ <= 0) state = '⚠️ J值超卖(≤0)，存在反弹可能但需确认';
+        else if (curK <= 20 && curD <= 20) state = '🟢 K/D低位超卖区，关注金叉信号';
+        else if (curK > curD) state = '🔴 K在D上方，短线偏多';
+        else state = '🟢 K在D下方，短线偏空';
+        infoEl.textContent = `KDJ(9,3,3) | K: ${curK.toFixed(1)} | D: ${curD.toFixed(1)} | J: ${curJ.toFixed(1)} | ${state}`;
       } else if (tab === 'rsi') {
         option = {
           backgroundColor: 'transparent',
@@ -4972,25 +5246,41 @@ const App = {
             { name: '超卖线', type: 'line', markLine: { silent: true, lineStyle: { color: 'rgba(0,230,118,0.5)', type: 'dashed' }, data: [{ yAxis: 30 }], label: { formatter: '超卖30', color: '#00e676', fontSize: 9 } }, data: [] }
           ]
         };
-        const lastRsi = rsi14Arr.filter(v => v !== null).pop() || 50;
         let rsiState = '';
-        if (lastRsi >= 80) rsiState = '⚠️ 极度超买，回调风险极高';
-        else if (lastRsi >= 70) rsiState = '🔴 超买区域，注意回调风险';
-        else if (lastRsi <= 20) rsiState = '⚠️ 极度超卖，可能存在反弹机会';
-        else if (lastRsi <= 30) rsiState = '🟢 超卖区域，关注反弹信号';
+        if (curRsi14 >= 80) rsiState = '⚠️ 极度超买，回调风险极高';
+        else if (curRsi14 >= 70) rsiState = '🔴 超买区域，注意回调风险';
+        else if (curRsi14 <= 20) rsiState = '⚠️ 极度超卖，可能存在反弹机会';
+        else if (curRsi14 <= 30) rsiState = '🟢 超卖区域，关注反弹信号';
         else rsiState = '⚖️ RSI中性区域';
-        infoEl.textContent = `RSI(6)≈${rsi6.toFixed(1)} | RSI(14)≈${rsi14.toFixed(1)} | ${rsiState}`;
+        infoEl.textContent = `RSI(6)≈${curRsi6.toFixed(1)} | RSI(14)≈${curRsi14.toFixed(1)} | ${rsiState}`;
+      } else if (tab === 'boll') {
+        option = {
+          backgroundColor: 'transparent',
+          grid: baseGrid,
+          tooltip: { trigger: 'axis', axisPointer: { type: 'cross' }, backgroundColor: 'rgba(26,31,46,0.9)', borderColor: '#00d4ff', textStyle: { color: '#fff', fontSize: 11 } },
+          xAxis: baseXAxis,
+          yAxis: { ...baseYAxis, scale: true },
+          series: [
+            { name: '收盘价', type: 'line', data: closesView, lineStyle: { width: 1.5, color: '#fff' }, symbol: 'none', smooth: false },
+            { name: 'MID', type: 'line', data: bollMid, lineStyle: { width: 1.2, color: '#ffd54f' }, symbol: 'none', smooth: true },
+            { name: 'UPPER', type: 'line', data: bollUpper, lineStyle: { width: 1.0, color: '#b388ff' }, symbol: 'none', smooth: true, areaStyle: { color: 'rgba(179,136,255,0.06)', origin: 'start' } },
+            { name: 'LOWER', type: 'line', data: bollLower, lineStyle: { width: 1.0, color: '#00d4ff' }, symbol: 'none', smooth: true }
+          ]
+        };
+        const lastClose = closesView[closesView.length - 1];
+        let bollState = '';
+        if (curBollUp != null && curBollLow != null && curBollUp > curBollLow) {
+          const pct = (lastClose - curBollLow) / (curBollUp - curBollLow) * 100;
+          const width = ((curBollUp - curBollLow) / curBollMid * 100).toFixed(1);
+          if (lastClose >= curBollUp) bollState = `⚠️ 突破上轨，超强势但警惕回调 | 带宽${width}%`;
+          else if (pct > 70) bollState = `🔴 上轨附近运行，偏强但有压力 | 带宽${width}%`;
+          else if (lastClose <= curBollLow) bollState = `⚠️ 跌破下轨，超弱势但可能反弹 | 带宽${width}%`;
+          else if (pct < 30) bollState = `🟢 下轨附近运行，偏弱关注支撑 | 带宽${width}%`;
+          else bollState = `⚖️ 中轨附近震荡 | 带宽${width}%`;
+        } else bollState = '数据不足';
+        infoEl.textContent = `BOLL(20,2) | UP: ${curBollUp!=null?curBollUp.toFixed(2):'--'} | MID: ${curBollMid!=null?curBollMid.toFixed(2):'--'} | LOW: ${curBollLow!=null?curBollLow.toFixed(2):'--'} | ${bollState}`;
       } else if (tab === 'vol') {
-        // 量能图：成交量柱状图 + 5日均量线
-        const volColors = data.map(k => k.close >= k.open ? 'rgba(255,71,87,0.6)' : 'rgba(0,230,118,0.6)');
-        const ma5vol = [];
-        for (let i = 0; i < volumes.length; i++) {
-          if (i >= 4) {
-            let sum = 0;
-            for (let j = i-4; j <= i; j++) sum += volumes[j];
-            ma5vol.push(sum / 5);
-          } else ma5vol.push(null);
-        }
+        const volColors = data.slice(-VIEW).map(k => k.close >= k.open ? 'rgba(255,71,87,0.6)' : 'rgba(0,230,118,0.6)');
         option = {
           backgroundColor: 'transparent',
           grid: baseGrid,
@@ -5002,17 +5292,18 @@ const App = {
             { name: 'MA5均量', type: 'line', data: ma5vol, lineStyle: { width: 1.5, color: '#ffa500' }, symbol: 'none', smooth: true }
           ]
         };
-        const avgVol = volumes.slice(-5).reduce((a,b)=>a+b,0) / 5;
-        const prevAvgVol = volumes.slice(-10, -5).reduce((a,b)=>a+b,0) / 5;
-        const volChange = prevAvgVol > 0 ? ((avgVol - prevAvgVol) / prevAvgVol * 100).toFixed(1) : 0;
+        const validVol = volumes.filter(v => v != null);
+        const avgVol = validVol.slice(-5).reduce((a,b)=>a+b,0) / Math.min(5, validVol.slice(-5).length || 1);
+        const prev = validVol.slice(-10, -5);
+        const prevAvgVol = prev.length > 0 ? prev.reduce((a,b)=>a+b,0) / prev.length : avgVol;
+        const volChange = prevAvgVol > 0 ? ((avgVol - prevAvgVol) / prevAvgVol * 100) : 0;
         const volState = volChange > 30 ? '🔥 显著放量' : volChange > 10 ? '📈 温和放量' : volChange < -30 ? '📉 明显缩量' : volChange < -10 ? '⬇️ 温和缩量' : '⚖️ 量能平稳';
-        infoEl.textContent = `近5日均量: ${(avgVol/10000).toFixed(0)}万手 | 较前5日: ${volChange > 0 ? '+' : ''}${volChange}% | ${volState}`;
+        infoEl.textContent = `近5日均量: ${(avgVol/10000).toFixed(0)}万手 | 较前5日: ${volChange > 0 ? '+' : ''}${volChange.toFixed(1)}% | ${volState}`;
       }
       this.techChart.setOption(option, true);
     };
 
-    // 初始渲染MACD
-    renderChart('macd');
+    renderChart(currentTab);
 
     // Tab切换事件
     document.querySelectorAll('.tech-tab').forEach(btn => {

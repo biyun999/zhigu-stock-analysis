@@ -148,6 +148,25 @@
         <div class="stock-meta" id="stockMeta"></div>
       </section>
 
+      <!-- K线图 -->
+      <section class="card" id="klineCard" style="display:none">
+        <div class="card-title">📉 K线走势</div>
+        <div class="kline-toolbar">
+          <div class="kline-periods" id="klinePeriods">
+            <button class="kline-period active" data-count="60">日K</button>
+            <button class="kline-period" data-count="120">120日</button>
+            <button class="kline-period" data-count="250">年K</button>
+          </div>
+          <div class="kline-indicators" id="klineIndicators">
+            <button class="kline-ind active" data-ind="ma">MA</button>
+            <button class="kline-ind" data-ind="boll">BOLL</button>
+            <button class="kline-ind" data-ind="none">关闭</button>
+          </div>
+        </div>
+        <div id="klineChart" style="width:100%;height:340px"></div>
+        <div id="klineLegend" class="kline-legend"></div>
+      </section>
+
       <!-- 操作分（操作建议+主力成本摘要） -->
       <section class="card" id="conclusionCard" style="display:none">
         <div class="card-title">🎯 操作分</div>
@@ -174,10 +193,12 @@
       <!-- 技术指标可视化 -->
       <section class="card" id="techChartCard" style="display:none">
         <div class="card-title">📈 技术指标</div>
-        <div class="tech-chart-tabs" style="display:flex;gap:8px;margin-bottom:12px">
-          <button class="tech-tab active" data-tab="macd" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(0,212,255,0.3);background:rgba(0,212,255,0.15);color:#00d4ff;font-size:12px;cursor:pointer">MACD</button>
-          <button class="tech-tab" data-tab="rsi" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">RSI</button>
-          <button class="tech-tab" data-tab="vol" style="flex:1;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">量能</button>
+        <div class="tech-chart-tabs" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="tech-tab active" data-tab="macd" style="flex:1;min-width:60px;padding:6px;border-radius:6px;border:1px solid rgba(0,212,255,0.3);background:rgba(0,212,255,0.15);color:#00d4ff;font-size:12px;cursor:pointer">MACD</button>
+          <button class="tech-tab" data-tab="kdj" style="flex:1;min-width:60px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">KDJ</button>
+          <button class="tech-tab" data-tab="rsi" style="flex:1;min-width:60px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">RSI</button>
+          <button class="tech-tab" data-tab="boll" style="flex:1;min-width:60px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">BOLL</button>
+          <button class="tech-tab" data-tab="vol" style="flex:1;min-width:60px;padding:6px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);background:rgba(255,255,255,0.05);color:#8a8e9b;font-size:12px;cursor:pointer">量能</button>
         </div>
         <div id="techChartContent" style="width:100%;height:220px"></div>
         <div id="techChartInfo" style="font-size:11px;color:#8a8e9b;margin-top:8px;text-align:center"></div>

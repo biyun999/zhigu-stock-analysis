@@ -2754,3 +2754,49 @@ body {
   font-size: 13px;
   line-height: 1.8;
 }
+
+/* ===== K线图工具栏 ===== */
+.kline-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.kline-periods, .kline-indicators {
+  display: inline-flex;
+  gap: 4px;
+  background: rgba(255,255,255,0.03);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.kline-period, .kline-ind {
+  padding: 4px 10px;
+  font-size: 11px;
+  border: none;
+  background: transparent;
+  color: #8a8e9b;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.kline-period:active, .kline-ind:active { transform: scale(0.95); }
+.kline-period.active, .kline-ind.active {
+  background: rgba(0,212,255,0.15);
+  color: #00d4ff;
+  font-weight: 600;
+}
+.kline-legend {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #8a8e9b;
+  text-align: center;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  letter-spacing: 0.2px;
+}
