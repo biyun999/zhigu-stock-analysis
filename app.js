@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.1 - A股智能分析系统
+ * 智股分析 v3.3 - A股智能分析系统（ECharts本地化+搜索双源+离线缓存）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -27,6 +27,8 @@ const CONFIG = {
   TENCENT_KLINE: 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get',
   // 东方财富搜索API
   EM_SEARCH: 'https://searchapi.eastmoney.com/api/suggest/get',
+  // 腾讯智能搜索API（备用，JSONP方式返回v_hint变量）
+  TENCENT_SEARCH: 'https://smartbox.gtimg.cn/s3/',
   // 东方财富资金流向API（多通道容灾，按优先级排列）
   EM_CAPITAL_CHANNELS: [
     'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
@@ -1354,6 +1356,34 @@ const DataAPI = {
     this._cache[key] = { ts: Date.now(), data };
   },
 
+  /** JSONP请求（用于无CORS头的API，如腾讯smartbox） */
+  _jsonp(url, globalVar, timeout) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('JSONP timeout'));
+      }, timeout || 8000);
+      function cleanup() {
+        clearTimeout(timer);
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+      script.onload = () => {
+        try {
+          const val = window[globalVar];
+          cleanup();
+          resolve(val || '');
+        } catch (e) {
+          cleanup();
+          reject(e);
+        }
+      };
+      script.onerror = () => { cleanup(); reject(new Error('JSONP load error')); };
+      script.src = url;
+      document.head.appendChild(script);
+    });
+  },
+
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
@@ -1496,28 +1526,26 @@ const DataAPI = {
     }
   },
 
-  /** 东方财富搜索股票 - 支持全类型股票 */
+  /** 搜索股票 - 东方财富主源 + 腾讯smartbox备用源，支持全类型股票 */
   async searchStock(keyword) {
+    // 主源：东方财富
     try {
       const url = `${CONFIG.EM_SEARCH}?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20`;
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
-        return data.QuotationCodeTable.Data
-          .filter(item => /^\d{6}$/.test(item.Code)) // 只保留6位A股代码
+        const results = data.QuotationCodeTable.Data
+          .filter(item => /^\d{6}$/.test(item.Code))
           .map(item => {
             const code = item.Code;
             let prefix;
-            // 优先用 MktNum 判断交易所（最可靠）
             const mkt = String(item.MktNum);
             if (mkt === '1') {
               prefix = 'sh';
             } else if (mkt === '0') {
-              // MktNum=0 可能是深市也可能是北交所，用代码前缀区分
               if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
               else prefix = 'sz';
             } else {
-              // 兜底：按代码前缀判断
               if (code.startsWith('6') || code.startsWith('5') || code.startsWith('11') || code.startsWith('9')) prefix = 'sh';
               else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
               else prefix = 'sz';
@@ -1530,12 +1558,48 @@ const DataAPI = {
               fullCode: prefix + code
             };
           });
+        if (results.length > 0) return results;
       }
-      return [];
     } catch (e) {
-      console.error('searchStock error:', e);
-      return [];
+      console.warn('东方财富搜索失败，尝试腾讯备用源:', e.message);
     }
+    // 备用源：腾讯smartbox（JSONP方式）
+    try {
+      const url = `${CONFIG.TENCENT_SEARCH}?t=all&q=${encodeURIComponent(keyword)}`;
+      const raw = await this._jsonp(url, 'v_hint', 6000);
+      // 格式: v_hint="sh~600519~贵州茅台~gzmt~GP-A^sz~000858~五粮液~wly~GP-A^..."
+      if (raw && typeof raw === 'string') {
+        return raw.split('^').map(line => {
+          const parts = line.split('~');
+          if (parts.length < 3) return null;
+          const market = parts[0]; // sh/sz/bj
+          const code = parts[1];
+          const name = parts[2];
+          if (!/^\d{6}$/.test(code)) return null;
+          // 腾讯市场前缀标准化
+          let prefix = market;
+          if (market === 'sh' || market === 'sz' || market === 'bj') {
+            // ok
+          } else if (code.startsWith('6') || code.startsWith('5') || code.startsWith('11')) {
+            prefix = 'sh';
+          } else if (code.startsWith('8') || code.startsWith('4')) {
+            prefix = 'bj';
+          } else {
+            prefix = 'sz';
+          }
+          return {
+            name: name || code,
+            code: code,
+            market: prefix,
+            fullName: `${name || code}(${code})`,
+            fullCode: prefix + code
+          };
+        }).filter(Boolean);
+      }
+    } catch (e2) {
+      console.error('腾讯搜索备用源也失败:', e2.message);
+    }
+    return [];
   },
 
   /** 获取全市场股票排行（按成交额排序，取前N只） */
@@ -5935,9 +5999,50 @@ const Auth = {
 };
 
 // ============================================================
+// 离线/网络状态检测
+// ============================================================
+const NetworkStatus = {
+  banner: null,
+  init() {
+    this.banner = document.getElementById('offlineBanner');
+    window.addEventListener('online', () => this.update(true));
+    window.addEventListener('offline', () => this.update(false));
+    this.update(navigator.onLine);
+  },
+  update(isOnline) {
+    if (!this.banner) return;
+    if (!isOnline) {
+      this.banner.textContent = '⚠️ 当前网络不可用，显示缓存数据（行情可能延迟）';
+      this.banner.style.display = 'block';
+      document.body.style.paddingTop = '40px';
+    } else {
+      this.banner.style.display = 'none';
+      document.body.style.paddingTop = '';
+    }
+  },
+  /** 显示数据过期提示（SW返回了stale缓存） */
+  showStale(age) {
+    if (!this.banner || !navigator.onLine) return;
+    const mins = Math.round(age / 60000);
+    if (mins < 1) return;
+    this.banner.textContent = `📡 数据已过期 ${mins} 分钟，正在刷新…`;
+    this.banner.style.display = 'block';
+    document.body.style.paddingTop = '40px';
+    setTimeout(() => {
+      if (navigator.onLine) {
+        this.banner.style.display = 'none';
+        document.body.style.paddingTop = '';
+      }
+    }, 3000);
+  }
+};
+
+// ============================================================
 // 应用启动（带登录检查）
 // ============================================================
 document.addEventListener('DOMContentLoaded', () => {
+  // 初始化网络状态检测
+  NetworkStatus.init();
   // 先初始化登录检查
   Auth.init();
   
