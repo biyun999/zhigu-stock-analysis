@@ -131,6 +131,19 @@
         <div id="analysisSearchResults" class="search-results"></div>
       </section>
 
+      <!-- 次日上涨概率 TOP20（盘后扫描+隔日核实） -->
+      <section class="card" id="nextDayCard">
+        <div class="card-title">🎯 次日上涨概率 TOP20</div>
+        <div class="score-intro">资金面（主力净流入/放量）35% · 趋势技术（MA多头/MACD/KDJ/RSI）35% · 量价配合（量比/换手/位置）30%，盘后扫描全市场，仅作概率参考不预测涨幅，附逐股下跌风险</div>
+        <div id="nextDayBody">
+          <div class="loading-pulse">点击下方按钮，盘后扫描全市场并生成次日上涨概率排名（建议收盘后16:00后使用）</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button onclick="NextDayPrediction.scan()" class="btn-primary" style="flex:1">🔍 扫描生成排名</button>
+          <button onclick="NextDayPrediction.verifyAll()" class="btn-primary" style="flex:1;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">✅ 核实昨日排名</button>
+        </div>
+      </section>
+
       <!-- 股票概要 -->
       <section class="card" id="stockSummary" style="display:none">
         <div class="stock-header">
@@ -373,7 +386,7 @@
       <section class="card about-card">
         <div class="about-logo">
           <div class="about-icon">智股</div>
-          <h2>智股分析 v3.4</h2>
+          <h2>智股分析 v3.5</h2>
           <p class="about-sub">A股七维度智能分析系统</p>
         </div>
         <div class="about-features">
