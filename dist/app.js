@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.4 - A股智能分析系统（ECharts本地化+搜索双源+离线缓存）
+ * 智股分析 v3.5 - A股智能分析系统（次日上涨概率TOP20+隔日核实）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -1348,7 +1348,9 @@ const DataAPI = {
     kline: 60000,      // K线60秒
     marketRanking: 30000, // 排行30秒
     capitalFlow: 30000,   // 资金流向30秒
-    news: 120000      // 新闻120秒
+    capitalFlowStock: 120000, // 个股资金流向2分钟
+    news: 120000,     // 新闻120秒
+    topMarketStocks: 300000 // 全市场活跃股5分钟（次日概率扫描用）
   },
   _cacheGet(key, type) {
     const c = this._cache[key];
@@ -1503,24 +1505,32 @@ const DataAPI = {
         }
       }
 
-      // 北交所或其他股票腾讯无数据时，用东方财富K线备用
+      // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
       if (code.startsWith('bj') || code.startsWith('sh') || code.startsWith('sz')) {
         const emCode = code.substring(2);
         let market = 1; // 沪市
         if (code.startsWith('sz')) market = 0;
         if (code.startsWith('bj')) market = 0;
         const secid = market + '.' + emCode;
-        const emUrl = `https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
-        const emResp = await fetch(emUrl);
-        const emData = await emResp.json();
-        if (emData && emData.data && emData.data.klines) {
-          return emData.data.klines.map(line => {
-            const f = line.split(',');
-            return {
-              date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
-              volume: +f[5], amount: +f[6]
-            };
-          });
+        const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
+        for (const dom of emDomains) {
+          try {
+            const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 8000);
+            const emResp = await fetch(emUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+            const emData = await emResp.json();
+            if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
+              return emData.data.klines.map(line => {
+                const f = line.split(',');
+                return {
+                  date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
+                  volume: +f[5], amount: +f[6]
+                };
+              });
+            }
+          } catch (e2) { continue; } // 该通道失败，切下一通道
         }
       }
 
@@ -1885,10 +1895,19 @@ const DataAPI = {
     if (cached) return cached;
     try {
       // fs: 沪深A股（主板+创业板+科创板+北交所），双域名容灾
-      const queryStr = `fid=f6&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
-      const json = await this._fetchEMClist(queryStr);
-      if (!json) return [];
-      const result = json.data.diff.map(item => {
+      // clist接口单页最多返回100条，topN>100时分页拉取合并（覆盖中小盘活跃股）
+      const pageSize = 100;
+      const pages = Math.max(1, Math.ceil(topN / pageSize));
+      let merged = [];
+      for (let pn = 1; pn <= pages; pn++) {
+        const queryStr = `fid=f6&po=1&pz=${pageSize}&pn=${pn}&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
+        const json = await this._fetchEMClist(queryStr);
+        if (!json || !json.data || !Array.isArray(json.data.diff)) break;
+        merged = merged.concat(json.data.diff);
+        if (json.data.diff.length < pageSize) break; // 末页
+      }
+      if (merged.length === 0) return [];
+      const result = merged.map(item => {
         const rawCode = String(item.f12 || '');
         const price = parseFloat(item.f2);
         if (!rawCode || !(price > 0)) return null;
@@ -1910,7 +1929,7 @@ const DataAPI = {
           pb: parseFloat(item.f23) || 0,
           marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
         };
-      }).filter(Boolean);
+      }).filter(Boolean).slice(0, topN);
       this._cacheSet(cacheKey, 'topMarketStocks', result);
       return result;
     } catch (e) {
@@ -3466,6 +3485,384 @@ const Watchlist = {
 };
 
 // ============================================================
+// 11.5 NextDayPrediction - 次日上涨概率TOP20（盘后扫描+隔日核实）
+// ============================================================
+/**
+ * 模型说明：
+ * - 资金面35分：主力净流入占比/规模 + 放量程度（当日，东财clist实时字段）
+ * - 趋势技术35分：MA多头/MACD/KDJ/RSI/BOLL位置（120日K线计算）
+ * - 量价配合30分：换手活跃度 + 涨幅强度 + 收盘位置 + 20日超买超卖 + 回踩均线
+ * 只标注概率等级，不预测涨幅；每只附2+条专属下跌风险。
+ */
+const NextDayPrediction = {
+  STORAGE_KEY: 'zhigu_nextday_snapshots',
+  MAX_SNAPSHOTS: 30,
+  scanning: false,
+
+  // ---------- 存储 ----------
+  _loadSnapshots() {
+    try { return JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || []; }
+    catch (e) { return []; }
+  },
+  _saveSnapshots(list) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list.slice(0, this.MAX_SNAPSHOTS))); }
+    catch (e) { console.warn('快照保存失败（存储空间不足）', e); }
+  },
+  _todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  },
+  _boardTag(code) {
+    const raw = code.replace(/^(sh|sz|bj)/, '');
+    if (code.startsWith('bj') || raw.startsWith('8') || raw.startsWith('4') || raw.startsWith('92')) return '北交所';
+    if (raw.startsWith('688')) return '科创板';
+    if (raw.startsWith('30')) return '创业板';
+    return '主板';
+  },
+
+  // ---------- 入口：扫描 ----------
+  async scan() {
+    if (this.scanning) return;
+    this.scanning = true;
+    const body = document.getElementById('nextDayBody');
+    const setStatus = (t) => { body.innerHTML = '<div class="loading-pulse">' + t + '</div>'; };
+
+    try {
+      setStatus('第1步/4：拉取全市场成交额前200只活跃股...');
+      const stocks = await DataAPI.fetchTopMarketStocks(200);
+      if (!stocks || stocks.length === 0) {
+        body.innerHTML = '<div class="empty-tip">全市场数据获取失败（网络问题或数据源暂时不可用），请稍后重试。</div>';
+        return;
+      }
+
+      // 预筛：资金面+当日量价（clist字段直接算）
+      setStatus('第2步/4：资金面与量价初筛（' + stocks.length + '只）...');
+      const scored = [];
+      for (const s of stocks) {
+        const pre = this._preScore(s);
+        if (pre === null) continue; // 排除：ST/一字板/停牌/主力大幅流出
+        scored.push(Object.assign({}, s, { preScore: pre.score, risks: pre.risks, mainPct: pre.mainPct }));
+      }
+      // 取预筛前60名进入K线技术打分
+      scored.sort((a, b) => b.preScore - a.preScore);
+      const candidates = scored.slice(0, 60);
+
+      setStatus('第3步/4：逐只计算趋势技术因子（K线，共' + candidates.length + '只）...');
+      const batchSize = 8;
+      for (let i = 0; i < candidates.length; i += batchSize) {
+        const batch = candidates.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (s) => {
+          try {
+            const klines = await DataAPI.fetchKline(s.code, 120);
+            const tech = this._techScore(klines);
+            s.techScore = tech.score;
+            s.techRisks = tech.risks;
+            s.klineOk = klines && klines.length >= 30;
+          } catch (e) {
+            s.techScore = 0; s.techRisks = []; s.klineOk = false;
+          }
+        }));
+        setStatus('第3步/4：技术因子计算中 ' + Math.min(i + batchSize, candidates.length) + '/' + candidates.length);
+      }
+
+      setStatus('第4步/4：综合排名并保存快照...');
+      const finalList = candidates
+        .filter(s => s.klineOk)
+        .map(s => {
+          const total = s.preScore + (s.techScore || 0);
+          const risks = this._mergeRisks(s.risks, s.techRisks, s);
+          return {
+            code: s.code, name: s.name, board: this._boardTag(s.code),
+            price: s.price, changePct: s.changePct, turnover: s.turnover,
+            mainFlow: s.mainFlow, mainPct: s.mainPct,
+            score: total, preScore: s.preScore, techScore: s.techScore || 0,
+            level: this._level(total),
+            risks: risks,
+            verified: null, nextChangePct: null
+          };
+        })
+        .filter(x => x.score >= 45)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20);
+
+      if (finalList.length === 0) {
+        body.innerHTML = '<div class="empty-tip">今日全市场无符合条件的高概率标的（资金面与技术面共振个股不足），这本身是偏弱信号，建议控制仓位观望。</div>';
+        return;
+      }
+
+      // 保存快照（同日重复扫描则覆盖当日快照）
+      const snapshot = {
+        date: this._todayStr(),
+        ts: Date.now(),
+        stocks: finalList
+      };
+      const snaps = this._loadSnapshots().filter(x => x.date !== snapshot.date);
+      snaps.unshift(snapshot);
+      this._saveSnapshots(snaps);
+
+      this._renderList(snapshot);
+      Utils.toast ? Utils.toast('已保存 ' + this._todayStr() + ' 排名，次日可点「核实昨日排名」验证') : null;
+    } catch (e) {
+      console.error('NextDayPrediction.scan error:', e);
+      body.innerHTML = '<div class="empty-tip">扫描失败：' + (e.message || e) + '，请稍后重试。</div>';
+    } finally {
+      this.scanning = false;
+    }
+  },
+
+  // ---------- 预筛打分（当日资金面+量价，满分40） ----------
+  _preScore(s) {
+    const risks = [];
+    if (!s.name || s.name.includes('ST') || s.name.includes('退')) return null;
+    if (!(s.price > 0)) return null;
+    // 一字涨停/一字跌停：振幅<0.5%且涨跌停，无上车机会或风险大，排除
+    const amp = s.amplitude || 0;
+    if (amp < 0.5 && Math.abs(s.changePct) > 9) return null;
+
+    let score = 0;
+    const amount = s.amount || 0;           // 成交额（元）
+    const mainFlow = s.mainFlow || 0;       // 主力净流入（元）
+    const mainPct = amount > 0 ? mainFlow / amount * 100 : 0;
+
+    // A1 主力净占比（15分）
+    if (mainPct >= 15) score += 15;
+    else if (mainPct >= 10) score += 12;
+    else if (mainPct >= 6) score += 9;
+    else if (mainPct >= 3) score += 5;
+    else if (mainPct >= 0) score += 2;
+    else { score += 0; risks.push('主力资金今日净流出，占比' + mainPct.toFixed(1) + '%，机构在撤而非在进'); }
+    if (mainPct < -5) return null; // 主力大幅流出直接淘汰
+
+    // A2 主力净流入规模（10分）
+    if (mainFlow >= 3e8) score += 10;
+    else if (mainFlow >= 1.5e8) score += 8;
+    else if (mainFlow >= 7e7) score += 6;
+    else if (mainFlow >= 3e7) score += 4;
+    else if (mainFlow >= 1e7) score += 2;
+
+    // A3 涨幅强度（8分）——温和上涨最优，涨停过热减分
+    const cp = s.changePct || 0;
+    if (cp >= 2 && cp < 6) score += 8;
+    else if (cp >= 1 && cp < 2) score += 6;
+    else if (cp >= 6 && cp < 9.5) { score += 4; risks.push('今日涨幅' + cp.toFixed(1) + '%偏大，短线获利盘堆积，次日高开易遭兑现'); }
+    else if (cp >= 9.5) { score += 2; risks.push('今日涨停，次日溢价不确定性高，炸板或低开风险大'); }
+    else if (cp >= 0 && cp < 1) score += 3;
+    else { return null; } // 当日下跌的不进次日上涨候选
+
+    // A4 换手活跃度（7分）
+    const to = s.turnover || 0;
+    if (to >= 3 && to < 10) score += 7;
+    else if (to >= 10 && to < 18) { score += 5; risks.push('换手率' + to.toFixed(1) + '%偏高，筹码松动，分歧加大'); }
+    else if (to >= 18) { score += 3; risks.push('换手率高达' + to.toFixed(1) + '%，疑似游资接力博弈，次日接力资金断档风险'); }
+    else if (to >= 1.5 && to < 3) score += 5;
+    else if (to >= 0.5) score += 2;
+    else risks.push('换手率仅' + to.toFixed(2) + '%，交投清淡，缺乏资金关注');
+
+    return { score, risks, mainPct };
+  },
+
+  // ---------- 技术打分（120日K线，满分60） ----------
+  _techScore(klines) {
+    const risks = [];
+    if (!klines || klines.length < 30) return { score: 0, risks: ['K线数据不足，技术形态无法确认'] };
+    const closes = klines.map(k => k.close);
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
+    const n = closes.length;
+    const last = closes[n - 1];
+    let score = 0;
+
+    // B1 MA均线多头排列（12分）
+    const ma5 = Utils.calcMASeries(closes, 5);
+    const ma10 = Utils.calcMASeries(closes, 10);
+    const ma20 = Utils.calcMASeries(closes, 20);
+    const ma60 = Utils.calcMASeries(closes, 60);
+    const v5 = ma5[n - 1], v10 = ma10[n - 1], v20 = ma20[n - 1], v60 = ma60[n - 1];
+    if (v5 && v10 && v20) {
+      if (v5 > v10 && v10 > v20 && last > v5) score += 7;
+      else if (v5 > v10 && last > v5) score += 5;
+      else if (last > v20) score += 3;
+      else if (last < v20) risks.push('股价收在20日均线下方，中期趋势偏弱');
+      if (v60 && v20 > v60) score += 5;
+      else if (v60 && v20 < v60) risks.push('20日线在60日线下方，中期趋势仍受压制');
+      else score += 2;
+    }
+
+    // B2 MACD（8分）
+    const macd = Utils.calcMACDSeries(closes);
+    const dif = macd.dif[n - 1], dea = macd.dea[n - 1], mBar = macd.macd[n - 1];
+    const difPrev = macd.dif[n - 2], deaPrev = macd.dea[n - 2];
+    if (dif != null && dea != null) {
+      if (dif > dea && dif > 0) score += 5;
+      else if (dif > dea) score += 3;
+      if (difPrev != null && deaPrev != null && difPrev <= deaPrev && dif > dea) score += 3; // 金叉
+      if (mBar < 0 && dif < 0) risks.push('MACD处于零轴下方绿柱区，空头动能未释放完');
+    }
+
+    // B3 KDJ（6分）
+    const kdj = Utils.calcKDJSeries(closes, highs, lows);
+    const k = kdj.k[n - 1], d = kdj.d[n - 1], j = kdj.j[n - 1];
+    if (k != null) {
+      if (k > d && k < 80) score += 4;
+      else if (k > d) score += 2;
+      if (j > 100) risks.push('KDJ的J值' + j.toFixed(0) + '超买，短线技术性回调概率上升');
+      else if (k < 30) score += 2; // 低位金叉潜力
+    }
+
+    // B4 RSI（4分）
+    const rsi6 = Utils.calcRSISeries(closes, 6)[n - 1];
+    const rsi14 = Utils.calcRSISeries(closes, 14)[n - 1];
+    if (rsi6 != null) {
+      if (rsi6 >= 50 && rsi6 < 80) score += 2;
+      if (rsi14 != null && rsi14 >= 45 && rsi14 < 70) score += 2;
+      if (rsi6 >= 85) risks.push('6日RSI达' + rsi6.toFixed(0) + '进入超买区，追高风险大');
+    }
+
+    // B5 BOLL位置（5分）
+    const boll = Utils.calcBOLLSeries(closes);
+    const up = boll.upper[n - 1], mid = boll.mid[n - 1], lowB = boll.lower[n - 1];
+    if (up != null) {
+      if (last > mid && last < up) score += 5;
+      else if (last >= up) { score += 2; risks.push('股价触及布林上轨，短线超涨，回归中轨压力大'); }
+      else if (last < mid && last > lowB) score += 2;
+      else if (last <= lowB) risks.push('股价跌破布林下轨，弱势格局未改');
+    }
+
+    return { score, risks };
+  },
+
+  // ---------- 风险合并（保证≥2条） ----------
+  _mergeRisks(preRisks, techRisks, s) {
+    const all = [];
+    (preRisks || []).forEach(r => { if (!all.includes(r)) all.push(r); });
+    (techRisks || []).forEach(r => { if (!all.includes(r)) all.push(r); });
+    if (all.length < 2) {
+      all.push('大盘系统性风险：若次日指数低开或板块轮动退潮，个股难独善其身');
+      if (all.length < 2) all.push('本排名为短线概率参考，突发利空/业绩/减持公告可能直接改变走势');
+    }
+    return all.slice(0, 4);
+  },
+
+  _level(score) {
+    if (score >= 80) return { label: '高概率', color: '#ff5252' };
+    if (score >= 65) return { label: '较高概率', color: '#ff9800' };
+    if (score >= 50) return { label: '中等概率', color: '#00d4ff' };
+    return { label: '概率偏低', color: '#8a8e9b' };
+  },
+
+  // ---------- 渲染 ----------
+  _renderList(snapshot) {
+    const body = document.getElementById('nextDayBody');
+    const verifyBadge = snapshot.verified != null
+      ? (snapshot.verified
+        ? '<span style="color:#00e676;font-size:12px">✅ 已核实：' + snapshot.hitCount + '/' + snapshot.stocks.length + ' 只次日收涨（胜率' + snapshot.winRate + '%）</span>'
+        : '<span style="color:#8a8e9b;font-size:12px">⏳ 次日尚未开盘/数据未更新，开盘后可核实</span>')
+      : '';
+    let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">📅 数据基准日：' + snapshot.date + '（盘后） · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
+    html += '<div class="hot-stocks-list">';
+    snapshot.stocks.forEach((s, idx) => {
+      const rankCls = idx < 3 ? 'rank-top3' : 'rank-normal';
+      const chgCls = s.verified === true ? (s.nextChangePct >= 0 ? 'up' : 'down') : '';
+      const chgColor = s.verified === true ? (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') : (s.changePct >= 0 ? '#00e676' : '#ff5252');
+      const verify = s.verified === true
+        ? '<div style="font-size:11px;color:' + (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') + '">次日实际：' + (s.nextChangePct >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>'
+        : '';
+      html += '<div class="hot-stock-item st-card" onclick="App.analyzeStock(\'' + s.code + '\')">'
+        + '<div class="rank ' + rankCls + '">' + (idx + 1) + '</div>'
+        + '<div class="hs-info">'
+        +   '<div class="hs-name">' + s.name + ' <span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + ']</span></div>'
+        +   '<div class="hs-code">' + s.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
+        +   verify
+        + '</div>'
+        + '<div class="hs-price">'
+        +   '<div class="hs-price-val" style="color:' + chgColor + '">' + (s.changePct >= 0 ? '+' : '') + s.changePct.toFixed(2) + '%</div>'
+        +   '<div class="hs-change-val" style="color:' + s.level.color + ';font-weight:600">' + s.level.label + '</div>'
+        + '</div>'
+        + '<div class="hs-score">'
+        +   '<div class="hs-score-val" style="color:' + s.level.color + '">' + s.score + '</div>'
+        +   '<div class="hs-score-label">概率分</div>'
+        + '</div>'
+        + '</div>';
+      // 风险提示（展开区）
+      html += '<div style="padding:0 0 10px 38px;font-size:11px;line-height:1.6;color:#ffab91;border-bottom:1px solid var(--border-color)">'
+        + '⚠️ 下跌风险：' + s.risks.slice(0, 2).join('；') + '</div>';
+    });
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">点击个股可进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    body.innerHTML = html;
+  },
+
+  // ---------- 页面加载时渲染最新快照 ----------
+  renderLatest() {
+    const body = document.getElementById('nextDayBody');
+    if (!body) return;
+    const snaps = this._loadSnapshots();
+    if (snaps.length === 0) return; // 保留HTML中的默认提示
+    this._renderList(snaps[0]);
+  },
+
+  // ---------- 隔日核实 ----------
+  async verifyAll() {
+    const snaps = this._loadSnapshots();
+    if (snaps.length === 0) {
+      Utils.toast ? Utils.toast('还没有保存过排名，请先扫描生成') : null;
+      return;
+    }
+    const body = document.getElementById('nextDayBody');
+    body.innerHTML = '<div class="loading-pulse">正在拉取最新行情核实昨日排名...</div>';
+
+    // 找到最近一个未核实且基准日早于今天的快照
+    const today = this._todayStr();
+    let target = snaps.find(x => x.verified !== true && x.date < today);
+    if (!target) {
+      // 全部已核实，展示最新一个
+      this._renderList(snaps[0]);
+      Utils.toast ? Utils.toast('暂无待核实的排名（今日快照需等下一交易日）') : null;
+      return;
+    }
+
+    let hit = 0, resolved = 0;
+    const batchSize = 10;
+    const list = target.stocks;
+    for (let i = 0; i < list.length; i += batchSize) {
+      const batch = list.slice(i, i + batchSize);
+      await Promise.all(batch.map(async (s) => {
+        try {
+          const klines = await DataAPI.fetchKline(s.code, 5);
+          if (klines && klines.length > 0) {
+            const next = klines.find(k => k.date > target.date);
+            if (next) {
+              // 找基准日收盘价
+              const base = klines.filter(k => k.date <= target.date).pop();
+              if (base) {
+                s.nextChangePct = (next.close - base.close) / base.close * 100;
+                s.verified = true;
+                resolved++;
+                if (s.nextChangePct > 0) hit++;
+              }
+            }
+          }
+        } catch (e) { /* 单只失败不影响整体 */ }
+      }));
+    }
+
+    if (resolved === 0) {
+      body.innerHTML = '<div class="empty-tip">次日行情尚未更新（非交易时间或数据延迟），请在交易时段或收盘后再核实。<br><br>最近一次排名基准日：' + target.date + '</div>';
+      return;
+    }
+
+    target.verified = true;
+    target.hitCount = hit;
+    target.resolvedCount = resolved;
+    target.winRate = Math.round(hit / resolved * 100);
+    target.verifyDate = this._todayStr();
+    this._saveSnapshots(snaps);
+    this._renderList(target);
+    Utils.toast ? Utils.toast('核实完成：' + hit + '/' + resolved + ' 只次日收涨，胜率' + target.winRate + '%') : null;
+  }
+};
+
+// ============================================================
 // 12. App - 主入口
 // ============================================================
 const App = {
@@ -3567,6 +3964,9 @@ const App = {
     }
     if (pageName === 'settings') {
       Auth.initSettingsPage();
+    }
+    if (pageName === 'analysis') {
+      NextDayPrediction.renderLatest();
     }
   },
 
