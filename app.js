@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.5 - A股智能分析系统（次日上涨概率TOP20+隔日核实）
+ * 智股分析 v3.6 - A股智能分析系统（次日上涨概率TOP20+隔日核实+自选股批量导入）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -631,8 +631,8 @@ const Utils = {
     if (/^\d{6}$/.test(code)) {
       // 北交所/新三板：8开头、4开头（43/83等）、920开头（北交所新代码段）
       if (code.startsWith('8') || code.startsWith('920') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
-      // 沪市ETF/REITs
-      if (code.startsWith('51') || code.startsWith('508') || code.startsWith('56')) return 'sh' + code;
+      // 沪市ETF/REITs（51/508/56开头，588为科创板ETF、580为科创板权证类）
+      if (code.startsWith('51') || code.startsWith('508') || code.startsWith('56') || code.startsWith('588') || code.startsWith('580')) return 'sh' + code;
       // 深市ETF/可转债
       if (code.startsWith('15') || code.startsWith('12') || code.startsWith('16')) return 'sz' + code;
       // 沪市主板/科创板/可转债（6开头=主板，688/689=科创板，9开头=沪市B股）
@@ -3371,6 +3371,186 @@ const Watchlist = {
       const clickKey = s.key === 'name' ? 'name' : s.key + '_' + s.defaultDir;
       return '<button class="wl-sort-btn' + cls + '" onclick="Watchlist.setSort(\'' + clickKey + '\')">' + s.label + arrow + '</button>';
     }).join('') + '</div>';
+  },
+
+  /** 批量导入：解析粘贴文本，返回 {codes, invalid} */
+  batchParse(text) {
+    if (!text) return { codes: [], invalid: [] };
+    const tokens = text
+      .replace(/[（）()]/g, ' ')   // 去掉括号（港股标注等）
+      .replace(/(?<![\d.])(\d{4,5})[ \t]*[\.\u00b7]?[ \t]*[Hh][Kk](?![A-Za-z])/g, ' hk$1 ')  // 00981.HK / 09880.hk → hk00981（不跨行、数字前须为边界）
+      .split(/[\s,;，；、\n\r\t.。:：]+/)
+      .map(t => t.replace(/[\u200b\ufeff]/g, '').trim())
+      .filter(Boolean);
+    const codes = [];
+    const seen = new Set(this.getList());
+    const invalid = [];
+    let lastNum = '';
+    for (const tk of tokens) {
+      // 港股 hkXXXXX 形式（含上一步转换的）
+      let m = tk.match(/^hk(\d{4,5})$/i);
+      if (m) {
+        const code = 'hk' + m[1].padStart(5, '0');
+        if (!seen.has(code)) { seen.add(code); codes.push(code); }
+        lastNum = '';
+        continue;
+      }
+      // 纯4-5位数字：港股代码（A股/ETF均为6位，不冲突）
+      if (/^\d{4,5}$/.test(tk)) {
+        const code = 'hk' + tk.padStart(5, '0');
+        if (!seen.has(code)) { seen.add(code); codes.push(code); }
+        lastNum = '';
+        continue;
+      }
+      // A股/ETF：6位数字（可带sh/sz/bj前缀）
+      m = tk.match(/^(?:sh|sz|bj)?(\d{6})$/i);
+      if (m) {
+        const code = Utils.normalizeCode(m[1]);
+        if (code && !seen.has(code)) { seen.add(code); codes.push(code); }
+        lastNum = '';
+        continue;
+      }
+      // 名称片段里夹带的6位/5位数字（如"湘电股份：600416"冒号被吃后的情况兜底）
+      m = tk.match(/(\d{6})/);
+      if (m) {
+        const code = Utils.normalizeCode(m[1]);
+        if (code && !seen.has(code)) { seen.add(code); codes.push(code); }
+        lastNum = '';
+        continue;
+      }
+      // 纯中文/英文名称：查内置股票表
+      const name = tk.replace(/^[*ＳＴST]+/, '').trim();
+      if (name && /[\u4e00-\u9fa5a-zA-Z]/.test(tk)) {
+        if (CODE_TO_NAME) {
+          // 精确匹配
+          let hit = Object.entries(CODE_TO_NAME).find(([n]) => n === tk || n === name || n.replace(/^[*ST]+/, '') === name);
+          if (hit && !seen.has(hit[1])) { seen.add(hit[1]); codes.push(hit[1]); lastNum = ''; continue; }
+          // 模糊包含匹配（如"每日互动"匹配"每日互动"）
+          hit = Object.entries(CODE_TO_NAME).find(([n]) => n.includes(name) || name.includes(n.replace(/^[*ST]+/, '')));
+          if (hit && hit[0].length >= 2 && name.length >= 2 && !seen.has(hit[1])) { seen.add(hit[1]); codes.push(hit[1]); lastNum = ''; continue; }
+        }
+        lastNum = tk;
+        continue;
+      }
+      if (tk && !/^\d+$/.test(tk)) invalid.push(tk);
+    }
+    return { codes, invalid };
+  },
+
+  /** 批量导入入库（带行情校验），返回结果对象 */
+  async batchImport(codes) {
+    if (!codes || codes.length === 0) return { added: 0, dup: 0, failed: [], failedNames: [] };
+    const list = this.getList();
+    const existing = new Set(list);
+    const fresh = codes.filter(c => !existing.has(c));
+    const dupCount = codes.length - fresh.length;
+    if (fresh.length === 0) return { added: 0, dup: dupCount, failed: [], failedNames: [] };
+
+    // 行情校验：能拉到行情的才入库（防止无效代码）
+    const quotes = await DataAPI.fetchQuotes(fresh);
+    const okCodes = [];
+    const failed = [];
+    for (const c of fresh) {
+      const q = quotes[c];
+      if (q && (q.price > 0 || (q.name && q.name !== c))) {
+        okCodes.push(c);
+      } else {
+        failed.push(c);
+      }
+    }
+    // 名称映射（行情返回的名字记入 CODE_TO_NAME，方便展示）
+    okCodes.forEach(c => {
+      const q = quotes[c];
+      if (q && q.name) CODE_TO_NAME[c] = q.name;
+      this._saveAddedAt(c);
+    });
+    const merged = list.concat(okCodes);
+    this.save(merged);
+    App.setDirty(true);
+    return {
+      added: okCodes.length,
+      dup: dupCount,
+      failed,
+      failedNames: failed.map(c => (quotes[c] && quotes[c].name) || CODE_TO_NAME[c] || c)
+    };
+  },
+
+  /** 打开批量导入弹窗 */
+  showBatchModal() {
+    let mask = document.getElementById('batchModalMask');
+    if (mask) mask.remove();
+    mask = document.createElement('div');
+    mask.id = 'batchModalMask';
+    mask.className = 'batch-modal-mask';
+    mask.innerHTML =
+      '<div class="batch-modal-box">' +
+        '<div class="batch-modal-title">📥 批量导入自选股</div>' +
+        '<div class="batch-modal-tip">粘贴股票清单（支持「名称：代码」、纯代码、00981.HK 港股、ETF等格式，自动去重识别）：</div>' +
+        '<textarea id="batchImportText" class="batch-modal-textarea" placeholder="例如：\n湘电股份：600416\n中芯国际（港股）：00981.HK\n科创创业50ETF：159783\n也可以直接粘贴整段文字，代码会自动识别"></textarea>' +
+        '<div id="batchImportResult" class="batch-modal-result"></div>' +
+        '<div class="batch-modal-btns">' +
+          '<button class="batch-modal-btn cancel" onclick="Watchlist.closeBatchModal()">取消</button>' +
+          '<button id="batchImportDoBtn" class="batch-modal-btn primary" onclick="Watchlist.doBatchImport()">开始导入</button>' +
+        '</div>' +
+      '</div>';
+    mask.addEventListener('click', (e) => { if (e.target === mask) this.closeBatchModal(); });
+    document.body.appendChild(mask);
+    setTimeout(() => { const ta = document.getElementById('batchImportText'); if (ta) ta.focus(); }, 100);
+  },
+
+  closeBatchModal() {
+    const mask = document.getElementById('batchModalMask');
+    if (mask) mask.remove();
+  },
+
+  /** 执行批量导入（弹窗按钮） */
+  async doBatchImport() {
+    const ta = document.getElementById('batchImportText');
+    const resultEl = document.getElementById('batchImportResult');
+    const btn = document.getElementById('batchImportDoBtn');
+    if (!ta) return;
+    const { codes, invalid } = this.batchParse(ta.value);
+    if (codes.length === 0) {
+      if (resultEl) resultEl.innerHTML = '<span style="color:#ffa500">未识别到有效股票代码，请检查格式（如 600416 或 00981.HK）</span>';
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = '导入中...'; }
+    if (resultEl) resultEl.innerHTML = '<span style="color:#8ab4f8">识别到 ' + codes.length + ' 只，正在校验行情...</span>';
+    const res = await this.batchImport(codes);
+    if (btn) { btn.disabled = false; btn.textContent = '开始导入'; }
+    let html = '<div style="line-height:1.9">';
+    html += '<div style="color:#00c853;font-size:15px">✅ 成功导入 ' + res.added + ' 只</div>';
+    if (res.dup > 0) html += '<div style="color:#8ab4f8">ℹ️ ' + res.dup + ' 只已在自选股中，自动跳过</div>';
+    if (res.failed.length > 0) html += '<div style="color:#ff4757">⚠️ ' + res.failed.length + ' 只校验失败未入库：' + res.failedNames.join('、') + '</div>';
+    if (invalid.length > 0) html += '<div style="color:#999;font-size:12px">未识别片段：' + invalid.slice(0, 5).join('、') + (invalid.length > 5 ? ' 等' : '') + '</div>';
+    html += '</div>';
+    if (resultEl) resultEl.innerHTML = html;
+    Utils.toast('批量导入完成：新增' + res.added + '只');
+    if (res.added > 0) {
+      setTimeout(() => {
+        this.closeBatchModal();
+        if (Navigation.currentPage === 'watchlist') this.render();
+        else App.switchPage('watchlist');
+      }, 1200);
+    }
+  },
+
+  /** URL参数静默导入：?import=sh600416,hk00981,... */
+  async importFromUrl() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const raw = params.get('import');
+      if (!raw) return;
+      const codes = raw.split(',').map(c => Utils.normalizeCode(c.trim())).filter(Boolean);
+      if (codes.length === 0) return;
+      const res = await this.batchImport(codes);
+      if (res.added > 0) {
+        Utils.toast('已自动导入 ' + res.added + ' 只自选股');
+        if (Navigation.currentPage === 'watchlist') this.render();
+      }
+      // 清掉URL参数，避免刷新重复导入
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    } catch (e) { console.warn('[importFromUrl]', e); }
   },
 
   /** 渲染自选股页面 */
