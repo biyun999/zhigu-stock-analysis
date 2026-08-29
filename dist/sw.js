@@ -1,5 +1,5 @@
-// 智股分析 Service Worker - PWA离线缓存 v3.5
-const CACHE_NAME = 'zhigu-v3.5';
+// 智股分析 Service Worker - PWA离线缓存 v3.6
+const CACHE_NAME = 'zhigu-v3.6';
 const STATIC_ASSETS = [
   './',
   './index.html',
