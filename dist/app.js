@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.6 - A股智能分析系统（次日上涨概率TOP20+隔日核实+自选股批量导入）
+ * 智股分析 v3.8 - A股智能分析系统（次日上涨概率TOP20+隔日核实+自选股批量导入）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -552,35 +552,44 @@ const Utils = {
    * f[43]振幅 f[49]涨停价 f[41]跌停价
    */
   parseTencentQuote(text) {
-    const match = text.match(/v_[a-z]{2}\d+="(.+)"/);
-    if (!match) return null;
-    const f = match[1].split('~');
+    const varMatch = text.match(/v_([a-z]{2})(\d+)="(.+)"/);
+    if (!varMatch) return null;
+    const marketPrefix = varMatch[1];
+    const f = varMatch[3].split('~');
     if (f.length < 45) return null;
+    const isHK = marketPrefix === 'hk';
     const price = +f[3];
     const prevClose = +f[4];
     // 计算涨跌额和涨跌幅（作为备用）
     const calcChange = price - prevClose;
     const calcChangePct = prevClose > 0 ? (calcChange / prevClose * 100) : 0;
+    // 港股字段位置与A股不同：f[37]单位为元（A股为万元），f[6]单位为股（A股为手）
+    // 港股PB不在f[46]（该处为英文简称），做数字兜底；换手率f[38]港股为0，用成交量/股本估算兜底
+    const rawAmount = +f[37] || 0;
+    const rawVolume = +f[6] || 0;
+    const numOrZero = v => { const n = +v; return isFinite(n) ? n : 0; };
     return {
       name: f[1],
       code: f[2],
+      isHK: isHK,
       price: price,
       prevClose: prevClose,
       open: +f[5],
-      volume: +f[6], // 手
+      volume: isHK ? rawVolume / 100 : rawVolume, // 统一换算为「手」（港股1手=100股近似，仅用于展示量级）
+      volumeShares: rawVolume,                     // 原始股数（港股）
       buyVol: +f[7] || 0,
       sellVol: +f[8] || 0,
       high: +f[33] || price,
       low: +f[34] || price,
       change: +f[31] || calcChange,
       changePct: +f[32] || calcChangePct,
-      turnover: +f[38] || 0, // 换手率
-      pe: +f[39] || 0, // 市盈率
-      pb: +f[46] || 0, // 市净率
-      amount: (+f[37] || 0), // 成交额（万）
-      marketCap: +f[45] || 0, // 总市值（亿）
-      circCap: +f[44] || 0, // 流通市值（亿）
-      amplitude: +f[43] || (prevClose > 0 ? ((+f[33] - +f[34]) / prevClose * 100) : 0),
+      turnover: numOrZero(f[38]), // 换手率（港股该字段为0）
+      pe: numOrZero(f[39]),       // 市盈率
+      pb: isHK ? numOrZero(f[59]) : numOrZero(f[46]), // 市净率（A股f[46]；港股f[46]为英文简称，PB在f[59]）
+      amount: isHK ? rawAmount / 10000 : rawAmount, // 统一为「万元」
+      marketCap: numOrZero(f[45]), // 总市值（亿）
+      circCap: numOrZero(f[44]),   // 流通市值（亿）
+      amplitude: numOrZero(f[43]) || (prevClose > 0 ? ((+f[33] - +f[34]) / prevClose * 100) : 0),
       time: f[30] || '',
     };
   },
@@ -1489,15 +1498,20 @@ const DataAPI = {
     return q || null;
   },
 
-  /** 获取日K线数据 */
+  /** 获取日K线数据（A股/ETF/北交所/港股全支持，多通道容灾） */
   async fetchKline(code, count = 120) {
     try {
-      // 先尝试腾讯K线API
-      const url = `${CONFIG.TENCENT_KLINE}?param=${code},day,,,${count},qfq`;
+      const isHK = code.startsWith('hk');
+      // 港股腾讯K线接口为 hkfqkline（A股为 fqkline）
+      const klineBase = isHK
+        ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get'
+        : CONFIG.TENCENT_KLINE;
+      const url = `${klineBase}?param=${code},day,,,${count},qfq`;
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.data && data.data[code]) {
-        const kdata = data.data[code].day || data.data[code].qfqday || [];
+        const node = data.data[code];
+        const kdata = node.day || node.qfqday || node.hkday || [];
         if (kdata.length > 0) {
           return kdata.map(k => ({
             date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
@@ -1506,32 +1520,31 @@ const DataAPI = {
       }
 
       // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
-      if (code.startsWith('bj') || code.startsWith('sh') || code.startsWith('sz')) {
-        const emCode = code.substring(2);
-        let market = 1; // 沪市
-        if (code.startsWith('sz')) market = 0;
-        if (code.startsWith('bj')) market = 0;
-        const secid = market + '.' + emCode;
-        const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
-        for (const dom of emDomains) {
-          try {
-            const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 8000);
-            const emResp = await fetch(emUrl, { signal: ctrl.signal });
-            clearTimeout(timer);
-            const emData = await emResp.json();
-            if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
-              return emData.data.klines.map(line => {
-                const f = line.split(',');
-                return {
-                  date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
-                  volume: +f[5], amount: +f[6]
-                };
-              });
-            }
-          } catch (e2) { continue; } // 该通道失败，切下一通道
-        }
+      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
+      const emCode = code.substring(2);
+      let secid;
+      if (isHK) secid = '116.' + emCode;
+      else if (code.startsWith('sh')) secid = '1.' + emCode;
+      else secid = '0.' + emCode; // sz / bj
+      const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
+      for (const dom of emDomains) {
+        try {
+          const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          const emResp = await fetch(emUrl, { signal: ctrl.signal });
+          clearTimeout(timer);
+          const emData = await emResp.json();
+          if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
+            return emData.data.klines.map(line => {
+              const f = line.split(',');
+              return {
+                date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
+                volume: +f[5], amount: +f[6]
+              };
+            });
+          }
+        } catch (e2) { continue; } // 该通道失败，切下一通道
       }
 
       return [];
@@ -1550,12 +1563,22 @@ const DataAPI = {
       const data = await resp.json();
       if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
         const results = data.QuotationCodeTable.Data
-          .filter(item => /^\d{6}$/.test(item.Code))
+          .filter(item => {
+            const c = item.Code || '';
+            // A股/ETF/北交所：6位数字；港股：4-5位数字；美股：1-10位字母
+            return /^\d{5,6}$/.test(c) || /^\d{4}$/.test(c) || /^[A-Za-z.]{1,10}$/.test(c);
+          })
           .map(item => {
             const code = item.Code;
             let prefix;
             const mkt = String(item.MktNum);
-            if (mkt === '1') {
+            const jys = String(item.JYS || '');
+            const cls = String(item.Classify || '');
+            if (mkt === '116' || jys === 'HK' || cls === 'HK') {
+              prefix = 'hk'; // 港股
+            } else if (jys === 'US' || cls === 'US' || /^[A-Za-z.]{1,10}$/.test(code)) {
+              prefix = 'us'; // 美股
+            } else if (mkt === '1') {
               prefix = 'sh';
             } else if (mkt === '0') {
               if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
@@ -1565,12 +1588,13 @@ const DataAPI = {
               else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
               else prefix = 'sz';
             }
+            const fullCode = prefix === 'us' ? code : prefix + code;
             return {
               name: item.Name || code,
               code: code,
               market: prefix,
               fullName: `${item.Name || code}(${code})`,
-              fullCode: prefix + code
+              fullCode: fullCode
             };
           });
         if (results.length > 0) return results;
@@ -1587,9 +1611,25 @@ const DataAPI = {
         return raw.split('^').map(line => {
           const parts = line.split('~');
           if (parts.length < 3) return null;
-          const market = parts[0]; // sh/sz/bj
+          const market = String(parts[0] || '').toLowerCase(); // sh/sz/bj/hk/us/jj(基金)
           const code = parts[1];
           const name = parts[2];
+          // 基金/理财等非股票标的跳过（jj前缀全部排除，沪深股票前缀均为sh/sz/bj）
+          if (market === 'jj' || market === 'hkjj' || market === 'of') return null;
+          // 港股：hk前缀 + 4-5位数字
+          if (market === 'hk') {
+            if (!/^\d{4,5}$/.test(code)) return null;
+            const hkCode = code.padStart(5, '0');
+            return { name: name || hkCode, code: hkCode, market: 'hk',
+              fullName: `${name || hkCode}(${hkCode})`, fullCode: 'hk' + hkCode };
+          }
+          // 美股：us前缀 + 字母代码
+          if (market === 'us') {
+            if (!/^[A-Za-z.]{1,10}$/.test(code)) return null;
+            return { name: name || code, code: code, market: 'us',
+              fullName: `${name || code}(${code})`, fullCode: code };
+          }
+          // A股/ETF/北交所：6位数字
           if (!/^\d{6}$/.test(code)) return null;
           // 腾讯市场前缀标准化
           let prefix = market;
@@ -1719,7 +1759,11 @@ const DataAPI = {
     const cached = this._cacheGet(cacheKey, 'capitalFlow');
     if (cached) return cached;
     try {
-      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`;
+      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
+      let secid;
+      if (code.startsWith('hk')) secid = '116.' + code.substring(2);
+      else if (code.startsWith('sh')) secid = '1.' + code.substring(2);
+      else secid = '0.' + code.substring(2);
       const res = await this._fetchEMCapitalKlines(secid, 5);
       let result = [];
       if (res) {
@@ -1749,6 +1793,11 @@ const DataAPI = {
     const cacheKey = 'news_' + code;
     const cached = this._cacheGet(cacheKey, 'news');
     if (cached) return cached;
+    // 港股/美股公告接口与A股不同，暂不支持（返回空，不影响分析主流程）
+    if (code.startsWith('hk') || code.startsWith('us')) {
+      this._cacheSet(cacheKey, 'news', []);
+      return [];
+    }
     try {
       const stockCode = code.substring(2);
       const url = `${CONFIG.EM_NEWS}?sr=-1&page_size=10&page_index=1&ann_type=A&stock_list=${stockCode}&f_node=0&s_node=0`;
@@ -1984,33 +2033,31 @@ const DataAPI = {
     const localResults = [];
     const kw = keyword.trim().toLowerCase();
 
-    // 支持直接输入6位代码搜索
-    if (/^\d{6}$/.test(kw)) {
-      const prefixes = ['sh', 'sz', 'bj'];
-      for (const prefix of prefixes) {
-        const fullCode = prefix + kw;
-        if (CODE_TO_NAME[fullCode]) {
-          let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
-          localResults.push({ name: CODE_TO_NAME[fullCode], code: kw, market, fullCode });
-        }
+    // 支持直接输入代码搜索（A股6位 / 港股5位或hk前缀 / us前缀，统一走normalizeCode）
+    const normCode = /^[a-z]{2}\d{4,6}$/.test(kw) || /^\d{4,6}$/.test(kw) || /^us[a-z]+$/i.test(kw)
+      ? Utils.normalizeCode(kw) : null;
+    if (normCode) {
+      if (CODE_TO_NAME[normCode]) {
+        const prefix = normCode.substring(0, 2);
+        let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
+        localResults.push({ name: CODE_TO_NAME[normCode], code: normCode, market, fullCode: normCode });
       }
-      // 即使本地没找到，也尝试通过API获取
-      if (localResults.length === 0) {
-        // 尝试三种前缀获取行情
-        for (const prefix of ['sh', 'sz', 'bj']) {
-          try {
-            const fullCode = prefix + kw;
-            const resp = await fetch(CONFIG.TENCENT_QUOTE + fullCode);
-            const text = await resp.text();
-            if (text.includes('~') && !text.includes('pv_none_match')) {
-              const parts = text.split('~');
-              const name = parts[1] || CODE_TO_NAME[fullCode] || kw;
-              let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
-              localResults.push({ name, code: kw, market, fullCode });
-              break;
+      // 本地没有，直接按规范化代码拉行情验证
+      if (!CODE_TO_NAME[normCode]) {
+        try {
+          const resp = await fetch(CONFIG.TENCENT_QUOTE + normCode);
+          const buffer = await resp.arrayBuffer();
+          const text = Utils.gbkToUtf8(buffer);
+          if (text.includes('~') && !text.includes('pv_none_match')) {
+            const parsed = Utils.parseTencentQuote(text);
+            if (parsed && parsed.name && parsed.price > 0) {
+              CODE_TO_NAME[normCode] = parsed.name;
+              const prefix = normCode.substring(0, 2);
+              let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
+              localResults.push({ name: parsed.name, code: normCode, market, fullCode: normCode });
             }
-          } catch(e) {}
-        }
+          }
+        } catch(e) {}
       }
     }
 
@@ -2046,7 +2093,7 @@ const DataAPI = {
         if (!codes.has(r.fullCode)) {
           localResults.push({
             name: r.name, code: r.code,
-            market: r.market === 'sh' ? '上证' : r.market === 'bj' ? '北交所' : '深证',
+            market: r.market === 'sh' ? '上证' : r.market === 'bj' ? '北交所' : r.market === 'hk' ? '港股' : r.market === 'us' ? '美股' : '深证',
             fullCode: r.fullCode
           });
           codes.add(r.fullCode);
@@ -2171,7 +2218,9 @@ const Search = {
       if (normalized) {
         const quote = await DataAPI.fetchQuote(normalized);
         if (quote) {
-          results = [{ name: quote.name, code: normalized, fullCode: normalized, market: normalized.startsWith('sh') ? '上证' : normalized.startsWith('bj') ? '北交所' : '深证' }];
+          const mkt = normalized.startsWith('sh') ? '上证' : normalized.startsWith('bj') ? '北交所' : normalized.startsWith('hk') ? '港股' : normalized.startsWith('us') ? '美股' : '深证';
+          if (quote.name) CODE_TO_NAME[normalized] = quote.name;
+          results = [{ name: quote.name, code: normalized, fullCode: normalized, market: mkt }];
         }
       }
     }
@@ -3220,8 +3269,12 @@ const Screener = {
 // ============================================================
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
+  GROUP_KEY: 'zhigu_watchlist_groups', // code -> group name 映射
+  DEFAULT_GROUPS: ['默认'],              // 默认分组
   // 排序状态
   sortKey: 'score_desc', // 默认按量化评分降序
+  // 当前选中的分组筛选（null=全部）
+  _activeGroup: null,
   // 缓存评估数据 { code: { score, advice, vwap, quote } }
   _cache: {},
 
@@ -3237,8 +3290,151 @@ const Watchlist = {
     localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list));
   },
 
-  /** 添加自选股 */
-  add(code) {
+  /** 获取分组映射 { code: groupName } */
+  getGroupMap() {
+    try {
+      return JSON.parse(localStorage.getItem(this.GROUP_KEY)) || {};
+    } catch { return {}; }
+  },
+
+  /** 保存分组映射 */
+  saveGroupMap(map) {
+    localStorage.setItem(this.GROUP_KEY, JSON.stringify(map));
+  },
+
+  /** 获取股票所在分组 */
+  getGroup(code) {
+    const map = this.getGroupMap();
+    return map[code] || '默认';
+  },
+
+  /** 设置股票分组 */
+  setGroup(code, group) {
+    const map = this.getGroupMap();
+    map[code] = group || '默认';
+    this.saveGroupMap(map);
+  },
+
+  /** 获取所有分组列表（含默认 + 用户创建的） */
+  getAllGroups() {
+    const map = this.getGroupMap();
+    const set = new Set(this.DEFAULT_GROUPS);
+    Object.values(map).forEach(g => set.add(g));
+    return [...set];
+  },
+
+  /** 删除分组（将该分组内所有股票移到"默认"） */
+  deleteGroup(groupName) {
+    if (this.DEFAULT_GROUPS.includes(groupName)) {
+      Utils.toast('默认分组不可删除');
+      return false;
+    }
+    const map = this.getGroupMap();
+    Object.keys(map).forEach(k => {
+      if (map[k] === groupName) map[k] = '默认';
+    });
+    this.saveGroupMap(map);
+    if (this._activeGroup === groupName) this._activeGroup = null;
+    Utils.toast('已删除分组，股票已移至「默认」');
+    return true;
+  },
+
+  /** 新建分组（空分组：仅记录名称） */
+  createGroup(name) {
+    if (!name || !name.trim()) return false;
+    const map = this.getGroupMap();
+    // 已有同名则不创建
+    const existing = new Set(this.DEFAULT_GROUPS.concat(Object.values(map)));
+    if (existing.has(name.trim())) {
+      Utils.toast('分组已存在');
+      return false;
+    }
+    // 写入一个空条目占位（不关联具体股票）—— 通过 getAllGroups 自动发现
+    // 这里只需在 map 中给一个不存在的 code 占位？不行，改 getAllGroups 直接扫描 map values
+    // 因此我们用一个特殊键 _groups: [...] 存储分组清单
+    let meta;
+    try { meta = JSON.parse(localStorage.getItem(this.GROUP_KEY + '_meta') || '{}'); } catch { meta = {}; }
+    meta.custom = (meta.custom || []).filter(n => n !== name.trim());
+    meta.custom.push(name.trim());
+    localStorage.setItem(this.GROUP_KEY + '_meta', JSON.stringify(meta));
+    return true;
+  },
+
+  /** 重写 getAllGroups 合并 _meta.custom */
+  getAllGroups() {
+    const map = this.getGroupMap();
+    let meta;
+    try { meta = JSON.parse(localStorage.getItem(this.GROUP_KEY + '_meta') || '{}'); } catch { meta = {}; }
+    const custom = (meta.custom || []).filter(n => !this.DEFAULT_GROUPS.includes(n));
+    const fromMap = [...new Set(Object.values(map))].filter(n => !this.DEFAULT_GROUPS.includes(n));
+    const set = new Set([...this.DEFAULT_GROUPS, ...custom, ...fromMap]);
+    return [...set];
+  },
+
+  /** 切换当前筛选分组 */
+  setActiveGroup(group) {
+    this._activeGroup = (group === null || group === '全部') ? null : group;
+    this.render();
+  },
+
+  /** 弹出分组选择菜单 */
+  showGroupPicker(code) {
+    const current = this.getGroup(code);
+    const groups = this.getAllGroups();
+    const mask = document.createElement('div');
+    mask.className = 'batch-modal-mask';
+    mask.id = 'groupPickerMask';
+    mask.innerHTML = `
+      <div class="batch-modal-box" style="max-width:360px" onclick="event.stopPropagation()">
+        <div class="batch-modal-title">移动到其他分组</div>
+        <div class="batch-modal-tip">当前：${current || '默认'}</div>
+        <div class="gp-list" id="gpList">
+          ${groups.map(g => `
+            <div class="gp-item ${g === current ? 'active' : ''}" onclick="Watchlist._doMoveGroup('${code}','${g.replace(/'/g,"\\'")}')">
+              <span>${g}</span>${g === current ? '<span style="color:#00d4ff;margin-left:8px">✓</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+        <div style="margin:12px 16px;padding-top:10px;border-top:1px solid var(--border-color)">
+          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">新建分组</div>
+          <div style="display:flex;gap:6px">
+            <input type="text" id="gpNewName" placeholder="输入分组名" maxlength="10" style="flex:1;background:var(--input-bg);border:1px solid var(--border-color);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px">
+            <button class="btn-primary" style="padding:6px 12px;font-size:12px" onclick="Watchlist._createAndMove('${code.replace(/'/g,"\\'")}')">新建并移动</button>
+          </div>
+        </div>
+        <div class="batch-modal-btns">
+          <button class="btn cancel" onclick="document.getElementById('groupPickerMask').remove()">取消</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(mask);
+    mask.addEventListener('click', () => mask.remove());
+  },
+
+  _doMoveGroup(code, group) {
+    this.setGroup(code, group);
+    Utils.toast('已移动到「' + group + '」');
+    const mask = document.getElementById('groupPickerMask');
+    if (mask) mask.remove();
+    this.render();
+    if (typeof App !== 'undefined' && Navigation.currentPage === 'analysis') App.renderBookmarks();
+  },
+
+  _createAndMove(code) {
+    const input = document.getElementById('gpNewName');
+    const name = (input && input.value || '').trim();
+    if (!name) { Utils.toast('请输入分组名'); return; }
+    if (this.createGroup(name)) {
+      this.setGroup(code, name);
+      Utils.toast('已新建「' + name + '」并移动');
+      const mask = document.getElementById('groupPickerMask');
+      if (mask) mask.remove();
+      this.render();
+    }
+  },
+
+  /** 添加自选股（可带分组） */
+  add(code, group) {
     const list = this.getList();
     if (list.includes(code)) {
       Utils.toast('已在自选股中');
@@ -3248,7 +3444,9 @@ const Watchlist = {
     this.save(list);
     // 记录添加时间
     this._saveAddedAt(code);
-    Utils.toast('已添加到自选股');
+    // 分组
+    if (group) this.setGroup(code, group);
+    Utils.toast(group ? '已添加到「' + group + '」' : '已添加到自选股');
     App.setDirty(true);
     return true;
   },
@@ -3259,6 +3457,11 @@ const Watchlist = {
     list = list.filter(c => c !== code);
     this.save(list);
     delete this._cache[code];
+    // 清理分组映射
+    try {
+      const map = this.getGroupMap();
+      if (map[code]) { delete map[code]; this.saveGroupMap(map); }
+    } catch {}
     Utils.toast('已从自选股移除');
     App.setDirty(true);
   },
@@ -3608,11 +3811,40 @@ const Watchlist = {
     // 排序
     const sorted = this.applySort(items);
 
-    let html = this.renderSortBar();
+    // ===== 分组标签条 =====
+    const groupMap = this.getGroupMap();
+    const allGroups = this.getAllGroups();
+    const groupCounts = {};
+    allGroups.forEach(g => groupCounts[g] = 0);
+    sorted.forEach(item => {
+      const g = groupMap[item.code] || '默认';
+      if (!(g in groupCounts)) groupCounts[g] = 0;
+      groupCounts[g]++;
+    });
+    let groupBarHtml = '<div class="wl-group-bar">';
+    groupBarHtml += '<button class="wl-group-btn' + (this._activeGroup === null ? ' active' : '') + '" onclick="Watchlist.setActiveGroup(null)">全部(' + sorted.length + ')</button>';
+    allGroups.forEach(g => {
+      const isActive = this._activeGroup === g;
+      const cnt = groupCounts[g] || 0;
+      const deleteBtn = (g !== '默认' && cnt === 0) ? ' <span class="wl-group-del" onclick="event.stopPropagation();Watchlist._delGroupByName(\'' + g.replace(/'/g,'\'') + '\')" title="删除空分组">✕</span>' : '';
+      groupBarHtml += '<button class="wl-group-btn' + (isActive ? ' active' : '') + '" onclick="Watchlist.setActiveGroup(\'' + g.replace(/'/g,'\'') + '\')">' + g + '(' + cnt + ')' + deleteBtn + '</button>';
+    });
+    groupBarHtml += '</div>';
+
+    // 按当前分组筛选
+    const visible = this._activeGroup
+      ? sorted.filter(it => (groupMap[it.code] || '默认') === this._activeGroup)
+      : sorted;
+
+    // 按分组聚合（仅"全部"视图显示分组分隔）
+    const showGrouped = this._activeGroup === null && allGroups.length > 1;
+
+    let html = groupBarHtml + this.renderSortBar();
     if (failedCodes.length > 0) {
       html += '<div class="wl-debug-tip">⚠️ ' + failedCodes.length + '只股票行情获取失败</div>';
     }
-    sorted.forEach(item => {
+
+    const renderItem = (item) => {
       const cls = Utils.colorClass(item.changePct);
       const scoreColor = Utils.scoreColor(item.score);
       const advice = item.advice;
@@ -3649,18 +3881,42 @@ const Watchlist = {
       const opColor = item.score >= 70 ? '#00c853' : item.score >= 40 ? '#ffa500' : '#ff4757';
       html += '<div class="wl-op-score" style="background:' + opBg + ';color:' + opColor + '">' + advice.icon + item.advice.text + '</div>';
       html += '</div>';
+      html += '<button class="wl-move-group" title="移动到分组" onclick="Watchlist.showGroupPicker(\'' + item.code + '\')">📂</button>';
       html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
       html += '</div>';
-      html += '</div>';
-    });
+    };
+
+    if (visible.length === 0) {
+      html += '<div class="empty-tip">该分组下暂无股票</div>';
+    } else if (showGrouped) {
+      // 分组视图：按组渲染，每组一个小节
+      const groups = allGroups.filter(g => g !== '默认');
+      groups.unshift('默认'); // 默认分组在最前
+      groups.forEach(g => {
+        const sub = visible.filter(it => (groupMap[it.code] || '默认') === g);
+        if (sub.length === 0) return;
+        html += '<div class="wl-group-header">📂 ' + g + '<span class="wl-group-count">' + sub.length + '</span></div>';
+        sub.forEach(it => html += renderItem(it));
+      });
+    } else {
+      visible.forEach(it => html += renderItem(it));
+    }
+
     container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
     App.setDirty(false);
+  },
+
+  /** 删除空分组（从分组条调用） */
+  _delGroupByName(name) {
+    this.deleteGroup(name);
+    this.render();
   },
 
   /** 删除并刷新 */
   removeAndRefresh(code) {
     this.remove(code);
     this.render();
+    if (typeof App !== 'undefined' && Navigation.currentPage === 'analysis') App.renderBookmarks();
   }
 };
 
@@ -3693,6 +3949,7 @@ const NextDayPrediction = {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
   _boardTag(code) {
+    if (code.startsWith('hk')) return '港股';
     const raw = code.replace(/^(sh|sz|bj)/, '');
     if (code.startsWith('bj') || raw.startsWith('8') || raw.startsWith('4') || raw.startsWith('92')) return '北交所';
     if (raw.startsWith('688')) return '科创板';
@@ -4147,6 +4404,7 @@ const App = {
     }
     if (pageName === 'analysis') {
       NextDayPrediction.renderLatest();
+      this.renderBookmarks();
     }
   },
 
@@ -5280,6 +5538,36 @@ const App = {
     await this.runAnalysis(code);
   },
 
+  /** 渲染分析页关注书签（自选股按分组展示，点击直接分析） */
+  renderBookmarks() {
+    const box = document.getElementById('analysisBookmarks');
+    if (!box) return;
+    const list = Watchlist.getList();
+    if (!list || list.length === 0) {
+      box.innerHTML = '<div class="bk-empty">暂无关注股票，搜索添加后这里会出现书签，点击即可直接分析</div>';
+      return;
+    }
+    const groupMap = Watchlist.getGroupMap();
+    const groups = Watchlist.getAllGroups();
+    // 分组顺序：默认在最前
+    const ordered = ['默认'].concat(groups.filter(g => g !== '默认'));
+    let html = '';
+    ordered.forEach(g => {
+      const members = list.filter(c => (groupMap[c] || '默认') === g);
+      if (members.length === 0) return;
+      if (groups.length > 1) html += '<div class="bk-group-title">📂 ' + g.replace(/</g,'&lt;') + '</div>';
+      html += '<div class="bk-row">';
+      members.forEach(code => {
+        const name = CODE_TO_NAME[code] || code;
+        const active = this.currentStock === code ? ' active' : '';
+        html += '<button class="bk-chip' + active + '" onclick="App.analyzeStock(\'' + code + '\')" title="' + code + '">' +
+                name.replace(/</g,'&lt;') + '</button>';
+      });
+      html += '</div>';
+    });
+    box.innerHTML = html || '<div class="bk-empty">暂无关注股票</div>';
+  },
+
   /** 更新关注按钮状态 */
   _updateWatchlistBtn(code) {
     const btn = document.getElementById('btnWatchlist');
@@ -5297,16 +5585,19 @@ const App = {
     }
   },
 
-  /** 分析页切换关注状态 */
+  /** 分析页切换关注状态（长按/点★加分组；再次点击取消） */
   toggleWatchlistFromAnalysis() {
     const code = this.currentStock;
     if (!code) return;
     if (Watchlist.has(code)) {
       Watchlist.remove(code);
     } else {
+      // 添加并弹出分组选择
       Watchlist.add(code);
+      Watchlist.showGroupPicker(code);
     }
     this._updateWatchlistBtn(code);
+    this.renderBookmarks();
   },
 
   /** 执行分析 */
@@ -5507,18 +5798,24 @@ const App = {
     this._updateWatchlistBtn(code);
 
     // 元数据
+    const isHKStock = !!quote.isHK;
+    const volUnit = isHKStock ? '万股' : '万手';
+    const volShow = isHKStock
+      ? ((quote.volumeShares || quote.volume * 100) / 10000).toFixed(0)
+      : (quote.volume / 10000).toFixed(0);
+    const capUnit = isHKStock ? '亿港元' : '亿';
     document.getElementById('stockMeta').innerHTML = `
       <div class="meta-item"><span class="meta-label">开盘</span><span class="meta-val">${quote.open.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">最高</span><span class="meta-val color-up">${quote.high.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">最低</span><span class="meta-val color-down">${quote.low.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">昨收</span><span class="meta-val">${quote.prevClose.toFixed(2)}</span></div>
-      <div class="meta-item"><span class="meta-label">成交量</span><span class="meta-val">${(quote.volume / 10000).toFixed(0)}万手</span></div>
+      <div class="meta-item"><span class="meta-label">成交量</span><span class="meta-val">${volShow}${volUnit}</span></div>
       <div class="meta-item"><span class="meta-label">成交额</span><span class="meta-val">${(quote.amount / 10000).toFixed(1)}亿</span></div>
-      <div class="meta-item"><span class="meta-label">换手率</span><span class="meta-val">${quote.turnover.toFixed(2)}%</span></div>
+      <div class="meta-item"><span class="meta-label">换手率</span><span class="meta-val">${quote.turnover > 0 ? quote.turnover.toFixed(2) + '%' : '--'}</span></div>
       <div class="meta-item"><span class="meta-label">PE</span><span class="meta-val">${quote.pe > 0 ? quote.pe.toFixed(1) : '--'}</span></div>
       <div class="meta-item"><span class="meta-label">PB</span><span class="meta-val">${quote.pb > 0 ? quote.pb.toFixed(2) : '--'}</span></div>
-      <div class="meta-item"><span class="meta-label">总市值</span><span class="meta-val">${quote.marketCap.toFixed(0)}亿</span></div>
-      <div class="meta-item"><span class="meta-label">流通市值</span><span class="meta-val">${quote.circCap.toFixed(0)}亿</span></div>
+      <div class="meta-item"><span class="meta-label">总市值</span><span class="meta-val">${quote.marketCap > 0 ? quote.marketCap.toFixed(0) + capUnit : '--'}</span></div>
+      <div class="meta-item"><span class="meta-label">流通市值</span><span class="meta-val">${quote.circCap > 0 ? quote.circCap.toFixed(0) + capUnit : '--'}</span></div>
       <div class="meta-item"><span class="meta-label">振幅</span><span class="meta-val">${quote.amplitude.toFixed(2)}%</span></div>
     `;
   },
