@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.8 - A股智能分析系统（次日上涨概率TOP20+隔日核实+自选股批量导入）
+ * 智股分析 v3.9 - A股智能分析系统（港股行情加固：代码规范化自愈+东财兜底+换手率估算）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -583,7 +583,19 @@ const Utils = {
       low: +f[34] || price,
       change: +f[31] || calcChange,
       changePct: +f[32] || calcChangePct,
-      turnover: numOrZero(f[38]), // 换手率（港股该字段为0）
+      turnover: (() => {
+        const t = numOrZero(f[38]);
+        if (t > 0) return t;
+        // 港股f[38]恒为0：用 成交量(股)÷流通股本(股) 估算，流通股本≈流通市值(亿港元)÷现价
+        if (isHK && rawVolume > 0 && price > 0) {
+          const circCapYi = numOrZero(f[44]);
+          if (circCapYi > 0) {
+            const est = rawVolume / (circCapYi * 1e8 / price) * 100;
+            if (est > 0 && est < 100) return +est.toFixed(2);
+          }
+        }
+        return 0;
+      })(), // 换手率（港股按成交量/流通股本估算）
       pe: numOrZero(f[39]),       // 市盈率
       pb: isHK ? numOrZero(f[59]) : numOrZero(f[46]), // 市净率（A股f[46]；港股f[46]为英文简称，PB在f[59]）
       amount: isHK ? rawAmount / 10000 : rawAmount, // 统一为「万元」
@@ -635,8 +647,11 @@ const Utils = {
     if (/^(sh|sz|bj)\d{6}$/.test(code)) return code;
     if (/^hk\d{5}$/.test(code)) return code;
     if (/^us[a-z]+$/i.test(code)) return code;
-    // 尝试港股5位代码（纯数字5位）
-    if (/^\d{5}$/.test(code)) return 'hk' + code;
+    // hk前缀但位数不足5位（如 hk981 / hk0981）：补0到5位（腾讯接口要求5位，4位返回pv_none_match）
+    let hm = code.match(/^hk(\d{1,5})$/);
+    if (hm) return 'hk' + hm[1].padStart(5, '0');
+    // 纯4-5位数字：港股代码（A股/ETF均为6位不冲突），4位补0
+    if (/^\d{4,5}$/.test(code)) return 'hk' + code.padStart(5, '0');
     if (/^\d{6}$/.test(code)) {
       // 北交所/新三板：8开头、4开头（43/83等）、920开头（北交所新代码段）
       if (code.startsWith('8') || code.startsWith('920') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
@@ -1403,6 +1418,8 @@ const DataAPI = {
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
+      // v3.9: 入参统一规范化，兼容历史残留的不规范港股代码（如4位hk0981→hk00981）
+      codes = (codes || []).map(c => Utils.normalizeCode(c) || c);
       // 分离北交所和其他股票
       const bjCodes = codes.filter(c => c.startsWith('bj'));
       const otherCodes = codes.filter(c => !c.startsWith('bj'));
@@ -1422,6 +1439,51 @@ const DataAPI = {
             if (parsed) results[codeMatch[1]] = parsed;
           }
         });
+      }
+
+      // v3.9: 港股腾讯未返回时，用东方财富备用API兜底（secid=116.xxxxx）
+      for (const code of codes) {
+        if (!code.startsWith('hk')) continue;
+        const exist = results[code];
+        if (exist && exist.price > 0) continue;
+        const emCode = code.substring(2);
+        for (const dom of ['push2.eastmoney.com', '82.push2.eastmoney.com', 'push2his.eastmoney.com']) {
+          try {
+            const emUrl = 'https://' + dom + '/api/qt/stock/get?secid=116.' + emCode +
+              '&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170,f171,f50';
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 8000);
+            const resp = await fetch(emUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+            const data = await resp.json();
+            if (data && data.data && data.data.f43) {
+              const d = data.data;
+              results[code] = {
+                name: d.f58 || code,
+                code: code,
+                isHK: true,
+                price: d.f43 / 1000,
+                prevClose: (d.f60 || 0) / 1000,
+                open: (d.f46 || 0) / 1000,
+                high: (d.f44 || 0) / 1000,
+                low: (d.f45 || 0) / 1000,
+                volume: d.f47 || 0,
+                volumeShares: d.f47 || 0,
+                amount: d.f48 || 0,
+                change: (d.f171 || 0) / 1000,
+                changePct: (d.f170 || 0) / 100,
+                turnover: (d.f168 || 0) / 100,
+                pe: (d.f162 || 0) / 100,
+                pb: (d.f167 || 0) / 100,
+                marketCap: (d.f116 || 0) / 1e8,
+                circCap: (d.f117 || 0) / 1e8,
+                amplitude: (d.f50 || 0) / 100,
+                time: ''
+              };
+              break;
+            }
+          } catch (e) { continue; }
+        }
       }
 
       // 北交所股票：先尝试腾讯，失败则用东方财富备用API
@@ -3278,10 +3340,45 @@ const Watchlist = {
   // 缓存评估数据 { code: { score, advice, vwap, quote } }
   _cache: {},
 
-  /** 获取自选股列表 */
+  /** 获取自选股列表（v3.9: 读取时自愈规范化历史不规范代码） */
   getList() {
     try {
-      return JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || [];
+      const raw = JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || [];
+      const seen = new Set();
+      const fixed = [];
+      let dirty = false;
+      for (const c of raw) {
+        const n = Utils.normalizeCode(c);
+        const out = n || c;
+        if (out !== c) { dirty = true; console.log('[Watchlist] 代码规范化:', c, '->', out); }
+        if (!seen.has(out)) { seen.add(out); fixed.push(out); }
+        else if (out !== c) { dirty = true; }
+      }
+      // 若有规范化变更：同步迁移分组映射/添加时间等键名并重写存储
+      if (dirty) {
+        try {
+          const map = this.getGroupMap();
+          const newMap = {};
+          Object.keys(map).forEach(k => {
+            const nk = Utils.normalizeCode(k) || k;
+            newMap[nk] = map[k];
+          });
+          this.saveGroupMap(newMap);
+          try {
+            const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
+            if (meta) {
+              const newMeta = {};
+              Object.keys(meta).forEach(k => {
+                const nk = Utils.normalizeCode(k) || k;
+                newMeta[nk] = meta[k];
+              });
+              localStorage.setItem('zhigu_watchlist_meta', JSON.stringify(newMeta));
+            }
+          } catch (e) {}
+          this.save(fixed);
+        } catch (e) { console.warn('[Watchlist] 规范化迁移失败:', e); }
+      }
+      return fixed;
     } catch { return []; }
   },
 
