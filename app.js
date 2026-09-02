@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.9 - A股智能分析系统（港股行情加固：代码规范化自愈+东财兜底+换手率估算）
+ * 智股分析 v3.91 - A股智能分析系统（修复自选股列表渲染BUG：renderItem返回值覆盖；关注书签移至自选股页）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -3514,7 +3514,7 @@ const Watchlist = {
     const mask = document.getElementById('groupPickerMask');
     if (mask) mask.remove();
     this.render();
-    if (typeof App !== 'undefined' && Navigation.currentPage === 'analysis') App.renderBookmarks();
+    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
   },
 
   _createAndMove(code) {
@@ -3860,6 +3860,7 @@ const Watchlist = {
 
     if (list.length === 0) {
       container.innerHTML = '<div class="empty-tip">暂无自选股，请在上方搜索添加</div>';
+      if (typeof App !== 'undefined') App.renderBookmarks();
       return;
     }
 
@@ -3870,6 +3871,7 @@ const Watchlist = {
     
     if (Object.keys(quotes).length === 0) {
       container.innerHTML = this.renderSortBar() + '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
+      if (typeof App !== 'undefined') App.renderBookmarks();
       return;
     }
 
@@ -3993,14 +3995,20 @@ const Watchlist = {
         const sub = visible.filter(it => (groupMap[it.code] || '默认') === g);
         if (sub.length === 0) return;
         html += '<div class="wl-group-header">📂 ' + g + '<span class="wl-group-count">' + sub.length + '</span></div>';
-        sub.forEach(it => html += renderItem(it));
+        sub.forEach(it => renderItem(it));
       });
     } else {
-      visible.forEach(it => html += renderItem(it));
+      visible.forEach(it => renderItem(it));
     }
 
     container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
     App.setDirty(false);
+
+    // v3.91: 行情名回填后刷新书签（书签首次进入时可能只有代码）
+    for (const it of items) {
+      if (it && it.name && it.code && CODE_TO_NAME[it.code] !== it.name) CODE_TO_NAME[it.code] = it.name;
+    }
+    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
   },
 
   /** 删除空分组（从分组条调用） */
@@ -4013,7 +4021,7 @@ const Watchlist = {
   removeAndRefresh(code) {
     this.remove(code);
     this.render();
-    if (typeof App !== 'undefined' && Navigation.currentPage === 'analysis') App.renderBookmarks();
+    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
   }
 };
 
@@ -4494,6 +4502,7 @@ const App = {
     Navigation.switchTo(pageName);
     // 页面切换时触发数据刷新
     if (pageName === 'watchlist') {
+      this.renderBookmarks(); // 书签即时渲染（行情名在 Watchlist.render 后二次刷新）
       Watchlist.render();
     }
     if (pageName === 'settings') {
@@ -4501,7 +4510,6 @@ const App = {
     }
     if (pageName === 'analysis') {
       NextDayPrediction.renderLatest();
-      this.renderBookmarks();
     }
   },
 
@@ -5635,15 +5643,18 @@ const App = {
     await this.runAnalysis(code);
   },
 
-  /** 渲染分析页关注书签（自选股按分组展示，点击直接分析） */
+  /** 渲染自选股页关注书签（自选股按分组展示，点击直接分析） */
   renderBookmarks() {
-    const box = document.getElementById('analysisBookmarks');
+    const box = document.getElementById('watchlistBookmarks');
     if (!box) return;
+    const card = document.getElementById('bookmarkCard');
     const list = Watchlist.getList();
     if (!list || list.length === 0) {
-      box.innerHTML = '<div class="bk-empty">暂无关注股票，搜索添加后这里会出现书签，点击即可直接分析</div>';
+      if (card) card.style.display = 'none';
+      box.innerHTML = '';
       return;
     }
+    if (card) card.style.display = '';
     const groupMap = Watchlist.getGroupMap();
     const groups = Watchlist.getAllGroups();
     // 分组顺序：默认在最前
