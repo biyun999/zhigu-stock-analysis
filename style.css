@@ -3039,3 +3039,41 @@ body {
   padding: 8px 2px;
   line-height: 1.6;
 }
+
+/* ===== v4.0 整卡可点击 ===== */
+.watchlist-item-v2.clickable { cursor: pointer; transition: background 0.15s; }
+.watchlist-item-v2.clickable:active { background: rgba(0,212,255,0.08); }
+
+/* ===== v4.0 财报指标网格 ===== */
+.fin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.fin-cell {
+  background: var(--card-bg, rgba(255,255,255,0.04));
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.fin-label { font-size: 11px; color: #8a94a6; }
+.fin-val { font-size: 15px; font-weight: 700; color: #e8ecf3; }
+
+/* ===== v4.0 龙虎榜记录 ===== */
+.dt-record {
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: rgba(255,255,255,0.03);
+}
+.dt-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 4px; flex-wrap: wrap; }
+.dt-date { font-size: 13px; font-weight: 700; color: #00d4ff; }
+.dt-reason { font-size: 11px; color: #8a94a6; text-align: right; }
+.dt-seat { font-size: 12px; color: #b8c0cc; margin: 4px 0; }
+.dt-after { font-size: 12px; color: #8a94a6; margin-top: 4px; }

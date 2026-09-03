@@ -1,5 +1,5 @@
 /**
- * 智股分析 v3.91 - A股智能分析系统（修复自选股列表渲染BUG：renderItem返回值覆盖；关注书签移至自选股页）
+ * 智股分析 v4.0 - 盈利成色评分升级：真实财报基本面评分(ROE/毛利率/增速/现金流)+龙虎榜席位数据+自选股整卡点击跳转
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -1032,9 +1032,12 @@ const Utils = {
     return '#ff4757';
   },
 
-  fiveDimScore(quote, klines) {
+  fiveDimScore(quote, klines, financials) {
     if (!quote || !quote.price || quote.price <= 0) return { total: 0, dims: { fundamental: 0, technical: 0, capital: 0, valuation: 0, sentiment: 0 } };
-    const fundamental = this._scoreFundamentalQuick(quote, klines);
+    // v4.0: 有真实财报时基本面分用财报评分（与七维分析器同一套"盈利成色"逻辑）
+    const fundamental = financials
+      ? Math.max(0, Math.min(100, SevenDimAnalyzer._fundamentalByReport(financials, quote)))
+      : this._scoreFundamentalQuick(quote, klines);
     const technical = this._scoreTechnicalQuick(klines, quote);
     const capital = this._scoreCapitalQuick(quote, klines);
     const valuation = this._scoreValuationQuick(quote);
@@ -1374,7 +1377,10 @@ const DataAPI = {
     capitalFlow: 30000,   // 资金流向30秒
     capitalFlowStock: 120000, // 个股资金流向2分钟
     news: 120000,     // 新闻120秒
-    topMarketStocks: 300000 // 全市场活跃股5分钟（次日概率扫描用）
+    topMarketStocks: 300000, // 全市场活跃股5分钟（次日概率扫描用）
+    financials: 21600000,   // v4.0 财报数据6小时（季度更新）
+    dragonTiger: 1800000,   // v4.0 龙虎榜30分钟
+    realtimeFlow: 30000     // v4.0 实时资金流30秒
   },
   _cacheGet(key, type) {
     const c = this._cache[key];
@@ -1848,6 +1854,152 @@ const DataAPI = {
       console.error('fetchCapitalFlow error:', e);
       return [];
     }
+  },
+
+  /** v4.0 获取F10财务主要指标（东方财富ZYZB，近9期）。A股专用，港股/北交所返回null */
+  async fetchFinancials(code) {
+    if (code.startsWith('hk') || code.startsWith('us')) return null;
+    const cacheKey = 'financials_' + code;
+    const cached = this._cacheGet(cacheKey, 'financials');
+    if (cached) return cached;
+    try {
+      const num = code.substring(2);
+      // 北交所(8/4开头)F10接口暂不支持，直接跳过走旧逻辑
+      if (/^(8|4|92)/.test(num)) return null;
+      const prefix = code.startsWith('sh') ? 'SH' : 'SZ';
+      const url = 'https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew?type=0&code=' + prefix + num;
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const resp = await fetch(url, {
+        signal: ctrl.signal,
+        headers: { 'Referer': 'https://emweb.securities.eastmoney.com/' }
+      });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data || !data.data || data.data.length === 0) return null;
+      // 最新一期 + 去年同期（用于验证增长方向）
+      const r = data.data[0];
+      const rYoy = data.data.find(x => x.REPORT_DATE_NAME && x.REPORT_DATE_NAME.indexOf(r.REPORT_DATE_NAME.replace(/^[0-9]+/, String(parseInt(r.REPORT_DATE_NAME) - 1))) === 0) || null;
+      const numOrNull = v => (v === null || v === undefined || isNaN(v)) ? null : v;
+      const result = {
+        period: r.REPORT_DATE_NAME,
+        roe: numOrNull(r.ROEJQ),                  // 加权ROE %
+        grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
+        netMargin: numOrNull(r.XSJLL),            // 销售净利率 %
+        revGrowth: numOrNull(r.TOTALOPERATEREVETZ),   // 营收同比 %
+        profitGrowth: numOrNull(r.PARENTNETPROFITTZ), // 归母净利同比 %
+        deductedGrowth: numOrNull(r.KCFJCXSYJLRTZ),   // 扣非净利同比 %
+        debtRatio: numOrNull(r.ZCFZL),            // 资产负债率 %
+        eps: numOrNull(r.EPSJB),                  // 每股收益
+        bps: numOrNull(r.BPS),                    // 每股净资产
+        ocfps: numOrNull(r.MGJYXJJE),             // 每股经营现金流
+        currentRatio: numOrNull(r.LD),            // 流动比率
+        invTurnover: numOrNull(r.CHZZL),          // 存货周转率
+        arTurnover: numOrNull(r.YSZKZZL),         // 应收账款周转率
+        assetTurnover: numOrNull(r.TOAZZL),       // 总资产周转率
+        cashToRevenue: numOrNull(r.JYXJLYYSR),    // 经营现金流/营收 %（盈利含金量）
+        // 去年同期增速，用于判断改善方向
+        prevRevGrowth: rYoy ? numOrNull(rYoy.TOTALOPERATEREVETZ) : null,
+        prevProfitGrowth: rYoy ? numOrNull(rYoy.PARENTNETPROFITTZ) : null
+      };
+      this._cacheSet(cacheKey, 'financials', result);
+      return result;
+    } catch (e) {
+      console.warn('[财报] 获取失败:', code, e && e.message);
+      return null;
+    }
+  },
+
+  /** v4.0 获取龙虎榜历史（近90天上榜记录，含机构席位与上榜后表现）。A股专用 */
+  async fetchDragonTiger(code) {
+    if (code.startsWith('hk') || code.startsWith('us')) return null;
+    const cacheKey = 'dragonTiger_' + code;
+    const cached = this._cacheGet(cacheKey, 'dragonTiger');
+    if (cached) return cached;
+    try {
+      const num = code.substring(2);
+      const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?' +
+        'reportName=RPT_DAILYBILLBOARD_DETAILS&sortColumns=TRADE_DATE&sortTypes=-1' +
+        '&pageSize=5&pageNumber=1&columns=ALL' +
+        '&filter=(SECURITY_CODE%3D%22' + num + '%22)(TRADE_DATE%3E%3D%27' +
+        this._dateNDaysAgo(120) + '%27)';
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 8000);
+      const resp = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return null;
+      const data = await resp.json();
+      if (!data || !data.result || !data.result.data || data.result.data.length === 0) {
+        this._cacheSet(cacheKey, 'dragonTiger', []);
+        return [];
+      }
+      const list = data.result.data.map(d => ({
+        date: (d.TRADE_DATE || '').substring(0, 10),
+        reason: d.EXPLANATION || '',
+        seatInfo: d.EXPLAIN || '',
+        netBuy: d.BILLBOARD_NET_AMT || 0,        // 龙虎榜净买额（元）
+        buy: d.BILLBOARD_BUY_AMT || 0,
+        sell: d.BILLBOARD_SELL_AMT || 0,
+        dealAmount: d.BILLBOARD_DEAL_AMT || 0,   // 龙虎榜成交额
+        dealRatio: d.DEAL_AMOUNT_RATIO || 0,     // 龙虎榜成交占比 %
+        changeRate: d.CHANGE_RATE || 0,          // 当日涨跌幅 %
+        turnover: d.TURNOVERRATE || 0,
+        d1: d.D1_CLOSE_ADJCHRATE,                // 上榜后1日
+        d2: d.D2_CLOSE_ADJCHRATE,
+        d5: d.D5_CLOSE_ADJCHRATE,
+        d10: d.D10_CLOSE_ADJCHRATE
+      }));
+      this._cacheSet(cacheKey, 'dragonTiger', list);
+      return list;
+    } catch (e) {
+      console.warn('[龙虎榜] 获取失败:', code, e && e.message);
+      return null;
+    }
+  },
+
+  /** v4.0 腾讯实时资金流（ff_前缀，今日主力净流入，单位万元）。作为东财日K的盘中补充 */
+  async fetchRealtimeFlow(code) {
+    const cacheKey = 'rtflow_' + code;
+    const cached = this._cacheGet(cacheKey, 'realtimeFlow');
+    if (cached) return cached;
+    try {
+      const prefix = code.startsWith('hk') ? 'hk' : (code.startsWith('sh') ? 'sh' : 'sz');
+      const num = code.substring(2);
+      const varName = 'v_ff_' + prefix + num;
+      const txt = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 6000);
+        const script = document.createElement('script');
+        const cleanup = () => {
+          clearTimeout(t);
+          try { delete window[varName]; } catch(e) { window[varName] = undefined; }
+          if (script.parentNode) script.parentNode.removeChild(script);
+        };
+        script.src = 'https://qt.gtimg.cn/q=ff_' + prefix + num;
+        script.onload = () => { resolve(window[varName] || null); cleanup(); };
+        script.onerror = () => { cleanup(); reject(new Error('load error')); };
+        document.head.appendChild(script);
+      });
+      // v_ff_xx="主力流入,主力流出,主力净流入,主力净流入占比,..." 单位万元
+      if (txt && typeof txt === 'string') {
+        const f = txt.split('~').length > 1 ? txt.split('~') : txt.split(',');
+        const mainNetWan = parseFloat(f[2]);
+        if (!isNaN(mainNetWan)) {
+          const result = { mainNet: mainNetWan * 1e4, mainNetWan, source: '腾讯实时' };
+          this._cacheSet(cacheKey, 'realtimeFlow', result);
+          return result;
+        }
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  },
+
+  /** v4.0 N天前日期 YYYY-MM-DD */
+  _dateNDaysAgo(n) {
+    const d = new Date(Date.now() - n * 86400000);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
 
   /** 获取公告新闻 */
@@ -2331,8 +2483,8 @@ const Search = {
 // ============================================================
 const SevenDimAnalyzer = {
   /** 计算七维度评分 */
-  analyze(quote, klines, capitalFlow) {
-    const fundamental = this.scoreFundamental(quote);
+  analyze(quote, klines, capitalFlow, financials) {
+    const fundamental = this.scoreFundamental(quote, financials);
     const technical = this.scoreTechnical(klines, quote);
     const capital = this.scoreCapital(capitalFlow);
     const valuation = this.scoreValuation(quote);
@@ -2341,7 +2493,7 @@ const SevenDimAnalyzer = {
       fundamental, technical, capital, valuation, sentiment,
       message: this.scoreMessage(quote),
       macro: this.scoreMacro(),
-      risk: this.scoreRisk(quote, klines, capitalFlow)
+      risk: this.scoreRisk(quote, klines, capitalFlow, financials)
     };
     const total = fundamental * 0.30 + technical * 0.25 + capital * 0.20 + valuation * 0.15 + sentiment * 0.10;
     scores.total = Math.round(Math.max(0, Math.min(100, total)));
@@ -2367,8 +2519,9 @@ const SevenDimAnalyzer = {
     return Math.round(Math.max(0, Math.min(100, score)));
   },
 
-  /** 基本面评分 */
-  scoreFundamental(quote) {
+  /** 基本面评分（v4.0：有真实财报时走"盈利成色四维验证"，无财报回退旧PE/PB逻辑） */
+  scoreFundamental(quote, financials) {
+    if (financials) return Math.round(Math.max(0, Math.min(100, this._fundamentalByReport(financials, quote))));
     let score = 50;
     // PE评分：合理区间10-25
     if (quote.pe > 0 && quote.pe < 15) score += 20;
@@ -2385,6 +2538,71 @@ const SevenDimAnalyzer = {
     else if (quote.marketCap > 100) score += 5;
     else score -= 5;
     return Math.round(Math.max(0, Math.min(100, score)));
+  },
+
+  /** v4.0 基于真实财报的基本面评分（盈利质量+成长性+改善方向+财务稳健+现金流含金量） */
+  _fundamentalByReport(f, quote) {
+    let s = 40;
+    // ① 盈利能力：ROE加权（满分25）
+    if (f.roe !== null && f.roe !== undefined) {
+      if (f.roe >= 15) s += 25;
+      else if (f.roe >= 10) s += 20;
+      else if (f.roe >= 8) s += 14;
+      else if (f.roe >= 5) s += 8;
+      else if (f.roe >= 0) s += 3;
+      else s -= 10; // 净资产收益率为负
+    } else s += 8;
+    // ② 盈利空间：毛利率（满分15；银行保险等无毛利率口径，中性处理）
+    if (f.grossMargin !== null && f.grossMargin !== undefined) {
+      if (f.grossMargin >= 50) s += 15;
+      else if (f.grossMargin >= 30) s += 12;
+      else if (f.grossMargin >= 15) s += 8;
+      else if (f.grossMargin >= 5) s += 4;
+    }
+    // ③ 盈利质量：净利率（满分10）
+    if (f.netMargin !== null && f.netMargin !== undefined) {
+      if (f.netMargin >= 25) s += 10;
+      else if (f.netMargin >= 15) s += 8;
+      else if (f.netMargin >= 5) s += 5;
+      else if (f.netMargin >= 0) s += 2;
+      else s -= 8;
+    } else s += 3;
+    // ④ 成长性：营收+净利双维验证（满分25，"多指标同步向好"加分，背离扣分）
+    if (f.revGrowth !== null && f.revGrowth !== undefined) {
+      if (f.revGrowth >= 30) s += 13;
+      else if (f.revGrowth >= 15) s += 10;
+      else if (f.revGrowth >= 5) s += 7;
+      else if (f.revGrowth >= 0) s += 3;
+      else s -= 6;
+    }
+    if (f.profitGrowth !== null && f.profitGrowth !== undefined) {
+      if (f.profitGrowth >= 30) s += 12;
+      else if (f.profitGrowth >= 15) s += 9;
+      else if (f.profitGrowth >= 0) s += 5;
+      else s -= 8;
+    }
+    // ⑤ 改善方向：同比增速环比变化（验证盈利趋势是否在加速）
+    if (f.profitGrowth !== null && f.prevProfitGrowth !== null) {
+      if (f.profitGrowth > f.prevProfitGrowth + 3) s += 5;       // 增速明显改善
+      else if (f.profitGrowth < f.prevProfitGrowth - 5) s -= 5;  // 增速明显恶化
+    }
+    // ⑥ 财务稳健：资产负债率（金融行业天然高负债，豁免）
+    if (f.debtRatio !== null && f.debtRatio !== undefined) {
+      const isFinancial = (f.grossMargin === null || f.grossMargin === undefined) && f.debtRatio > 70;
+      if (isFinancial) s += 5;
+      else if (f.debtRatio >= 80) s -= 12;
+      else if (f.debtRatio >= 65) s -= 6;
+      else if (f.debtRatio <= 45) s += 8;
+      else if (f.debtRatio <= 55) s += 4;
+    }
+    // ⑦ 现金流含金量：经营现金流/每股收益（验证利润真实性）
+    if (f.ocfps !== null && f.ocfps !== undefined && f.eps !== null && f.eps !== undefined && f.eps > 0.05) {
+      const ratio = f.ocfps / f.eps;
+      if (ratio >= 1) s += 5;       // 现金流全额覆盖利润，盈利真实
+      else if (ratio >= 0.6) s += 2;
+      else if (ratio < 0) s -= 6;   // 经营现金流为负，纸面利润风险
+    }
+    return s;
   },
 
   /** 技术面评分 */
@@ -2489,13 +2707,21 @@ const SevenDimAnalyzer = {
   },
 
   /** 风险面评分（越低风险越高） */
-  scoreRisk(quote, klines, capitalFlow) {
+  scoreRisk(quote, klines, capitalFlow, financials) {
     let score = 70; // 从高分开始扣
     // PE过高风险
     if (quote.pe > 50) score -= 15;
     else if (quote.pe > 30) score -= 8;
     // 估值过高
     if (quote.pb > 5) score -= 10;
+    // v4.0 财报排雷
+    if (financials) {
+      if (financials.roe !== null && financials.roe < 0) score -= 12;            // 亏损
+      if (financials.profitGrowth !== null && financials.profitGrowth < -30) score -= 8; // 利润大幅下滑
+      const isFin = (financials.grossMargin === null || financials.grossMargin === undefined) && financials.debtRatio > 70;
+      if (!isFin && financials.debtRatio !== null && financials.debtRatio >= 80) score -= 8; // 高负债
+      if (financials.ocfps !== null && financials.eps !== null && financials.eps > 0.05 && financials.ocfps < 0) score -= 8; // 现金流为负
+    }
     // 资金流出风险
     if (capitalFlow && capitalFlow.length > 0) {
       const recent = capitalFlow.slice(-3);
@@ -2517,8 +2743,8 @@ const SevenDimAnalyzer = {
 // ============================================================
 const DiagnosticEngine = {
   /** 生成完整诊断报告 */
-  generateReport(quote, klines, capitalFlow, news, scores) {
-    const data = { quote, klines, capitalFlow, news, scores };
+  generateReport(quote, klines, capitalFlow, news, scores, financials, dragonTiger) {
+    const data = { quote, klines, capitalFlow, news, scores, financials, dragonTiger };
     return {
       mod1: this.module1_Financial(data),
       mod2: this.module2_Industry(data),
@@ -2532,11 +2758,71 @@ const DiagnosticEngine = {
     };
   },
 
-  /** 模块1：财务基本面校验 */
-  module1_Financial({ quote, klines, capitalFlow }) {
+  /** 模块1：财务基本面校验（v4.0 接入真实财报数据） */
+  module1_Financial({ quote, klines, capitalFlow, financials: fin }) {
     const q = quote;
     let html = '';
-    // 结论前置
+    // ===== v4.0 真实财报展示（中报/年报主要指标）=====
+    if (fin) {
+      const fmt = (v, unit, d) => (v === null || v === undefined) ? '--' : v.toFixed(d === undefined ? 2 : d) + (unit || '');
+      const cls = v => v === null || v === undefined ? '' : (v >= 0 ? 'color-up' : 'color-down');
+      const sign = v => (v === null || v === undefined) ? '--' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+      // 结论：盈利成色四维验证
+      let verdict = '📊 财报数据中规中矩，建议结合技术面与资金面综合判断。';
+      const goodSignals = [];
+      const badSignals = [];
+      if (fin.roe !== null && fin.roe !== undefined) { if (fin.roe >= 10) goodSignals.push('ROE ' + fin.roe.toFixed(1) + '%'); else if (fin.roe < 5) badSignals.push('ROE偏低'); }
+      if (fin.grossMargin !== null && fin.grossMargin !== undefined && fin.grossMargin >= 30) goodSignals.push('毛利率' + fin.grossMargin.toFixed(0) + '%');
+      if (fin.netMargin !== null && fin.netMargin !== undefined && fin.netMargin >= 15) goodSignals.push('净利率' + fin.netMargin.toFixed(0) + '%');
+      if (fin.revGrowth !== null && fin.revGrowth !== undefined && fin.revGrowth >= 15) goodSignals.push('营收高增');
+      if (fin.profitGrowth !== null && fin.profitGrowth !== undefined) {
+        if (fin.profitGrowth >= 20) goodSignals.push('净利高增');
+        if (fin.profitGrowth < 0) badSignals.push('净利同比下滑' + fin.profitGrowth.toFixed(0) + '%');
+        else if (fin.revGrowth !== null && fin.revGrowth !== undefined && fin.profitGrowth > fin.revGrowth + 8) goodSignals.push('利润增速跑赢营收');
+      }
+      if (fin.debtRatio !== null && fin.debtRatio !== undefined && fin.debtRatio >= 70) {
+        const isFin = (fin.grossMargin === null || fin.grossMargin === undefined);
+        if (!isFin) badSignals.push('负债率' + fin.debtRatio.toFixed(0) + '%偏高');
+      }
+      if (fin.ocfps !== null && fin.ocfps !== undefined && fin.eps !== null && fin.eps !== undefined && fin.eps > 0.05 && fin.ocfps < 0) badSignals.push('经营现金流为负');
+      if (goodSignals.length >= 3 && badSignals.length === 0) verdict = '✅ 盈利成色优秀：' + goodSignals.join('、') + '，多指标同步向好，基本面支撑扎实。';
+      else if (goodSignals.length >= 2 && badSignals.length <= 1) verdict = '✅ 盈利质量较好：' + goodSignals.join('、') + (badSignals.length ? '，但需注意' + badSignals.join('、') : '') + '。';
+      else if (badSignals.length >= 2) verdict = '⚠️ 盈利成色不足：' + badSignals.join('、') + '，基本面支撑偏弱，需控制仓位。';
+      html += '<div class="conclusion">' + verdict + '</div>';
+
+      html += '<p><strong>【最新财报：' + fin.period + '】</strong></p>';
+      html += '<div class="fin-grid">';
+      const row = (label, val, c) => '<div class="fin-cell"><span class="fin-label">' + label + '</span><span class="fin-val ' + (c || '') + '">' + val + '</span></div>';
+      html += row('加权ROE', fmt(fin.roe, '%', 2));
+      html += row('毛利率', fmt(fin.grossMargin, '%', 1));
+      html += row('净利率', fmt(fin.netMargin, '%', 1));
+      html += row('每股收益', fmt(fin.eps, '元', 2));
+      html += row('营收同比', sign(fin.revGrowth), cls(fin.revGrowth));
+      html += row('净利同比', sign(fin.profitGrowth), cls(fin.profitGrowth));
+      html += row('扣非净利同比', sign(fin.deductedGrowth), cls(fin.deductedGrowth));
+      html += row('资产负债率', fmt(fin.debtRatio, '%', 1));
+      html += row('每股经营现金流', fmt(fin.ocfps, '元', 2));
+      html += row('流动比率', fmt(fin.currentRatio, '', 2));
+      html += '</div>';
+      // 现金流验证
+      if (fin.ocfps !== null && fin.ocfps !== undefined && fin.eps !== null && fin.eps !== undefined && fin.eps > 0.05) {
+        const ratio = fin.ocfps / fin.eps;
+        html += '<p>';
+        if (ratio >= 1) html += '✅ 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，现金全额覆盖账面利润，盈利含金量高。';
+        else if (ratio >= 0.6) html += '📊 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，利润变现能力尚可。';
+        else if (ratio < 0) html += '⚠️ 经营现金流为负，账面利润未转化为现金，警惕利润虚增风险。';
+        else html += '⚠️ 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，利润含金量偏低，需关注回款情况。';
+        html += '</p>';
+      }
+      // 增速改善方向
+      if (fin.profitGrowth !== null && fin.prevProfitGrowth !== null) {
+        if (fin.profitGrowth > fin.prevProfitGrowth + 3) html += '<p>📈 净利增速同比改善（' + fin.prevProfitGrowth.toFixed(1) + '% → ' + fin.profitGrowth.toFixed(1) + '%），盈利处于加速通道。</p>';
+        else if (fin.profitGrowth < fin.prevProfitGrowth - 5) html += '<p>📉 净利增速同比回落（' + fin.prevProfitGrowth.toFixed(1) + '% → ' + fin.profitGrowth.toFixed(1) + '%），盈利动能减弱。</p>';
+      }
+      html += '<div class="data-source-tag"><span class="ds-badge ds-ok">数据来源：东方财富F10·' + fin.period + '</span></div>';
+      return html;
+    }
+    // 旧逻辑（无财报时：港股/北交所/接口失败）
     let conclusion = '';
     if (q.pe > 0 && q.pe < 20 && q.pb > 0 && q.pb < 2) {
       conclusion = '✅ 基本面质地良好，估值合理偏低，具备长期持有价值。';
@@ -2649,12 +2935,51 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块3：资金流向数据解读 */
-  module3_Capital({ capitalFlow }) {
+  /** 模块3：资金流向数据解读（v4.0 增加龙虎榜席位数据作为主力动向第二来源） */
+  module3_Capital({ capitalFlow, dragonTiger }) {
     let html = '';
+    // ===== v4.0 龙虎榜：机构/游资席位动向（独立于资金流向的第二主力来源）=====
+    const dt = dragonTiger;
+    if (dt && dt.length > 0) {
+      html += '<p><strong>【🐯 龙虎榜席位动向】</strong></p>';
+      dt.slice(0, 3).forEach(d => {
+        const netWan = d.netBuy / 1e4;
+        const netCls = d.netBuy >= 0 ? 'color-up' : 'color-down';
+        const netStr = (d.netBuy >= 0 ? '净买入 ' : '净卖出 ') + Utils.formatAmount(Math.abs(d.netBuy));
+        html += '<div class="dt-record">';
+        html += '<div class="dt-head"><span class="dt-date">' + d.date + '</span><span class="dt-reason">' + (d.reason || '') + '</span></div>';
+        html += '<div class="metric-row"><span class="metric-label">龙虎榜资金</span><span class="metric-val ' + netCls + '">' + netStr + '（占成交' + (d.dealRatio || 0).toFixed(1) + '%）</span></div>';
+        if (d.seatInfo) html += '<div class="dt-seat">📋 ' + d.seatInfo.replace(/</g,'&lt;') + '</div>';
+        // 上榜后表现（仅展示已到期的）
+        const after = [];
+        if (d.d1 !== null && d.d1 !== undefined) after.push('1日 ' + (d.d1 >= 0 ? '+' : '') + d.d1.toFixed(1) + '%');
+        if (d.d5 !== null && d.d5 !== undefined) after.push('5日 ' + (d.d5 >= 0 ? '+' : '') + d.d5.toFixed(1) + '%');
+        if (d.d10 !== null && d.d10 !== undefined) after.push('10日 ' + (d.d10 >= 0 ? '+' : '') + d.d10.toFixed(1) + '%');
+        if (after.length) html += '<div class="dt-after">上榜后表现：' + after.join(' / ') + '</div>';
+        html += '</div>';
+      });
+      // 席位结论
+      const recent = dt[0];
+      if (recent) {
+        if (recent.netBuy > 0 && recent.seatInfo && recent.seatInfo.indexOf('机构') >= 0 && recent.seatInfo.indexOf('买入') >= 0) {
+          html += '<p>✅ 最近上榜由机构席位净买入，机构资金认可度较高。</p>';
+        } else if (recent.netBuy < 0 && recent.seatInfo && recent.seatInfo.indexOf('机构') >= 0 && recent.seatInfo.indexOf('卖出') >= 0) {
+          html += '<p>⚠️ 最近上榜机构席位净卖出，主力撤退信号，需高度警惕。</p>';
+        } else if (recent.netBuy > 5e7) {
+          html += '<p>📊 最近上榜游资净买入较强，短线情绪活跃，注意游资快进快出风险。</p>';
+        } else if (recent.netBuy < -5e7) {
+          html += '<p>⚠️ 最近上榜资金净卖出明显，短线抛压较重。</p>';
+        }
+      }
+    }
     if (!capitalFlow || capitalFlow.length === 0) {
-      html += '<div class="conclusion">📊 暂无资金流向数据，无法判断主力动向。</div>';
-      html += '<p>建议通过东方财富、同花顺等平台查看资金流向详情。</p>';
+      if (!html) {
+        html += '<div class="conclusion">📊 暂无资金流向数据，无法判断主力动向。</div>';
+        html += '<p>建议通过东方财富、同花顺等平台查看资金流向详情。</p>';
+      } else {
+        html += '<div class="conclusion">📊 日度资金流向暂不可用，上方为龙虎榜席位数据，可辅助判断主力动向。</div>';
+      }
+      if (dt && dt.length > 0) html += '<div class="data-source-tag"><span class="ds-badge ds-ok">数据来源：东方财富·龙虎榜</span></div>';
       return html;
     }
 
@@ -2726,7 +3051,9 @@ const DiagnosticEngine = {
     // 数据来源标识
     const src = capitalFlow._source || '主通道';
     const badgeCls = src === '主通道' ? 'ds-badge ds-ok' : 'ds-badge ds-backup';
-    html += `<div class="data-source-tag"><span class="${badgeCls}">数据来源：东方财富·${src}</span></div>`;
+    html += `<div class="data-source-tag"><span class="${badgeCls}">数据来源：东方财富资金流向·${src}</span>`;
+    if (dt && dt.length > 0) html += `<span class="ds-badge ds-ok" style="margin-left:6px">+龙虎榜席位</span>`;
+    html += `</div>`;
     return html;
   },
 
@@ -3573,6 +3900,35 @@ const Watchlist = {
     return Utils.fiveDimScore(quote, klines);
   },
 
+  /** v4.0 财报预热：后台逐只拉取，拿到财报后若评分变化则静默刷新一次自选列表 */
+  _finPreheating: false,
+  async _preheatFinancials(items) {
+    if (this._finPreheating) return;
+    // 只处理有行情、且A股、且还没有财报缓存的
+    const pending = items.filter(it => !it.noQuote && !it.code.startsWith('hk') && !it.code.startsWith('us')
+      && !DataAPI._cacheGet('financials_' + it.code, 'financials'));
+    if (pending.length === 0) return;
+    this._finPreheating = true;
+    let changed = 0;
+    for (const it of pending) {
+      try {
+        const fin = await DataAPI.fetchFinancials(it.code);
+        if (fin && this._cache[it.code] && this._cache[it.code].quote) {
+          const oldScore = this._cache[it.code].score;
+          const c = this._cache[it.code];
+          const newResult = Utils.fiveDimScore(c.quote, null, fin);
+          if (newResult.total !== oldScore) changed++;
+        }
+      } catch (e) { /* 单只失败不影响其他 */ }
+    }
+    this._finPreheating = false;
+    // 有评分变化且用户仍停留在自选页时，静默重渲染
+    if (changed > 0 && Navigation.currentPage === 'watchlist') {
+      console.log('[v4.0] 财报预热完成，', changed, '只评分更新，静默刷新');
+      this.render();
+    }
+  },
+
   /** 根据评分生成建议操作 */
   getAdvice(score) {
     if (score >= 70) return { text: '持有/加仓', icon: '✅', cls: 'advice-buy' };
@@ -3895,7 +4251,9 @@ const Watchlist = {
       try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {
         console.warn('[Watchlist] K线获取失败:', code, e.message);
       }
-      const scoreResult = this.quickScore(q, klines);
+      // v4.0: 有已缓存财报时直接用真实财报评分（无缓存先用旧分，后台预热后静默刷新）
+      const cachedFin = DataAPI._cacheGet('financials_' + code, 'financials');
+      const scoreResult = Utils.fiveDimScore(q, klines, cachedFin);
       const score = scoreResult.total;
       const dims = scoreResult.dims;
       const advice = this.getAdvice(score);
@@ -3955,8 +4313,9 @@ const Watchlist = {
         const diffCls = diff >= 0 ? 'color-up' : 'color-down';
         costDiff = '<span class="wl-cost-diff ' + diffCls + '">' + (diff >= 0 ? '+' : '') + diff + '%</span>';
       }
-      html += '<div class="watchlist-item watchlist-item-v2">';
-      html += '<div class="wl-left" onclick="App.analyzeStock(\'' + item.code + '\')">';
+      // v4.0: 整卡可点击跳转分析页（操作按钮 stopPropagation 拦截）
+      html += '<div class="watchlist-item watchlist-item-v2 clickable" onclick="App.analyzeStock(\'' + item.code + '\')">';
+      html += '<div class="wl-left">';
       html += '<div class="wl-name">' + item.name + '</div>';
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
@@ -3970,8 +4329,8 @@ const Watchlist = {
       // 末尾：量化评分 + 操作分 + 价格
       const starLevel = Utils.scoreLevel(item.score);
       html += '<div class="wl-right">';
-      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
-      html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
+      html += '<div class="wl-price ' + cls + '">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
+      html += '<div class="wl-change ' + cls + '">';
       html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
       html += '</div>';
       html += '<div class="wl-tail-scores">';
@@ -3980,8 +4339,8 @@ const Watchlist = {
       const opColor = item.score >= 70 ? '#00c853' : item.score >= 40 ? '#ffa500' : '#ff4757';
       html += '<div class="wl-op-score" style="background:' + opBg + ';color:' + opColor + '">' + advice.icon + item.advice.text + '</div>';
       html += '</div>';
-      html += '<button class="wl-move-group" title="移动到分组" onclick="Watchlist.showGroupPicker(\'' + item.code + '\')">📂</button>';
-      html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
+      html += '<button class="wl-move-group" title="移动到分组" onclick="event.stopPropagation();Watchlist.showGroupPicker(\'' + item.code + '\')">📂</button>';
+      html += '<button class="wl-delete" onclick="event.stopPropagation();Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
       html += '</div>';
     };
 
@@ -4008,6 +4367,8 @@ const Watchlist = {
     for (const it of items) {
       if (it && it.name && it.code && CODE_TO_NAME[it.code] !== it.name) CODE_TO_NAME[it.code] = it.name;
     }
+    // v4.0: 财报预热——后台逐只拉取财报（缓存6h），有新财报且分数变化时静默重渲染
+    this._preheatFinancials(items);
     if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
   },
 
@@ -5729,11 +6090,13 @@ const App = {
 
     try {
       // 并行获取数据
-      const [quote, klines, capitalFlow, news] = await Promise.all([
+      const [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
         DataAPI.fetchQuote(code),
         DataAPI.fetchKline(code),
         DataAPI.fetchCapitalFlow(code),
-        DataAPI.fetchNews(code)
+        DataAPI.fetchNews(code),
+        DataAPI.fetchFinancials(code).catch(() => null),
+        DataAPI.fetchDragonTiger(code).catch(() => null)
       ]);
 
       if (!quote) {
@@ -5752,7 +6115,8 @@ const App = {
       // 七维度评分
       let scores;
       try {
-        scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow);
+        scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow, financials);
+        scores.financials = financials; // 供诊断模块展示
       } catch(e) {
         console.warn('[分析] 七维度评分异常:', e);
         scores = { total: 50, dims: { fundamental: 50, technical: 50, capital: 50, valuation: 50, sentiment: 50 }, message: '', macro: 50, risk: 50 };
@@ -5761,7 +6125,7 @@ const App = {
       // 持仓诊断
       let report;
       try {
-        report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores);
+        report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores, financials, dragonTiger);
       } catch(e) {
         console.warn('[分析] 诊断报告异常:', e);
         report = { mod1: '', mod2: '', mod3: '', mod4: '', mod5: { html: '', risks: [] }, mod6: '', mod7: '', mod8: '', riskSummary: '' };
