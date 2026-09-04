@@ -1,5 +1,5 @@
 /**
- * 智股分析 v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
+ * 智股分析 v3.6 - A股智能分析系统（次日上涨概率TOP20+隔日核实+自选股批量导入）
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -552,56 +552,35 @@ const Utils = {
    * f[43]振幅 f[49]涨停价 f[41]跌停价
    */
   parseTencentQuote(text) {
-    const varMatch = text.match(/v_([a-z]{2})(\d+)="(.+)"/);
-    if (!varMatch) return null;
-    const marketPrefix = varMatch[1];
-    const f = varMatch[3].split('~');
+    const match = text.match(/v_[a-z]{2}\d+="(.+)"/);
+    if (!match) return null;
+    const f = match[1].split('~');
     if (f.length < 45) return null;
-    const isHK = marketPrefix === 'hk';
     const price = +f[3];
     const prevClose = +f[4];
     // 计算涨跌额和涨跌幅（作为备用）
     const calcChange = price - prevClose;
     const calcChangePct = prevClose > 0 ? (calcChange / prevClose * 100) : 0;
-    // 港股字段位置与A股不同：f[37]单位为元（A股为万元），f[6]单位为股（A股为手）
-    // 港股PB不在f[46]（该处为英文简称），做数字兜底；换手率f[38]港股为0，用成交量/股本估算兜底
-    const rawAmount = +f[37] || 0;
-    const rawVolume = +f[6] || 0;
-    const numOrZero = v => { const n = +v; return isFinite(n) ? n : 0; };
     return {
       name: f[1],
       code: f[2],
-      isHK: isHK,
       price: price,
       prevClose: prevClose,
       open: +f[5],
-      volume: isHK ? rawVolume / 100 : rawVolume, // 统一换算为「手」（港股1手=100股近似，仅用于展示量级）
-      volumeShares: rawVolume,                     // 原始股数（港股）
+      volume: +f[6], // 手
       buyVol: +f[7] || 0,
       sellVol: +f[8] || 0,
       high: +f[33] || price,
       low: +f[34] || price,
       change: +f[31] || calcChange,
       changePct: +f[32] || calcChangePct,
-      turnover: (() => {
-        const t = numOrZero(f[38]);
-        if (t > 0) return t;
-        // 港股f[38]恒为0：用 成交量(股)÷流通股本(股) 估算，流通股本≈流通市值(亿港元)÷现价
-        if (isHK && rawVolume > 0 && price > 0) {
-          const circCapYi = numOrZero(f[44]);
-          if (circCapYi > 0) {
-            const est = rawVolume / (circCapYi * 1e8 / price) * 100;
-            if (est > 0 && est < 100) return +est.toFixed(2);
-          }
-        }
-        return 0;
-      })(), // 换手率（港股按成交量/流通股本估算）
-      pe: numOrZero(f[39]),       // 市盈率
-      pb: isHK ? numOrZero(f[59]) : numOrZero(f[46]), // 市净率（A股f[46]；港股f[46]为英文简称，PB在f[59]）
-      amount: isHK ? rawAmount / 10000 : rawAmount, // 统一为「万元」
-      marketCap: numOrZero(f[45]), // 总市值（亿）
-      circCap: numOrZero(f[44]),   // 流通市值（亿）
-      amplitude: numOrZero(f[43]) || (prevClose > 0 ? ((+f[33] - +f[34]) / prevClose * 100) : 0),
+      turnover: +f[38] || 0, // 换手率
+      pe: +f[39] || 0, // 市盈率
+      pb: +f[46] || 0, // 市净率
+      amount: (+f[37] || 0), // 成交额（万）
+      marketCap: +f[45] || 0, // 总市值（亿）
+      circCap: +f[44] || 0, // 流通市值（亿）
+      amplitude: +f[43] || (prevClose > 0 ? ((+f[33] - +f[34]) / prevClose * 100) : 0),
       time: f[30] || '',
     };
   },
@@ -647,11 +626,8 @@ const Utils = {
     if (/^(sh|sz|bj)\d{6}$/.test(code)) return code;
     if (/^hk\d{5}$/.test(code)) return code;
     if (/^us[a-z]+$/i.test(code)) return code;
-    // hk前缀但位数不足5位（如 hk981 / hk0981）：补0到5位（腾讯接口要求5位，4位返回pv_none_match）
-    let hm = code.match(/^hk(\d{1,5})$/);
-    if (hm) return 'hk' + hm[1].padStart(5, '0');
-    // 纯4-5位数字：港股代码（A股/ETF均为6位不冲突），4位补0
-    if (/^\d{4,5}$/.test(code)) return 'hk' + code.padStart(5, '0');
+    // 尝试港股5位代码（纯数字5位）
+    if (/^\d{5}$/.test(code)) return 'hk' + code;
     if (/^\d{6}$/.test(code)) {
       // 北交所/新三板：8开头、4开头（43/83等）、920开头（北交所新代码段）
       if (code.startsWith('8') || code.startsWith('920') || code.startsWith('43') || code.startsWith('40') || code.startsWith('41') || code.startsWith('42')) return 'bj' + code;
@@ -1032,12 +1008,9 @@ const Utils = {
     return '#ff4757';
   },
 
-  fiveDimScore(quote, klines, financials) {
+  fiveDimScore(quote, klines) {
     if (!quote || !quote.price || quote.price <= 0) return { total: 0, dims: { fundamental: 0, technical: 0, capital: 0, valuation: 0, sentiment: 0 } };
-    // v4.0: 有真实财报时基本面分用财报评分（与七维分析器同一套"盈利成色"逻辑）
-    const fundamental = financials
-      ? Math.max(0, Math.min(100, SevenDimAnalyzer._fundamentalByReport(financials, quote)))
-      : this._scoreFundamentalQuick(quote, klines);
+    const fundamental = this._scoreFundamentalQuick(quote, klines);
     const technical = this._scoreTechnicalQuick(klines, quote);
     const capital = this._scoreCapitalQuick(quote, klines);
     const valuation = this._scoreValuationQuick(quote);
@@ -1377,12 +1350,7 @@ const DataAPI = {
     capitalFlow: 30000,   // 资金流向30秒
     capitalFlowStock: 120000, // 个股资金流向2分钟
     news: 120000,     // 新闻120秒
-    topMarketStocks: 300000, // 全市场活跃股5分钟（次日概率扫描用）
-    financials: 21600000,   // v4.0 财报数据6小时（季度更新）
-    dragonTiger: 1800000,   // v4.0 龙虎榜30分钟
-    realtimeFlow: 30000,    // v4.0 实时资金流30秒
-    marketBreadth: 300000,  // v4.1 大盘情绪/指数5分钟
-    dragonTigerBatch: 1800000 // v4.1 全市场龙虎榜批量30分钟
+    topMarketStocks: 300000 // 全市场活跃股5分钟（次日概率扫描用）
   },
   _cacheGet(key, type) {
     const c = this._cache[key];
@@ -1426,8 +1394,6 @@ const DataAPI = {
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
-      // v3.9: 入参统一规范化，兼容历史残留的不规范港股代码（如4位hk0981→hk00981）
-      codes = (codes || []).map(c => Utils.normalizeCode(c) || c);
       // 分离北交所和其他股票
       const bjCodes = codes.filter(c => c.startsWith('bj'));
       const otherCodes = codes.filter(c => !c.startsWith('bj'));
@@ -1447,51 +1413,6 @@ const DataAPI = {
             if (parsed) results[codeMatch[1]] = parsed;
           }
         });
-      }
-
-      // v3.9: 港股腾讯未返回时，用东方财富备用API兜底（secid=116.xxxxx）
-      for (const code of codes) {
-        if (!code.startsWith('hk')) continue;
-        const exist = results[code];
-        if (exist && exist.price > 0) continue;
-        const emCode = code.substring(2);
-        for (const dom of ['push2.eastmoney.com', '82.push2.eastmoney.com', 'push2his.eastmoney.com']) {
-          try {
-            const emUrl = 'https://' + dom + '/api/qt/stock/get?secid=116.' + emCode +
-              '&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170,f171,f50';
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 8000);
-            const resp = await fetch(emUrl, { signal: ctrl.signal });
-            clearTimeout(timer);
-            const data = await resp.json();
-            if (data && data.data && data.data.f43) {
-              const d = data.data;
-              results[code] = {
-                name: d.f58 || code,
-                code: code,
-                isHK: true,
-                price: d.f43 / 1000,
-                prevClose: (d.f60 || 0) / 1000,
-                open: (d.f46 || 0) / 1000,
-                high: (d.f44 || 0) / 1000,
-                low: (d.f45 || 0) / 1000,
-                volume: d.f47 || 0,
-                volumeShares: d.f47 || 0,
-                amount: d.f48 || 0,
-                change: (d.f171 || 0) / 1000,
-                changePct: (d.f170 || 0) / 100,
-                turnover: (d.f168 || 0) / 100,
-                pe: (d.f162 || 0) / 100,
-                pb: (d.f167 || 0) / 100,
-                marketCap: (d.f116 || 0) / 1e8,
-                circCap: (d.f117 || 0) / 1e8,
-                amplitude: (d.f50 || 0) / 100,
-                time: ''
-              };
-              break;
-            }
-          } catch (e) { continue; }
-        }
       }
 
       // 北交所股票：先尝试腾讯，失败则用东方财富备用API
@@ -1568,20 +1489,15 @@ const DataAPI = {
     return q || null;
   },
 
-  /** 获取日K线数据（A股/ETF/北交所/港股全支持，多通道容灾） */
+  /** 获取日K线数据 */
   async fetchKline(code, count = 120) {
     try {
-      const isHK = code.startsWith('hk');
-      // 港股腾讯K线接口为 hkfqkline（A股为 fqkline）
-      const klineBase = isHK
-        ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get'
-        : CONFIG.TENCENT_KLINE;
-      const url = `${klineBase}?param=${code},day,,,${count},qfq`;
+      // 先尝试腾讯K线API
+      const url = `${CONFIG.TENCENT_KLINE}?param=${code},day,,,${count},qfq`;
       const resp = await fetch(url);
       const data = await resp.json();
       if (data && data.data && data.data[code]) {
-        const node = data.data[code];
-        const kdata = node.day || node.qfqday || node.hkday || [];
+        const kdata = data.data[code].day || data.data[code].qfqday || [];
         if (kdata.length > 0) {
           return kdata.map(k => ({
             date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
@@ -1590,31 +1506,32 @@ const DataAPI = {
       }
 
       // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
-      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
-      const emCode = code.substring(2);
-      let secid;
-      if (isHK) secid = '116.' + emCode;
-      else if (code.startsWith('sh')) secid = '1.' + emCode;
-      else secid = '0.' + emCode; // sz / bj
-      const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
-      for (const dom of emDomains) {
-        try {
-          const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8000);
-          const emResp = await fetch(emUrl, { signal: ctrl.signal });
-          clearTimeout(timer);
-          const emData = await emResp.json();
-          if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
-            return emData.data.klines.map(line => {
-              const f = line.split(',');
-              return {
-                date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
-                volume: +f[5], amount: +f[6]
-              };
-            });
-          }
-        } catch (e2) { continue; } // 该通道失败，切下一通道
+      if (code.startsWith('bj') || code.startsWith('sh') || code.startsWith('sz')) {
+        const emCode = code.substring(2);
+        let market = 1; // 沪市
+        if (code.startsWith('sz')) market = 0;
+        if (code.startsWith('bj')) market = 0;
+        const secid = market + '.' + emCode;
+        const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
+        for (const dom of emDomains) {
+          try {
+            const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), 8000);
+            const emResp = await fetch(emUrl, { signal: ctrl.signal });
+            clearTimeout(timer);
+            const emData = await emResp.json();
+            if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
+              return emData.data.klines.map(line => {
+                const f = line.split(',');
+                return {
+                  date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
+                  volume: +f[5], amount: +f[6]
+                };
+              });
+            }
+          } catch (e2) { continue; } // 该通道失败，切下一通道
+        }
       }
 
       return [];
@@ -1633,22 +1550,12 @@ const DataAPI = {
       const data = await resp.json();
       if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
         const results = data.QuotationCodeTable.Data
-          .filter(item => {
-            const c = item.Code || '';
-            // A股/ETF/北交所：6位数字；港股：4-5位数字；美股：1-10位字母
-            return /^\d{5,6}$/.test(c) || /^\d{4}$/.test(c) || /^[A-Za-z.]{1,10}$/.test(c);
-          })
+          .filter(item => /^\d{6}$/.test(item.Code))
           .map(item => {
             const code = item.Code;
             let prefix;
             const mkt = String(item.MktNum);
-            const jys = String(item.JYS || '');
-            const cls = String(item.Classify || '');
-            if (mkt === '116' || jys === 'HK' || cls === 'HK') {
-              prefix = 'hk'; // 港股
-            } else if (jys === 'US' || cls === 'US' || /^[A-Za-z.]{1,10}$/.test(code)) {
-              prefix = 'us'; // 美股
-            } else if (mkt === '1') {
+            if (mkt === '1') {
               prefix = 'sh';
             } else if (mkt === '0') {
               if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
@@ -1658,13 +1565,12 @@ const DataAPI = {
               else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
               else prefix = 'sz';
             }
-            const fullCode = prefix === 'us' ? code : prefix + code;
             return {
               name: item.Name || code,
               code: code,
               market: prefix,
               fullName: `${item.Name || code}(${code})`,
-              fullCode: fullCode
+              fullCode: prefix + code
             };
           });
         if (results.length > 0) return results;
@@ -1681,25 +1587,9 @@ const DataAPI = {
         return raw.split('^').map(line => {
           const parts = line.split('~');
           if (parts.length < 3) return null;
-          const market = String(parts[0] || '').toLowerCase(); // sh/sz/bj/hk/us/jj(基金)
+          const market = parts[0]; // sh/sz/bj
           const code = parts[1];
           const name = parts[2];
-          // 基金/理财等非股票标的跳过（jj前缀全部排除，沪深股票前缀均为sh/sz/bj）
-          if (market === 'jj' || market === 'hkjj' || market === 'of') return null;
-          // 港股：hk前缀 + 4-5位数字
-          if (market === 'hk') {
-            if (!/^\d{4,5}$/.test(code)) return null;
-            const hkCode = code.padStart(5, '0');
-            return { name: name || hkCode, code: hkCode, market: 'hk',
-              fullName: `${name || hkCode}(${hkCode})`, fullCode: 'hk' + hkCode };
-          }
-          // 美股：us前缀 + 字母代码
-          if (market === 'us') {
-            if (!/^[A-Za-z.]{1,10}$/.test(code)) return null;
-            return { name: name || code, code: code, market: 'us',
-              fullName: `${name || code}(${code})`, fullCode: code };
-          }
-          // A股/ETF/北交所：6位数字
           if (!/^\d{6}$/.test(code)) return null;
           // 腾讯市场前缀标准化
           let prefix = market;
@@ -1829,11 +1719,7 @@ const DataAPI = {
     const cached = this._cacheGet(cacheKey, 'capitalFlow');
     if (cached) return cached;
     try {
-      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
-      let secid;
-      if (code.startsWith('hk')) secid = '116.' + code.substring(2);
-      else if (code.startsWith('sh')) secid = '1.' + code.substring(2);
-      else secid = '0.' + code.substring(2);
+      const secid = code.startsWith('sh') ? `1.${code.substring(2)}` : `0.${code.substring(2)}`;
       const res = await this._fetchEMCapitalKlines(secid, 5);
       let result = [];
       if (res) {
@@ -1858,239 +1744,11 @@ const DataAPI = {
     }
   },
 
-  /** v4.0 获取F10财务主要指标（东方财富ZYZB，近9期）。A股专用，港股/北交所返回null */
-  async fetchFinancials(code) {
-    if (code.startsWith('hk') || code.startsWith('us')) return null;
-    const cacheKey = 'financials_' + code;
-    const cached = this._cacheGet(cacheKey, 'financials');
-    if (cached) return cached;
-    try {
-      const num = code.substring(2);
-      // 北交所(8/4开头)F10接口暂不支持，直接跳过走旧逻辑
-      if (/^(8|4|92)/.test(num)) return null;
-      const prefix = code.startsWith('sh') ? 'SH' : 'SZ';
-      const url = 'https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew?type=0&code=' + prefix + num;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      const resp = await fetch(url, {
-        signal: ctrl.signal,
-        headers: { 'Referer': 'https://emweb.securities.eastmoney.com/' }
-      });
-      clearTimeout(timer);
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      if (!data || !data.data || data.data.length === 0) return null;
-      // 最新一期 + 去年同期（用于验证增长方向）
-      const r = data.data[0];
-      const rYoy = data.data.find(x => x.REPORT_DATE_NAME && x.REPORT_DATE_NAME.indexOf(r.REPORT_DATE_NAME.replace(/^[0-9]+/, String(parseInt(r.REPORT_DATE_NAME) - 1))) === 0) || null;
-      const numOrNull = v => (v === null || v === undefined || isNaN(v)) ? null : v;
-      const result = {
-        period: r.REPORT_DATE_NAME,
-        roe: numOrNull(r.ROEJQ),                  // 加权ROE %
-        grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
-        netMargin: numOrNull(r.XSJLL),            // 销售净利率 %
-        revGrowth: numOrNull(r.TOTALOPERATEREVETZ),   // 营收同比 %
-        profitGrowth: numOrNull(r.PARENTNETPROFITTZ), // 归母净利同比 %
-        deductedGrowth: numOrNull(r.KCFJCXSYJLRTZ),   // 扣非净利同比 %
-        debtRatio: numOrNull(r.ZCFZL),            // 资产负债率 %
-        eps: numOrNull(r.EPSJB),                  // 每股收益
-        bps: numOrNull(r.BPS),                    // 每股净资产
-        ocfps: numOrNull(r.MGJYXJJE),             // 每股经营现金流
-        currentRatio: numOrNull(r.LD),            // 流动比率
-        invTurnover: numOrNull(r.CHZZL),          // 存货周转率
-        arTurnover: numOrNull(r.YSZKZZL),         // 应收账款周转率
-        assetTurnover: numOrNull(r.TOAZZL),       // 总资产周转率
-        cashToRevenue: numOrNull(r.JYXJLYYSR),    // 经营现金流/营收 %（盈利含金量）
-        // 去年同期增速，用于判断改善方向
-        prevRevGrowth: rYoy ? numOrNull(rYoy.TOTALOPERATEREVETZ) : null,
-        prevProfitGrowth: rYoy ? numOrNull(rYoy.PARENTNETPROFITTZ) : null
-      };
-      this._cacheSet(cacheKey, 'financials', result);
-      return result;
-    } catch (e) {
-      console.warn('[财报] 获取失败:', code, e && e.message);
-      return null;
-    }
-  },
-
-  /** v4.0 获取龙虎榜历史（近90天上榜记录，含机构席位与上榜后表现）。A股专用 */
-  async fetchDragonTiger(code) {
-    if (code.startsWith('hk') || code.startsWith('us')) return null;
-    const cacheKey = 'dragonTiger_' + code;
-    const cached = this._cacheGet(cacheKey, 'dragonTiger');
-    if (cached) return cached;
-    try {
-      const num = code.substring(2);
-      const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?' +
-        'reportName=RPT_DAILYBILLBOARD_DETAILS&sortColumns=TRADE_DATE&sortTypes=-1' +
-        '&pageSize=5&pageNumber=1&columns=ALL' +
-        '&filter=(SECURITY_CODE%3D%22' + num + '%22)(TRADE_DATE%3E%3D%27' +
-        this._dateNDaysAgo(120) + '%27)';
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 8000);
-      const resp = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      if (!data || !data.result || !data.result.data || data.result.data.length === 0) {
-        this._cacheSet(cacheKey, 'dragonTiger', []);
-        return [];
-      }
-      const list = data.result.data.map(d => ({
-        date: (d.TRADE_DATE || '').substring(0, 10),
-        reason: d.EXPLANATION || '',
-        seatInfo: d.EXPLAIN || '',
-        netBuy: d.BILLBOARD_NET_AMT || 0,        // 龙虎榜净买额（元）
-        buy: d.BILLBOARD_BUY_AMT || 0,
-        sell: d.BILLBOARD_SELL_AMT || 0,
-        dealAmount: d.BILLBOARD_DEAL_AMT || 0,   // 龙虎榜成交额
-        dealRatio: d.DEAL_AMOUNT_RATIO || 0,     // 龙虎榜成交占比 %
-        changeRate: d.CHANGE_RATE || 0,          // 当日涨跌幅 %
-        turnover: d.TURNOVERRATE || 0,
-        d1: d.D1_CLOSE_ADJCHRATE,                // 上榜后1日
-        d2: d.D2_CLOSE_ADJCHRATE,
-        d5: d.D5_CLOSE_ADJCHRATE,
-        d10: d.D10_CLOSE_ADJCHRATE
-      }));
-      this._cacheSet(cacheKey, 'dragonTiger', list);
-      return list;
-    } catch (e) {
-      console.warn('[龙虎榜] 获取失败:', code, e && e.message);
-      return null;
-    }
-  },
-
-  /** v4.1 大盘情绪：沪深创三大指数涨跌幅（push2 ulist接口，浏览器可用；失败返回null降级为活跃股广度） */
-  async fetchMarketBreadth() {
-    const cached = this._cacheGet('marketBreadth', 'marketBreadth');
-    if (cached) return cached;
-    try {
-      const url = 'https://push2.eastmoney.com/api/qt/ulist.np/get?fltt=2&invt=2'
-        + '&fields=f2,f3,f12,f14&secids=1.000001,0.399001,0.399006';
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 6000);
-      const resp = await fetch(url, { signal: ctrl.signal });
-      clearTimeout(timer);
-      const data = await resp.json();
-      if (!data || !data.data || !Array.isArray(data.data.diff) || data.data.diff.length === 0) return null;
-      const idx = data.data.diff.map(d => ({ name: d.f14, changePct: parseFloat(d.f3) || 0 }));
-      const avg = idx.reduce((sum, x) => sum + x.changePct, 0) / idx.length;
-      const payload = { indexes: idx, avgChange: avg };
-      this._cacheSet('marketBreadth', 'marketBreadth', payload);
-      return payload;
-    } catch (e) {
-      console.warn('[大盘情绪] 获取失败:', e && e.message);
-      return null;
-    }
-  },
-
-  /** v4.1 全市场龙虎榜批量（近3日，1次请求；返回 {code: record} 映射，用于事件催化因子） */
-  async fetchDragonTigerBatch(days = 3) {
-    const cacheKey = 'dtBatch_' + days;
-    const cached = this._cacheGet(cacheKey, 'dragonTigerBatch');
-    if (cached) return cached;
-    try {
-      const d = new Date();
-      d.setDate(d.getDate() - days);
-      const since = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      const map = {};
-      for (let pn = 1; pn <= 4; pn++) {
-        const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get?'
-          + 'reportName=RPT_DAILYBILLBOARD_DETAILS&sortColumns=TRADE_DATE&sortTypes=-1'
-          + '&pageSize=200&pageNumber=' + pn + '&columns=SECURITY_CODE,SECURITY_NAME_ABBR,TRADE_DATE,EXPLAIN,BILLBOARD_NET_AMT,CHANGE_RATE'
-          + '&filter=(TRADE_DATE%3E%3D%27' + since + '%27)';
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 8000);
-        const resp = await fetch(url, { signal: ctrl.signal });
-        clearTimeout(timer);
-        if (!resp.ok) break;
-        const data = await resp.json();
-        const rows = data && data.result && data.result.data;
-        if (!rows || rows.length === 0) break;
-        rows.forEach(r => {
-          const code = String(r.SECURITY_CODE || '');
-          if (!code) return;
-          const date = (r.TRADE_DATE || '').substring(0, 10);
-          const prev = map[code];
-          // 同一股票多次上榜保留最新一条，净买额累加
-          if (!prev) {
-            map[code] = {
-              date,
-              seatInfo: r.EXPLAIN || '',
-              netBuy: r.BILLBOARD_NET_AMT || 0,
-              changeRate: r.CHANGE_RATE || 0,
-              times: 1
-            };
-          } else {
-            prev.netBuy += (r.BILLBOARD_NET_AMT || 0);
-            prev.times += 1;
-            if (date > prev.date) { prev.date = date; prev.seatInfo = r.EXPLAIN || prev.seatInfo; }
-          }
-        });
-        if (data.result.pages && pn >= data.result.pages) break;
-      }
-      this._cacheSet(cacheKey, 'dragonTigerBatch', map);
-      return map;
-    } catch (e) {
-      console.warn('[龙虎榜批量] 获取失败:', e && e.message);
-      return {};
-    }
-  },
-
-  /** v4.0 腾讯实时资金流（ff_前缀，今日主力净流入，单位万元）。作为东财日K的盘中补充 */
-  async fetchRealtimeFlow(code) {
-    const cacheKey = 'rtflow_' + code;
-    const cached = this._cacheGet(cacheKey, 'realtimeFlow');
-    if (cached) return cached;
-    try {
-      const prefix = code.startsWith('hk') ? 'hk' : (code.startsWith('sh') ? 'sh' : 'sz');
-      const num = code.substring(2);
-      const varName = 'v_ff_' + prefix + num;
-      const txt = await new Promise((resolve, reject) => {
-        const t = setTimeout(() => { cleanup(); reject(new Error('timeout')); }, 6000);
-        const script = document.createElement('script');
-        const cleanup = () => {
-          clearTimeout(t);
-          try { delete window[varName]; } catch(e) { window[varName] = undefined; }
-          if (script.parentNode) script.parentNode.removeChild(script);
-        };
-        script.src = 'https://qt.gtimg.cn/q=ff_' + prefix + num;
-        script.onload = () => { resolve(window[varName] || null); cleanup(); };
-        script.onerror = () => { cleanup(); reject(new Error('load error')); };
-        document.head.appendChild(script);
-      });
-      // v_ff_xx="主力流入,主力流出,主力净流入,主力净流入占比,..." 单位万元
-      if (txt && typeof txt === 'string') {
-        const f = txt.split('~').length > 1 ? txt.split('~') : txt.split(',');
-        const mainNetWan = parseFloat(f[2]);
-        if (!isNaN(mainNetWan)) {
-          const result = { mainNet: mainNetWan * 1e4, mainNetWan, source: '腾讯实时' };
-          this._cacheSet(cacheKey, 'realtimeFlow', result);
-          return result;
-        }
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  },
-
-  /** v4.0 N天前日期 YYYY-MM-DD */
-  _dateNDaysAgo(n) {
-    const d = new Date(Date.now() - n * 86400000);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  },
-
   /** 获取公告新闻 */
   async fetchNews(code) {
     const cacheKey = 'news_' + code;
     const cached = this._cacheGet(cacheKey, 'news');
     if (cached) return cached;
-    // 港股/美股公告接口与A股不同，暂不支持（返回空，不影响分析主流程）
-    if (code.startsWith('hk') || code.startsWith('us')) {
-      this._cacheSet(cacheKey, 'news', []);
-      return [];
-    }
     try {
       const stockCode = code.substring(2);
       const url = `${CONFIG.EM_NEWS}?sr=-1&page_size=10&page_index=1&ann_type=A&stock_list=${stockCode}&f_node=0&s_node=0`;
@@ -2220,7 +1878,6 @@ const DataAPI = {
           mainFlow: parseFloat(item.f62) || 0,
           pb: parseFloat(item.f23) || 0,
           marketCap: parseFloat(item.f20) ? parseFloat(item.f20) / 1e8 : 0,
-          industry: String(item.f100 || '').trim() || '',
         };
       }).filter(Boolean);
       this._cacheSet(cacheKey, 'sectorStocks', result);
@@ -2243,7 +1900,7 @@ const DataAPI = {
       const pages = Math.max(1, Math.ceil(topN / pageSize));
       let merged = [];
       for (let pn = 1; pn <= pages; pn++) {
-        const queryStr = `fid=f6&po=1&pz=${pageSize}&pn=${pn}&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62,f100`;
+        const queryStr = `fid=f6&po=1&pz=${pageSize}&pn=${pn}&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62`;
         const json = await this._fetchEMClist(queryStr);
         if (!json || !json.data || !Array.isArray(json.data.diff)) break;
         merged = merged.concat(json.data.diff);
@@ -2327,31 +1984,33 @@ const DataAPI = {
     const localResults = [];
     const kw = keyword.trim().toLowerCase();
 
-    // 支持直接输入代码搜索（A股6位 / 港股5位或hk前缀 / us前缀，统一走normalizeCode）
-    const normCode = /^[a-z]{2}\d{4,6}$/.test(kw) || /^\d{4,6}$/.test(kw) || /^us[a-z]+$/i.test(kw)
-      ? Utils.normalizeCode(kw) : null;
-    if (normCode) {
-      if (CODE_TO_NAME[normCode]) {
-        const prefix = normCode.substring(0, 2);
-        let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
-        localResults.push({ name: CODE_TO_NAME[normCode], code: normCode, market, fullCode: normCode });
+    // 支持直接输入6位代码搜索
+    if (/^\d{6}$/.test(kw)) {
+      const prefixes = ['sh', 'sz', 'bj'];
+      for (const prefix of prefixes) {
+        const fullCode = prefix + kw;
+        if (CODE_TO_NAME[fullCode]) {
+          let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
+          localResults.push({ name: CODE_TO_NAME[fullCode], code: kw, market, fullCode });
+        }
       }
-      // 本地没有，直接按规范化代码拉行情验证
-      if (!CODE_TO_NAME[normCode]) {
-        try {
-          const resp = await fetch(CONFIG.TENCENT_QUOTE + normCode);
-          const buffer = await resp.arrayBuffer();
-          const text = Utils.gbkToUtf8(buffer);
-          if (text.includes('~') && !text.includes('pv_none_match')) {
-            const parsed = Utils.parseTencentQuote(text);
-            if (parsed && parsed.name && parsed.price > 0) {
-              CODE_TO_NAME[normCode] = parsed.name;
-              const prefix = normCode.substring(0, 2);
-              let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
-              localResults.push({ name: parsed.name, code: normCode, market, fullCode: normCode });
+      // 即使本地没找到，也尝试通过API获取
+      if (localResults.length === 0) {
+        // 尝试三种前缀获取行情
+        for (const prefix of ['sh', 'sz', 'bj']) {
+          try {
+            const fullCode = prefix + kw;
+            const resp = await fetch(CONFIG.TENCENT_QUOTE + fullCode);
+            const text = await resp.text();
+            if (text.includes('~') && !text.includes('pv_none_match')) {
+              const parts = text.split('~');
+              const name = parts[1] || CODE_TO_NAME[fullCode] || kw;
+              let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : '北交所';
+              localResults.push({ name, code: kw, market, fullCode });
+              break;
             }
-          }
-        } catch(e) {}
+          } catch(e) {}
+        }
       }
     }
 
@@ -2387,7 +2046,7 @@ const DataAPI = {
         if (!codes.has(r.fullCode)) {
           localResults.push({
             name: r.name, code: r.code,
-            market: r.market === 'sh' ? '上证' : r.market === 'bj' ? '北交所' : r.market === 'hk' ? '港股' : r.market === 'us' ? '美股' : '深证',
+            market: r.market === 'sh' ? '上证' : r.market === 'bj' ? '北交所' : '深证',
             fullCode: r.fullCode
           });
           codes.add(r.fullCode);
@@ -2512,9 +2171,7 @@ const Search = {
       if (normalized) {
         const quote = await DataAPI.fetchQuote(normalized);
         if (quote) {
-          const mkt = normalized.startsWith('sh') ? '上证' : normalized.startsWith('bj') ? '北交所' : normalized.startsWith('hk') ? '港股' : normalized.startsWith('us') ? '美股' : '深证';
-          if (quote.name) CODE_TO_NAME[normalized] = quote.name;
-          results = [{ name: quote.name, code: normalized, fullCode: normalized, market: mkt }];
+          results = [{ name: quote.name, code: normalized, fullCode: normalized, market: normalized.startsWith('sh') ? '上证' : normalized.startsWith('bj') ? '北交所' : '深证' }];
         }
       }
     }
@@ -2563,8 +2220,8 @@ const Search = {
 // ============================================================
 const SevenDimAnalyzer = {
   /** 计算七维度评分 */
-  analyze(quote, klines, capitalFlow, financials) {
-    const fundamental = this.scoreFundamental(quote, financials);
+  analyze(quote, klines, capitalFlow) {
+    const fundamental = this.scoreFundamental(quote);
     const technical = this.scoreTechnical(klines, quote);
     const capital = this.scoreCapital(capitalFlow);
     const valuation = this.scoreValuation(quote);
@@ -2573,7 +2230,7 @@ const SevenDimAnalyzer = {
       fundamental, technical, capital, valuation, sentiment,
       message: this.scoreMessage(quote),
       macro: this.scoreMacro(),
-      risk: this.scoreRisk(quote, klines, capitalFlow, financials)
+      risk: this.scoreRisk(quote, klines, capitalFlow)
     };
     const total = fundamental * 0.30 + technical * 0.25 + capital * 0.20 + valuation * 0.15 + sentiment * 0.10;
     scores.total = Math.round(Math.max(0, Math.min(100, total)));
@@ -2599,9 +2256,8 @@ const SevenDimAnalyzer = {
     return Math.round(Math.max(0, Math.min(100, score)));
   },
 
-  /** 基本面评分（v4.0：有真实财报时走"盈利成色四维验证"，无财报回退旧PE/PB逻辑） */
-  scoreFundamental(quote, financials) {
-    if (financials) return Math.round(Math.max(0, Math.min(100, this._fundamentalByReport(financials, quote))));
+  /** 基本面评分 */
+  scoreFundamental(quote) {
     let score = 50;
     // PE评分：合理区间10-25
     if (quote.pe > 0 && quote.pe < 15) score += 20;
@@ -2618,71 +2274,6 @@ const SevenDimAnalyzer = {
     else if (quote.marketCap > 100) score += 5;
     else score -= 5;
     return Math.round(Math.max(0, Math.min(100, score)));
-  },
-
-  /** v4.0 基于真实财报的基本面评分（盈利质量+成长性+改善方向+财务稳健+现金流含金量） */
-  _fundamentalByReport(f, quote) {
-    let s = 40;
-    // ① 盈利能力：ROE加权（满分25）
-    if (f.roe !== null && f.roe !== undefined) {
-      if (f.roe >= 15) s += 25;
-      else if (f.roe >= 10) s += 20;
-      else if (f.roe >= 8) s += 14;
-      else if (f.roe >= 5) s += 8;
-      else if (f.roe >= 0) s += 3;
-      else s -= 10; // 净资产收益率为负
-    } else s += 8;
-    // ② 盈利空间：毛利率（满分15；银行保险等无毛利率口径，中性处理）
-    if (f.grossMargin !== null && f.grossMargin !== undefined) {
-      if (f.grossMargin >= 50) s += 15;
-      else if (f.grossMargin >= 30) s += 12;
-      else if (f.grossMargin >= 15) s += 8;
-      else if (f.grossMargin >= 5) s += 4;
-    }
-    // ③ 盈利质量：净利率（满分10）
-    if (f.netMargin !== null && f.netMargin !== undefined) {
-      if (f.netMargin >= 25) s += 10;
-      else if (f.netMargin >= 15) s += 8;
-      else if (f.netMargin >= 5) s += 5;
-      else if (f.netMargin >= 0) s += 2;
-      else s -= 8;
-    } else s += 3;
-    // ④ 成长性：营收+净利双维验证（满分25，"多指标同步向好"加分，背离扣分）
-    if (f.revGrowth !== null && f.revGrowth !== undefined) {
-      if (f.revGrowth >= 30) s += 13;
-      else if (f.revGrowth >= 15) s += 10;
-      else if (f.revGrowth >= 5) s += 7;
-      else if (f.revGrowth >= 0) s += 3;
-      else s -= 6;
-    }
-    if (f.profitGrowth !== null && f.profitGrowth !== undefined) {
-      if (f.profitGrowth >= 30) s += 12;
-      else if (f.profitGrowth >= 15) s += 9;
-      else if (f.profitGrowth >= 0) s += 5;
-      else s -= 8;
-    }
-    // ⑤ 改善方向：同比增速环比变化（验证盈利趋势是否在加速）
-    if (f.profitGrowth !== null && f.prevProfitGrowth !== null) {
-      if (f.profitGrowth > f.prevProfitGrowth + 3) s += 5;       // 增速明显改善
-      else if (f.profitGrowth < f.prevProfitGrowth - 5) s -= 5;  // 增速明显恶化
-    }
-    // ⑥ 财务稳健：资产负债率（金融行业天然高负债，豁免）
-    if (f.debtRatio !== null && f.debtRatio !== undefined) {
-      const isFinancial = (f.grossMargin === null || f.grossMargin === undefined) && f.debtRatio > 70;
-      if (isFinancial) s += 5;
-      else if (f.debtRatio >= 80) s -= 12;
-      else if (f.debtRatio >= 65) s -= 6;
-      else if (f.debtRatio <= 45) s += 8;
-      else if (f.debtRatio <= 55) s += 4;
-    }
-    // ⑦ 现金流含金量：经营现金流/每股收益（验证利润真实性）
-    if (f.ocfps !== null && f.ocfps !== undefined && f.eps !== null && f.eps !== undefined && f.eps > 0.05) {
-      const ratio = f.ocfps / f.eps;
-      if (ratio >= 1) s += 5;       // 现金流全额覆盖利润，盈利真实
-      else if (ratio >= 0.6) s += 2;
-      else if (ratio < 0) s -= 6;   // 经营现金流为负，纸面利润风险
-    }
-    return s;
   },
 
   /** 技术面评分 */
@@ -2787,21 +2378,13 @@ const SevenDimAnalyzer = {
   },
 
   /** 风险面评分（越低风险越高） */
-  scoreRisk(quote, klines, capitalFlow, financials) {
+  scoreRisk(quote, klines, capitalFlow) {
     let score = 70; // 从高分开始扣
     // PE过高风险
     if (quote.pe > 50) score -= 15;
     else if (quote.pe > 30) score -= 8;
     // 估值过高
     if (quote.pb > 5) score -= 10;
-    // v4.0 财报排雷
-    if (financials) {
-      if (financials.roe !== null && financials.roe < 0) score -= 12;            // 亏损
-      if (financials.profitGrowth !== null && financials.profitGrowth < -30) score -= 8; // 利润大幅下滑
-      const isFin = (financials.grossMargin === null || financials.grossMargin === undefined) && financials.debtRatio > 70;
-      if (!isFin && financials.debtRatio !== null && financials.debtRatio >= 80) score -= 8; // 高负债
-      if (financials.ocfps !== null && financials.eps !== null && financials.eps > 0.05 && financials.ocfps < 0) score -= 8; // 现金流为负
-    }
     // 资金流出风险
     if (capitalFlow && capitalFlow.length > 0) {
       const recent = capitalFlow.slice(-3);
@@ -2823,8 +2406,8 @@ const SevenDimAnalyzer = {
 // ============================================================
 const DiagnosticEngine = {
   /** 生成完整诊断报告 */
-  generateReport(quote, klines, capitalFlow, news, scores, financials, dragonTiger) {
-    const data = { quote, klines, capitalFlow, news, scores, financials, dragonTiger };
+  generateReport(quote, klines, capitalFlow, news, scores) {
+    const data = { quote, klines, capitalFlow, news, scores };
     return {
       mod1: this.module1_Financial(data),
       mod2: this.module2_Industry(data),
@@ -2838,71 +2421,11 @@ const DiagnosticEngine = {
     };
   },
 
-  /** 模块1：财务基本面校验（v4.0 接入真实财报数据） */
-  module1_Financial({ quote, klines, capitalFlow, financials: fin }) {
+  /** 模块1：财务基本面校验 */
+  module1_Financial({ quote, klines, capitalFlow }) {
     const q = quote;
     let html = '';
-    // ===== v4.0 真实财报展示（中报/年报主要指标）=====
-    if (fin) {
-      const fmt = (v, unit, d) => (v === null || v === undefined) ? '--' : v.toFixed(d === undefined ? 2 : d) + (unit || '');
-      const cls = v => v === null || v === undefined ? '' : (v >= 0 ? 'color-up' : 'color-down');
-      const sign = v => (v === null || v === undefined) ? '--' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
-      // 结论：盈利成色四维验证
-      let verdict = '📊 财报数据中规中矩，建议结合技术面与资金面综合判断。';
-      const goodSignals = [];
-      const badSignals = [];
-      if (fin.roe !== null && fin.roe !== undefined) { if (fin.roe >= 10) goodSignals.push('ROE ' + fin.roe.toFixed(1) + '%'); else if (fin.roe < 5) badSignals.push('ROE偏低'); }
-      if (fin.grossMargin !== null && fin.grossMargin !== undefined && fin.grossMargin >= 30) goodSignals.push('毛利率' + fin.grossMargin.toFixed(0) + '%');
-      if (fin.netMargin !== null && fin.netMargin !== undefined && fin.netMargin >= 15) goodSignals.push('净利率' + fin.netMargin.toFixed(0) + '%');
-      if (fin.revGrowth !== null && fin.revGrowth !== undefined && fin.revGrowth >= 15) goodSignals.push('营收高增');
-      if (fin.profitGrowth !== null && fin.profitGrowth !== undefined) {
-        if (fin.profitGrowth >= 20) goodSignals.push('净利高增');
-        if (fin.profitGrowth < 0) badSignals.push('净利同比下滑' + fin.profitGrowth.toFixed(0) + '%');
-        else if (fin.revGrowth !== null && fin.revGrowth !== undefined && fin.profitGrowth > fin.revGrowth + 8) goodSignals.push('利润增速跑赢营收');
-      }
-      if (fin.debtRatio !== null && fin.debtRatio !== undefined && fin.debtRatio >= 70) {
-        const isFin = (fin.grossMargin === null || fin.grossMargin === undefined);
-        if (!isFin) badSignals.push('负债率' + fin.debtRatio.toFixed(0) + '%偏高');
-      }
-      if (fin.ocfps !== null && fin.ocfps !== undefined && fin.eps !== null && fin.eps !== undefined && fin.eps > 0.05 && fin.ocfps < 0) badSignals.push('经营现金流为负');
-      if (goodSignals.length >= 3 && badSignals.length === 0) verdict = '✅ 盈利成色优秀：' + goodSignals.join('、') + '，多指标同步向好，基本面支撑扎实。';
-      else if (goodSignals.length >= 2 && badSignals.length <= 1) verdict = '✅ 盈利质量较好：' + goodSignals.join('、') + (badSignals.length ? '，但需注意' + badSignals.join('、') : '') + '。';
-      else if (badSignals.length >= 2) verdict = '⚠️ 盈利成色不足：' + badSignals.join('、') + '，基本面支撑偏弱，需控制仓位。';
-      html += '<div class="conclusion">' + verdict + '</div>';
-
-      html += '<p><strong>【最新财报：' + fin.period + '】</strong></p>';
-      html += '<div class="fin-grid">';
-      const row = (label, val, c) => '<div class="fin-cell"><span class="fin-label">' + label + '</span><span class="fin-val ' + (c || '') + '">' + val + '</span></div>';
-      html += row('加权ROE', fmt(fin.roe, '%', 2));
-      html += row('毛利率', fmt(fin.grossMargin, '%', 1));
-      html += row('净利率', fmt(fin.netMargin, '%', 1));
-      html += row('每股收益', fmt(fin.eps, '元', 2));
-      html += row('营收同比', sign(fin.revGrowth), cls(fin.revGrowth));
-      html += row('净利同比', sign(fin.profitGrowth), cls(fin.profitGrowth));
-      html += row('扣非净利同比', sign(fin.deductedGrowth), cls(fin.deductedGrowth));
-      html += row('资产负债率', fmt(fin.debtRatio, '%', 1));
-      html += row('每股经营现金流', fmt(fin.ocfps, '元', 2));
-      html += row('流动比率', fmt(fin.currentRatio, '', 2));
-      html += '</div>';
-      // 现金流验证
-      if (fin.ocfps !== null && fin.ocfps !== undefined && fin.eps !== null && fin.eps !== undefined && fin.eps > 0.05) {
-        const ratio = fin.ocfps / fin.eps;
-        html += '<p>';
-        if (ratio >= 1) html += '✅ 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，现金全额覆盖账面利润，盈利含金量高。';
-        else if (ratio >= 0.6) html += '📊 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，利润变现能力尚可。';
-        else if (ratio < 0) html += '⚠️ 经营现金流为负，账面利润未转化为现金，警惕利润虚增风险。';
-        else html += '⚠️ 经营现金流/每股收益 = ' + ratio.toFixed(2) + '，利润含金量偏低，需关注回款情况。';
-        html += '</p>';
-      }
-      // 增速改善方向
-      if (fin.profitGrowth !== null && fin.prevProfitGrowth !== null) {
-        if (fin.profitGrowth > fin.prevProfitGrowth + 3) html += '<p>📈 净利增速同比改善（' + fin.prevProfitGrowth.toFixed(1) + '% → ' + fin.profitGrowth.toFixed(1) + '%），盈利处于加速通道。</p>';
-        else if (fin.profitGrowth < fin.prevProfitGrowth - 5) html += '<p>📉 净利增速同比回落（' + fin.prevProfitGrowth.toFixed(1) + '% → ' + fin.profitGrowth.toFixed(1) + '%），盈利动能减弱。</p>';
-      }
-      html += '<div class="data-source-tag"><span class="ds-badge ds-ok">数据来源：东方财富F10·' + fin.period + '</span></div>';
-      return html;
-    }
-    // 旧逻辑（无财报时：港股/北交所/接口失败）
+    // 结论前置
     let conclusion = '';
     if (q.pe > 0 && q.pe < 20 && q.pb > 0 && q.pb < 2) {
       conclusion = '✅ 基本面质地良好，估值合理偏低，具备长期持有价值。';
@@ -3015,51 +2538,12 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块3：资金流向数据解读（v4.0 增加龙虎榜席位数据作为主力动向第二来源） */
-  module3_Capital({ capitalFlow, dragonTiger }) {
+  /** 模块3：资金流向数据解读 */
+  module3_Capital({ capitalFlow }) {
     let html = '';
-    // ===== v4.0 龙虎榜：机构/游资席位动向（独立于资金流向的第二主力来源）=====
-    const dt = dragonTiger;
-    if (dt && dt.length > 0) {
-      html += '<p><strong>【🐯 龙虎榜席位动向】</strong></p>';
-      dt.slice(0, 3).forEach(d => {
-        const netWan = d.netBuy / 1e4;
-        const netCls = d.netBuy >= 0 ? 'color-up' : 'color-down';
-        const netStr = (d.netBuy >= 0 ? '净买入 ' : '净卖出 ') + Utils.formatAmount(Math.abs(d.netBuy));
-        html += '<div class="dt-record">';
-        html += '<div class="dt-head"><span class="dt-date">' + d.date + '</span><span class="dt-reason">' + (d.reason || '') + '</span></div>';
-        html += '<div class="metric-row"><span class="metric-label">龙虎榜资金</span><span class="metric-val ' + netCls + '">' + netStr + '（占成交' + (d.dealRatio || 0).toFixed(1) + '%）</span></div>';
-        if (d.seatInfo) html += '<div class="dt-seat">📋 ' + d.seatInfo.replace(/</g,'&lt;') + '</div>';
-        // 上榜后表现（仅展示已到期的）
-        const after = [];
-        if (d.d1 !== null && d.d1 !== undefined) after.push('1日 ' + (d.d1 >= 0 ? '+' : '') + d.d1.toFixed(1) + '%');
-        if (d.d5 !== null && d.d5 !== undefined) after.push('5日 ' + (d.d5 >= 0 ? '+' : '') + d.d5.toFixed(1) + '%');
-        if (d.d10 !== null && d.d10 !== undefined) after.push('10日 ' + (d.d10 >= 0 ? '+' : '') + d.d10.toFixed(1) + '%');
-        if (after.length) html += '<div class="dt-after">上榜后表现：' + after.join(' / ') + '</div>';
-        html += '</div>';
-      });
-      // 席位结论
-      const recent = dt[0];
-      if (recent) {
-        if (recent.netBuy > 0 && recent.seatInfo && recent.seatInfo.indexOf('机构') >= 0 && recent.seatInfo.indexOf('买入') >= 0) {
-          html += '<p>✅ 最近上榜由机构席位净买入，机构资金认可度较高。</p>';
-        } else if (recent.netBuy < 0 && recent.seatInfo && recent.seatInfo.indexOf('机构') >= 0 && recent.seatInfo.indexOf('卖出') >= 0) {
-          html += '<p>⚠️ 最近上榜机构席位净卖出，主力撤退信号，需高度警惕。</p>';
-        } else if (recent.netBuy > 5e7) {
-          html += '<p>📊 最近上榜游资净买入较强，短线情绪活跃，注意游资快进快出风险。</p>';
-        } else if (recent.netBuy < -5e7) {
-          html += '<p>⚠️ 最近上榜资金净卖出明显，短线抛压较重。</p>';
-        }
-      }
-    }
     if (!capitalFlow || capitalFlow.length === 0) {
-      if (!html) {
-        html += '<div class="conclusion">📊 暂无资金流向数据，无法判断主力动向。</div>';
-        html += '<p>建议通过东方财富、同花顺等平台查看资金流向详情。</p>';
-      } else {
-        html += '<div class="conclusion">📊 日度资金流向暂不可用，上方为龙虎榜席位数据，可辅助判断主力动向。</div>';
-      }
-      if (dt && dt.length > 0) html += '<div class="data-source-tag"><span class="ds-badge ds-ok">数据来源：东方财富·龙虎榜</span></div>';
+      html += '<div class="conclusion">📊 暂无资金流向数据，无法判断主力动向。</div>';
+      html += '<p>建议通过东方财富、同花顺等平台查看资金流向详情。</p>';
       return html;
     }
 
@@ -3131,9 +2615,7 @@ const DiagnosticEngine = {
     // 数据来源标识
     const src = capitalFlow._source || '主通道';
     const badgeCls = src === '主通道' ? 'ds-badge ds-ok' : 'ds-badge ds-backup';
-    html += `<div class="data-source-tag"><span class="${badgeCls}">数据来源：东方财富资金流向·${src}</span>`;
-    if (dt && dt.length > 0) html += `<span class="ds-badge ds-ok" style="margin-left:6px">+龙虎榜席位</span>`;
-    html += `</div>`;
+    html += `<div class="data-source-tag"><span class="${badgeCls}">数据来源：东方财富·${src}</span></div>`;
     return html;
   },
 
@@ -3738,54 +3220,15 @@ const Screener = {
 // ============================================================
 const Watchlist = {
   STORAGE_KEY: 'zhigu_watchlist',
-  GROUP_KEY: 'zhigu_watchlist_groups', // code -> group name 映射
-  DEFAULT_GROUPS: ['默认'],              // 默认分组
   // 排序状态
   sortKey: 'score_desc', // 默认按量化评分降序
-  // 当前选中的分组筛选（null=全部）
-  _activeGroup: null,
   // 缓存评估数据 { code: { score, advice, vwap, quote } }
   _cache: {},
 
-  /** 获取自选股列表（v3.9: 读取时自愈规范化历史不规范代码） */
+  /** 获取自选股列表 */
   getList() {
     try {
-      const raw = JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || [];
-      const seen = new Set();
-      const fixed = [];
-      let dirty = false;
-      for (const c of raw) {
-        const n = Utils.normalizeCode(c);
-        const out = n || c;
-        if (out !== c) { dirty = true; console.log('[Watchlist] 代码规范化:', c, '->', out); }
-        if (!seen.has(out)) { seen.add(out); fixed.push(out); }
-        else if (out !== c) { dirty = true; }
-      }
-      // 若有规范化变更：同步迁移分组映射/添加时间等键名并重写存储
-      if (dirty) {
-        try {
-          const map = this.getGroupMap();
-          const newMap = {};
-          Object.keys(map).forEach(k => {
-            const nk = Utils.normalizeCode(k) || k;
-            newMap[nk] = map[k];
-          });
-          this.saveGroupMap(newMap);
-          try {
-            const meta = JSON.parse(localStorage.getItem('zhigu_watchlist_meta') || '{}');
-            if (meta) {
-              const newMeta = {};
-              Object.keys(meta).forEach(k => {
-                const nk = Utils.normalizeCode(k) || k;
-                newMeta[nk] = meta[k];
-              });
-              localStorage.setItem('zhigu_watchlist_meta', JSON.stringify(newMeta));
-            }
-          } catch (e) {}
-          this.save(fixed);
-        } catch (e) { console.warn('[Watchlist] 规范化迁移失败:', e); }
-      }
-      return fixed;
+      return JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || [];
     } catch { return []; }
   },
 
@@ -3794,151 +3237,8 @@ const Watchlist = {
     localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list));
   },
 
-  /** 获取分组映射 { code: groupName } */
-  getGroupMap() {
-    try {
-      return JSON.parse(localStorage.getItem(this.GROUP_KEY)) || {};
-    } catch { return {}; }
-  },
-
-  /** 保存分组映射 */
-  saveGroupMap(map) {
-    localStorage.setItem(this.GROUP_KEY, JSON.stringify(map));
-  },
-
-  /** 获取股票所在分组 */
-  getGroup(code) {
-    const map = this.getGroupMap();
-    return map[code] || '默认';
-  },
-
-  /** 设置股票分组 */
-  setGroup(code, group) {
-    const map = this.getGroupMap();
-    map[code] = group || '默认';
-    this.saveGroupMap(map);
-  },
-
-  /** 获取所有分组列表（含默认 + 用户创建的） */
-  getAllGroups() {
-    const map = this.getGroupMap();
-    const set = new Set(this.DEFAULT_GROUPS);
-    Object.values(map).forEach(g => set.add(g));
-    return [...set];
-  },
-
-  /** 删除分组（将该分组内所有股票移到"默认"） */
-  deleteGroup(groupName) {
-    if (this.DEFAULT_GROUPS.includes(groupName)) {
-      Utils.toast('默认分组不可删除');
-      return false;
-    }
-    const map = this.getGroupMap();
-    Object.keys(map).forEach(k => {
-      if (map[k] === groupName) map[k] = '默认';
-    });
-    this.saveGroupMap(map);
-    if (this._activeGroup === groupName) this._activeGroup = null;
-    Utils.toast('已删除分组，股票已移至「默认」');
-    return true;
-  },
-
-  /** 新建分组（空分组：仅记录名称） */
-  createGroup(name) {
-    if (!name || !name.trim()) return false;
-    const map = this.getGroupMap();
-    // 已有同名则不创建
-    const existing = new Set(this.DEFAULT_GROUPS.concat(Object.values(map)));
-    if (existing.has(name.trim())) {
-      Utils.toast('分组已存在');
-      return false;
-    }
-    // 写入一个空条目占位（不关联具体股票）—— 通过 getAllGroups 自动发现
-    // 这里只需在 map 中给一个不存在的 code 占位？不行，改 getAllGroups 直接扫描 map values
-    // 因此我们用一个特殊键 _groups: [...] 存储分组清单
-    let meta;
-    try { meta = JSON.parse(localStorage.getItem(this.GROUP_KEY + '_meta') || '{}'); } catch { meta = {}; }
-    meta.custom = (meta.custom || []).filter(n => n !== name.trim());
-    meta.custom.push(name.trim());
-    localStorage.setItem(this.GROUP_KEY + '_meta', JSON.stringify(meta));
-    return true;
-  },
-
-  /** 重写 getAllGroups 合并 _meta.custom */
-  getAllGroups() {
-    const map = this.getGroupMap();
-    let meta;
-    try { meta = JSON.parse(localStorage.getItem(this.GROUP_KEY + '_meta') || '{}'); } catch { meta = {}; }
-    const custom = (meta.custom || []).filter(n => !this.DEFAULT_GROUPS.includes(n));
-    const fromMap = [...new Set(Object.values(map))].filter(n => !this.DEFAULT_GROUPS.includes(n));
-    const set = new Set([...this.DEFAULT_GROUPS, ...custom, ...fromMap]);
-    return [...set];
-  },
-
-  /** 切换当前筛选分组 */
-  setActiveGroup(group) {
-    this._activeGroup = (group === null || group === '全部') ? null : group;
-    this.render();
-  },
-
-  /** 弹出分组选择菜单 */
-  showGroupPicker(code) {
-    const current = this.getGroup(code);
-    const groups = this.getAllGroups();
-    const mask = document.createElement('div');
-    mask.className = 'batch-modal-mask';
-    mask.id = 'groupPickerMask';
-    mask.innerHTML = `
-      <div class="batch-modal-box" style="max-width:360px" onclick="event.stopPropagation()">
-        <div class="batch-modal-title">移动到其他分组</div>
-        <div class="batch-modal-tip">当前：${current || '默认'}</div>
-        <div class="gp-list" id="gpList">
-          ${groups.map(g => `
-            <div class="gp-item ${g === current ? 'active' : ''}" onclick="Watchlist._doMoveGroup('${code}','${g.replace(/'/g,"\\'")}')">
-              <span>${g}</span>${g === current ? '<span style="color:#00d4ff;margin-left:8px">✓</span>' : ''}
-            </div>
-          `).join('')}
-        </div>
-        <div style="margin:12px 16px;padding-top:10px;border-top:1px solid var(--border-color)">
-          <div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">新建分组</div>
-          <div style="display:flex;gap:6px">
-            <input type="text" id="gpNewName" placeholder="输入分组名" maxlength="10" style="flex:1;background:var(--input-bg);border:1px solid var(--border-color);color:var(--text);border-radius:6px;padding:6px 10px;font-size:13px">
-            <button class="btn-primary" style="padding:6px 12px;font-size:12px" onclick="Watchlist._createAndMove('${code.replace(/'/g,"\\'")}')">新建并移动</button>
-          </div>
-        </div>
-        <div class="batch-modal-btns">
-          <button class="btn cancel" onclick="document.getElementById('groupPickerMask').remove()">取消</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(mask);
-    mask.addEventListener('click', () => mask.remove());
-  },
-
-  _doMoveGroup(code, group) {
-    this.setGroup(code, group);
-    Utils.toast('已移动到「' + group + '」');
-    const mask = document.getElementById('groupPickerMask');
-    if (mask) mask.remove();
-    this.render();
-    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
-  },
-
-  _createAndMove(code) {
-    const input = document.getElementById('gpNewName');
-    const name = (input && input.value || '').trim();
-    if (!name) { Utils.toast('请输入分组名'); return; }
-    if (this.createGroup(name)) {
-      this.setGroup(code, name);
-      Utils.toast('已新建「' + name + '」并移动');
-      const mask = document.getElementById('groupPickerMask');
-      if (mask) mask.remove();
-      this.render();
-    }
-  },
-
-  /** 添加自选股（可带分组） */
-  add(code, group) {
+  /** 添加自选股 */
+  add(code) {
     const list = this.getList();
     if (list.includes(code)) {
       Utils.toast('已在自选股中');
@@ -3948,9 +3248,7 @@ const Watchlist = {
     this.save(list);
     // 记录添加时间
     this._saveAddedAt(code);
-    // 分组
-    if (group) this.setGroup(code, group);
-    Utils.toast(group ? '已添加到「' + group + '」' : '已添加到自选股');
+    Utils.toast('已添加到自选股');
     App.setDirty(true);
     return true;
   },
@@ -3961,11 +3259,6 @@ const Watchlist = {
     list = list.filter(c => c !== code);
     this.save(list);
     delete this._cache[code];
-    // 清理分组映射
-    try {
-      const map = this.getGroupMap();
-      if (map[code]) { delete map[code]; this.saveGroupMap(map); }
-    } catch {}
     Utils.toast('已从自选股移除');
     App.setDirty(true);
   },
@@ -3978,35 +3271,6 @@ const Watchlist = {
   /** 快速评估（简化版七维度，用于列表展示） */
   quickScore(quote, klines) {
     return Utils.fiveDimScore(quote, klines);
-  },
-
-  /** v4.0 财报预热：后台逐只拉取，拿到财报后若评分变化则静默刷新一次自选列表 */
-  _finPreheating: false,
-  async _preheatFinancials(items) {
-    if (this._finPreheating) return;
-    // 只处理有行情、且A股、且还没有财报缓存的
-    const pending = items.filter(it => !it.noQuote && !it.code.startsWith('hk') && !it.code.startsWith('us')
-      && !DataAPI._cacheGet('financials_' + it.code, 'financials'));
-    if (pending.length === 0) return;
-    this._finPreheating = true;
-    let changed = 0;
-    for (const it of pending) {
-      try {
-        const fin = await DataAPI.fetchFinancials(it.code);
-        if (fin && this._cache[it.code] && this._cache[it.code].quote) {
-          const oldScore = this._cache[it.code].score;
-          const c = this._cache[it.code];
-          const newResult = Utils.fiveDimScore(c.quote, null, fin);
-          if (newResult.total !== oldScore) changed++;
-        }
-      } catch (e) { /* 单只失败不影响其他 */ }
-    }
-    this._finPreheating = false;
-    // 有评分变化且用户仍停留在自选页时，静默重渲染
-    if (changed > 0 && Navigation.currentPage === 'watchlist') {
-      console.log('[v4.0] 财报预热完成，', changed, '只评分更新，静默刷新');
-      this.render();
-    }
   },
 
   /** 根据评分生成建议操作 */
@@ -4296,7 +3560,6 @@ const Watchlist = {
 
     if (list.length === 0) {
       container.innerHTML = '<div class="empty-tip">暂无自选股，请在上方搜索添加</div>';
-      if (typeof App !== 'undefined') App.renderBookmarks();
       return;
     }
 
@@ -4307,7 +3570,6 @@ const Watchlist = {
     
     if (Object.keys(quotes).length === 0) {
       container.innerHTML = this.renderSortBar() + '<div class="empty-tip">行情加载失败，请下拉刷新</div>';
-      if (typeof App !== 'undefined') App.renderBookmarks();
       return;
     }
 
@@ -4331,9 +3593,7 @@ const Watchlist = {
       try { klines = await DataAPI.fetchKline(code, 30); } catch(e) {
         console.warn('[Watchlist] K线获取失败:', code, e.message);
       }
-      // v4.0: 有已缓存财报时直接用真实财报评分（无缓存先用旧分，后台预热后静默刷新）
-      const cachedFin = DataAPI._cacheGet('financials_' + code, 'financials');
-      const scoreResult = Utils.fiveDimScore(q, klines, cachedFin);
+      const scoreResult = this.quickScore(q, klines);
       const score = scoreResult.total;
       const dims = scoreResult.dims;
       const advice = this.getAdvice(score);
@@ -4348,40 +3608,11 @@ const Watchlist = {
     // 排序
     const sorted = this.applySort(items);
 
-    // ===== 分组标签条 =====
-    const groupMap = this.getGroupMap();
-    const allGroups = this.getAllGroups();
-    const groupCounts = {};
-    allGroups.forEach(g => groupCounts[g] = 0);
-    sorted.forEach(item => {
-      const g = groupMap[item.code] || '默认';
-      if (!(g in groupCounts)) groupCounts[g] = 0;
-      groupCounts[g]++;
-    });
-    let groupBarHtml = '<div class="wl-group-bar">';
-    groupBarHtml += '<button class="wl-group-btn' + (this._activeGroup === null ? ' active' : '') + '" onclick="Watchlist.setActiveGroup(null)">全部(' + sorted.length + ')</button>';
-    allGroups.forEach(g => {
-      const isActive = this._activeGroup === g;
-      const cnt = groupCounts[g] || 0;
-      const deleteBtn = (g !== '默认' && cnt === 0) ? ' <span class="wl-group-del" onclick="event.stopPropagation();Watchlist._delGroupByName(\'' + g.replace(/'/g,'\'') + '\')" title="删除空分组">✕</span>' : '';
-      groupBarHtml += '<button class="wl-group-btn' + (isActive ? ' active' : '') + '" onclick="Watchlist.setActiveGroup(\'' + g.replace(/'/g,'\'') + '\')">' + g + '(' + cnt + ')' + deleteBtn + '</button>';
-    });
-    groupBarHtml += '</div>';
-
-    // 按当前分组筛选
-    const visible = this._activeGroup
-      ? sorted.filter(it => (groupMap[it.code] || '默认') === this._activeGroup)
-      : sorted;
-
-    // 按分组聚合（仅"全部"视图显示分组分隔）
-    const showGrouped = this._activeGroup === null && allGroups.length > 1;
-
-    let html = groupBarHtml + this.renderSortBar();
+    let html = this.renderSortBar();
     if (failedCodes.length > 0) {
       html += '<div class="wl-debug-tip">⚠️ ' + failedCodes.length + '只股票行情获取失败</div>';
     }
-
-    const renderItem = (item) => {
+    sorted.forEach(item => {
       const cls = Utils.colorClass(item.changePct);
       const scoreColor = Utils.scoreColor(item.score);
       const advice = item.advice;
@@ -4393,9 +3624,8 @@ const Watchlist = {
         const diffCls = diff >= 0 ? 'color-up' : 'color-down';
         costDiff = '<span class="wl-cost-diff ' + diffCls + '">' + (diff >= 0 ? '+' : '') + diff + '%</span>';
       }
-      // v4.0: 整卡可点击跳转分析页（操作按钮 stopPropagation 拦截）
-      html += '<div class="watchlist-item watchlist-item-v2 clickable" onclick="App.analyzeStock(\'' + item.code + '\')">';
-      html += '<div class="wl-left">';
+      html += '<div class="watchlist-item watchlist-item-v2">';
+      html += '<div class="wl-left" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += '<div class="wl-name">' + item.name + '</div>';
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
@@ -4409,8 +3639,8 @@ const Watchlist = {
       // 末尾：量化评分 + 操作分 + 价格
       const starLevel = Utils.scoreLevel(item.score);
       html += '<div class="wl-right">';
-      html += '<div class="wl-price ' + cls + '">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
-      html += '<div class="wl-change ' + cls + '">';
+      html += '<div class="wl-price ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">' + (item.noQuote ? '--' : item.price.toFixed(2)) + '</div>';
+      html += '<div class="wl-change ' + cls + '" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += (item.changePct > 0 ? '+' : '') + item.changePct.toFixed(2) + '%';
       html += '</div>';
       html += '<div class="wl-tail-scores">';
@@ -4419,79 +3649,35 @@ const Watchlist = {
       const opColor = item.score >= 70 ? '#00c853' : item.score >= 40 ? '#ffa500' : '#ff4757';
       html += '<div class="wl-op-score" style="background:' + opBg + ';color:' + opColor + '">' + advice.icon + item.advice.text + '</div>';
       html += '</div>';
-      html += '<button class="wl-move-group" title="移动到分组" onclick="event.stopPropagation();Watchlist.showGroupPicker(\'' + item.code + '\')">📂</button>';
-      html += '<button class="wl-delete" onclick="event.stopPropagation();Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
+      html += '<button class="wl-delete" onclick="Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
       html += '</div>';
-    };
-
-    if (visible.length === 0) {
-      html += '<div class="empty-tip">该分组下暂无股票</div>';
-    } else if (showGrouped) {
-      // 分组视图：按组渲染，每组一个小节
-      const groups = allGroups.filter(g => g !== '默认');
-      groups.unshift('默认'); // 默认分组在最前
-      groups.forEach(g => {
-        const sub = visible.filter(it => (groupMap[it.code] || '默认') === g);
-        if (sub.length === 0) return;
-        html += '<div class="wl-group-header">📂 ' + g + '<span class="wl-group-count">' + sub.length + '</span></div>';
-        sub.forEach(it => renderItem(it));
-      });
-    } else {
-      visible.forEach(it => renderItem(it));
-    }
-
+      html += '</div>';
+    });
     container.innerHTML = html || this.renderSortBar() + '<div class="empty-tip">暂无数据</div>';
     App.setDirty(false);
-
-    // v3.91: 行情名回填后刷新书签（书签首次进入时可能只有代码）
-    for (const it of items) {
-      if (it && it.name && it.code && CODE_TO_NAME[it.code] !== it.name) CODE_TO_NAME[it.code] = it.name;
-    }
-    // v4.0: 财报预热——后台逐只拉取财报（缓存6h），有新财报且分数变化时静默重渲染
-    this._preheatFinancials(items);
-    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
-  },
-
-  /** 删除空分组（从分组条调用） */
-  _delGroupByName(name) {
-    this.deleteGroup(name);
-    this.render();
   },
 
   /** 删除并刷新 */
   removeAndRefresh(code) {
     this.remove(code);
     this.render();
-    if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
   }
 };
 
 // ============================================================
-// 11.5 NextDayPrediction - 次日上涨概率TOP20（v4.1 六维模型 v2：盘后扫描+隔日核实）
+// 11.5 NextDayPrediction - 次日上涨概率TOP20（盘后扫描+隔日核实）
 // ============================================================
 /**
- * 【短线上涨原因总结 → 模型方法论】
- * A股个股次日上涨，本质是六类力量的共振，本模型逐一刻画：
- *  1. 资金面（20分）：主力当日大幅净流入 + 近2日资金连续性（一日脉冲易熄火，连续流入是主力建仓）
- *  2. 量价动能（22分）：温和放量（量比1.5-3）+ 收在全天高位（光头阳）+ 阳线实体饱满；
- *     缩量上涨=跟风不足，放巨量滞涨=主力出货，涨停/过热=次日兑现压力
- *  3. 趋势技术（20分）：MA5/10/20/60多头排列、MACD零轴上金叉、KDJ/RSI强势但未超买、
- *     股价运行于布林中上轨之间——趋势中的股票次日延续概率最高
- *  4. 位置与动量（18分）：突破20日平台/新高、回踩均线企稳、近5日小阳爬升；
- *     乖离率过大（短线暴涨远离均线）则均值回归风险
- *  5. 板块共振（12分）：个股所属行业板块今日领涨、同板块多股齐涨——资金抱团板块，
- *     龙头次日溢价；孤股上涨无板块支撑，持续性差
- *  6. 事件催化（8分）：近3日登龙虎榜且机构/知名席位净买入——游资和机构真金白银投票，
- *     是最强的短线信号之一；机构净卖出则反向扣分
- * 另设【大盘情绪】全局加减分（±10）：三大指数均涨+全市场普涨→加分；指数大跌+普跌→扣分并提示系统性风险。
- * 反向排雷（不进候选）：ST/退市、当日下跌、一字板、主力大幅流出、超买暴涨、巨量长上影。
- * 只标注概率等级，不预测涨幅；每只附2+条专属下跌风险。盘后扫描，隔日可核实胜率。
+ * 模型说明：
+ * - 资金面35分：主力净流入占比/规模 + 放量程度（当日，东财clist实时字段）
+ * - 趋势技术35分：MA多头/MACD/KDJ/RSI/BOLL位置（120日K线计算）
+ * - 量价配合30分：换手活跃度 + 涨幅强度 + 收盘位置 + 20日超买超卖 + 回踩均线
+ * 只标注概率等级，不预测涨幅；每只附2+条专属下跌风险。
  */
 const NextDayPrediction = {
   STORAGE_KEY: 'zhigu_nextday_snapshots',
   MAX_SNAPSHOTS: 30,
   scanning: false,
-  marketTag: '',
 
   // ---------- 存储 ----------
   _loadSnapshots() {
@@ -4507,7 +3693,6 @@ const NextDayPrediction = {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
   _boardTag(code) {
-    if (code.startsWith('hk')) return '港股';
     const raw = code.replace(/^(sh|sz|bj)/, '');
     if (code.startsWith('bj') || raw.startsWith('8') || raw.startsWith('4') || raw.startsWith('92')) return '北交所';
     if (raw.startsWith('688')) return '科创板';
@@ -4523,115 +3708,72 @@ const NextDayPrediction = {
     const setStatus = (t) => { body.innerHTML = '<div class="loading-pulse">' + t + '</div>'; };
 
     try {
-      setStatus('第1步/5：拉取全市场成交额前200只活跃股...');
-      const [stocks, breadth, dtMap] = await Promise.all([
-        DataAPI.fetchTopMarketStocks(200),
-        DataAPI.fetchMarketBreadth().catch(() => null),
-        DataAPI.fetchDragonTigerBatch(3).catch(() => {})
-      ]);
+      setStatus('第1步/4：拉取全市场成交额前200只活跃股...');
+      const stocks = await DataAPI.fetchTopMarketStocks(200);
       if (!stocks || stocks.length === 0) {
         body.innerHTML = '<div class="empty-tip">全市场数据获取失败（网络问题或数据源暂时不可用），请稍后重试。</div>';
         return;
       }
-      const dragonMap = dtMap || {};
 
-      // 大盘情绪
-      const upCount = stocks.filter(s => (s.changePct || 0) > 0).length;
-      const upRatio = upCount / stocks.length;
-      const mkt = this._marketAdjust(breadth, upRatio);
-      this.marketTag = mkt.tag;
-
-      // 极端弱势：提示系统性风险，不出榜
-      const idxAvg = breadth ? breadth.avgChange : 0;
-      if (breadth && idxAvg <= -1.5 && upRatio < 0.25) {
-        body.innerHTML = '<div class="empty-tip">📉 今日大盘系统性走弱：三大指数平均' + idxAvg.toFixed(2)
-          + '%，活跃股仅' + Math.round(upRatio * 100) + '%上涨。<br><br>覆巢之下无完卵，次日个股上涨概率整体偏低，'
-          + '建议空仓观望或等待企稳，本模型今日不出具排名。</div>';
-        return;
-      }
-
-      // 热门行业统计（板块共振用）
-      const hotIndustries = this._hotIndustries(stocks);
-      const indMap = {};
-      hotIndustries.forEach(x => { indMap[x.name] = x.score; });
-
-      setStatus('第2步/5：资金面与量价初筛（' + stocks.length + '只）...');
+      // 预筛：资金面+当日量价（clist字段直接算）
+      setStatus('第2步/4：资金面与量价初筛（' + stocks.length + '只）...');
       const scored = [];
       for (const s of stocks) {
         const pre = this._preScore(s);
-        if (pre === null) continue; // 排除：ST/一字板/停牌/主力大幅流出/当日下跌
+        if (pre === null) continue; // 排除：ST/一字板/停牌/主力大幅流出
         scored.push(Object.assign({}, s, { preScore: pre.score, risks: pre.risks, mainPct: pre.mainPct }));
       }
+      // 取预筛前60名进入K线技术打分
       scored.sort((a, b) => b.preScore - a.preScore);
       const candidates = scored.slice(0, 60);
 
-      // K线 + 近2日资金流（并行）
-      setStatus('第3步/5：逐只计算量价/趋势/动量因子（K线+资金流，共' + candidates.length + '只）...');
+      setStatus('第3步/4：逐只计算趋势技术因子（K线，共' + candidates.length + '只）...');
       const batchSize = 8;
       for (let i = 0; i < candidates.length; i += batchSize) {
         const batch = candidates.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const [klines, cf] = await Promise.all([
-              DataAPI.fetchKline(s.code, 120),
-              DataAPI.fetchCapitalFlowStock(s.code, 3).catch(() => null)
-            ]);
+            const klines = await DataAPI.fetchKline(s.code, 120);
+            const tech = this._techScore(klines);
+            s.techScore = tech.score;
+            s.techRisks = tech.risks;
             s.klineOk = klines && klines.length >= 30;
-            s._klines = klines || [];
-            s._cf = cf;
-            s._dt = dragonMap[s.rawCode] || null;
-            s._indScore = s.industry ? (indMap[s.industry] || 0) : 0;
-            const v = this._v2Score(s);
-            s.techScore = v.score;
-            s.techRisks = v.risks;
-            s.factors = v.factors;
-            s.marketAdj = mkt.adjust;
-            s.finalScore = Math.max(0, Math.min(100, v.score + mkt.adjust));
           } catch (e) {
-            s.techScore = 0; s.techRisks = []; s.klineOk = false; s.factors = []; s.finalScore = 0;
+            s.techScore = 0; s.techRisks = []; s.klineOk = false;
           }
         }));
-        setStatus('第3步/5：因子计算中 ' + Math.min(i + batchSize, candidates.length) + '/' + candidates.length);
+        setStatus('第3步/4：技术因子计算中 ' + Math.min(i + batchSize, candidates.length) + '/' + candidates.length);
       }
 
-      setStatus('第4步/5：结合大盘情绪（' + mkt.tag + '）综合排名...');
+      setStatus('第4步/4：综合排名并保存快照...');
       const finalList = candidates
         .filter(s => s.klineOk)
         .map(s => {
+          const total = s.preScore + (s.techScore || 0);
           const risks = this._mergeRisks(s.risks, s.techRisks, s);
-          if (mkt.adjust < 0 && !risks.some(r => r.indexOf('大盘') >= 0)) {
-            risks.unshift('大盘情绪偏弱（' + mkt.tag + '），系统性风险下个股难独善其身');
-          }
           return {
             code: s.code, name: s.name, board: this._boardTag(s.code),
             price: s.price, changePct: s.changePct, turnover: s.turnover,
             mainFlow: s.mainFlow, mainPct: s.mainPct,
-            industry: s.industry || '',
-            factors: s.factors || [],
-            marketAdjust: mkt.adjust,
-            baseScore: s.techScore,
-            score: s.finalScore,
-            level: this._level(s.finalScore),
+            score: total, preScore: s.preScore, techScore: s.techScore || 0,
+            level: this._level(total),
             risks: risks,
             verified: null, nextChangePct: null
           };
         })
-        .filter(x => x.score >= 50)
+        .filter(x => x.score >= 45)
         .sort((a, b) => b.score - a.score)
         .slice(0, 20);
 
-      setStatus('第5步/5：保存快照...');
       if (finalList.length === 0) {
-        body.innerHTML = '<div class="empty-tip">今日全市场无符合条件的高概率标的（资金/技术/板块共振个股不足，'
-          + mkt.tag + '），这本身是偏弱信号，建议控制仓位观望。</div>';
+        body.innerHTML = '<div class="empty-tip">今日全市场无符合条件的高概率标的（资金面与技术面共振个股不足），这本身是偏弱信号，建议控制仓位观望。</div>';
         return;
       }
 
+      // 保存快照（同日重复扫描则覆盖当日快照）
       const snapshot = {
         date: this._todayStr(),
         ts: Date.now(),
-        marketTag: mkt.tag,
-        marketAdjust: mkt.adjust,
         stocks: finalList
       };
       const snaps = this._loadSnapshots().filter(x => x.date !== snapshot.date);
@@ -4648,262 +3790,125 @@ const NextDayPrediction = {
     }
   },
 
-  // ---------- 大盘情绪调整（±10） ----------
-  _marketAdjust(breadth, upRatio) {
-    const idxAvg = breadth ? breadth.avgChange : null;
-    let adjust = 0;
-    let parts = [];
-    if (idxAvg !== null) {
-      if (idxAvg >= 1) { adjust += 5; parts.push('指数均涨' + idxAvg.toFixed(1) + '%'); }
-      else if (idxAvg >= 0.3) { adjust += 3; parts.push('指数小涨' + idxAvg.toFixed(1) + '%'); }
-      else if (idxAvg <= -1.5) { adjust -= 6; parts.push('指数均跌' + idxAvg.toFixed(1) + '%'); }
-      else if (idxAvg <= -0.5) { adjust -= 3; parts.push('指数走弱' + idxAvg.toFixed(1) + '%'); }
-    }
-    if (upRatio >= 0.7) { adjust += 4; parts.push('普涨' + Math.round(upRatio * 100) + '%'); }
-    else if (upRatio >= 0.55) { adjust += 2; parts.push('多数上涨' + Math.round(upRatio * 100) + '%'); }
-    else if (upRatio <= 0.25) { adjust -= 4; parts.push('普跌仅' + Math.round(upRatio * 100) + '%上涨'); }
-    else if (upRatio <= 0.4) { adjust -= 2; parts.push('多数下跌' + Math.round(upRatio * 100) + '%上涨'); }
-    adjust = Math.max(-10, Math.min(9, adjust));
-    const tag = parts.length ? parts.join('，') : '市场中性';
-    return { adjust, tag };
-  },
-
-  // ---------- 热门行业（板块共振） ----------
-  _hotIndustries(stocks) {
-    const map = {};
-    for (const s of stocks) {
-      const ind = s.industry;
-      if (!ind) continue;
-      if (!map[ind]) map[ind] = { name: ind, count: 0, chgSum: 0, amount: 0, flow: 0 };
-      const m = map[ind];
-      m.count++;
-      m.chgSum += (s.changePct || 0);
-      m.amount += (s.amount || 0);
-      m.flow += (s.mainFlow || 0);
-    }
-    return Object.values(map)
-      .filter(m => m.count >= 3)
-      .map(m => ({
-        name: m.name,
-        avgChg: m.chgSum / m.count,
-        score: m.avgChg * 2 + Math.min(6, m.count * 0.5) + (m.flow > 0 ? 2 : 0)
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
-  },
-
-  // ---------- 预筛打分（当日资金面+量价，仅用于初筛排序） ----------
+  // ---------- 预筛打分（当日资金面+量价，满分40） ----------
   _preScore(s) {
     const risks = [];
     if (!s.name || s.name.includes('ST') || s.name.includes('退')) return null;
     if (!(s.price > 0)) return null;
+    // 一字涨停/一字跌停：振幅<0.5%且涨跌停，无上车机会或风险大，排除
     const amp = s.amplitude || 0;
-    if (amp < 0.5 && Math.abs(s.changePct) > 9) return null; // 一字板
+    if (amp < 0.5 && Math.abs(s.changePct) > 9) return null;
 
     let score = 0;
-    const amount = s.amount || 0;
-    const mainFlow = s.mainFlow || 0;
+    const amount = s.amount || 0;           // 成交额（元）
+    const mainFlow = s.mainFlow || 0;       // 主力净流入（元）
     const mainPct = amount > 0 ? mainFlow / amount * 100 : 0;
 
+    // A1 主力净占比（15分）
     if (mainPct >= 15) score += 15;
     else if (mainPct >= 10) score += 12;
     else if (mainPct >= 6) score += 9;
     else if (mainPct >= 3) score += 5;
     else if (mainPct >= 0) score += 2;
-    if (mainPct < -5) return null; // 主力大幅流出淘汰
+    else { score += 0; risks.push('主力资金今日净流出，占比' + mainPct.toFixed(1) + '%，机构在撤而非在进'); }
+    if (mainPct < -5) return null; // 主力大幅流出直接淘汰
 
+    // A2 主力净流入规模（10分）
     if (mainFlow >= 3e8) score += 10;
     else if (mainFlow >= 1.5e8) score += 8;
     else if (mainFlow >= 7e7) score += 6;
     else if (mainFlow >= 3e7) score += 4;
     else if (mainFlow >= 1e7) score += 2;
 
+    // A3 涨幅强度（8分）——温和上涨最优，涨停过热减分
     const cp = s.changePct || 0;
     if (cp >= 2 && cp < 6) score += 8;
     else if (cp >= 1 && cp < 2) score += 6;
-    else if (cp >= 6 && cp < 9.5) score += 4;
-    else if (cp >= 9.5) score += 2;
+    else if (cp >= 6 && cp < 9.5) { score += 4; risks.push('今日涨幅' + cp.toFixed(1) + '%偏大，短线获利盘堆积，次日高开易遭兑现'); }
+    else if (cp >= 9.5) { score += 2; risks.push('今日涨停，次日溢价不确定性高，炸板或低开风险大'); }
     else if (cp >= 0 && cp < 1) score += 3;
-    else return null;
+    else { return null; } // 当日下跌的不进次日上涨候选
 
+    // A4 换手活跃度（7分）
     const to = s.turnover || 0;
     if (to >= 3 && to < 10) score += 7;
-    else if (to >= 10 && to < 18) score += 5;
-    else if (to >= 18) score += 3;
+    else if (to >= 10 && to < 18) { score += 5; risks.push('换手率' + to.toFixed(1) + '%偏高，筹码松动，分歧加大'); }
+    else if (to >= 18) { score += 3; risks.push('换手率高达' + to.toFixed(1) + '%，疑似游资接力博弈，次日接力资金断档风险'); }
     else if (to >= 1.5 && to < 3) score += 5;
     else if (to >= 0.5) score += 2;
+    else risks.push('换手率仅' + to.toFixed(2) + '%，交投清淡，缺乏资金关注');
 
     return { score, risks, mainPct };
   },
 
-  // ---------- v2 六维综合打分（满分100 + 大盘±10） ----------
-  _v2Score(s) {
+  // ---------- 技术打分（120日K线，满分60） ----------
+  _techScore(klines) {
     const risks = [];
-    const factors = [];
-    const kl = s._klines || [];
-    if (!kl || kl.length < 30) return { score: 0, risks: ['K线数据不足，技术形态无法确认'], factors };
-    const closes = kl.map(k => k.close);
-    const highs = kl.map(k => k.high);
-    const lows = kl.map(k => k.low);
-    const vols = kl.map(k => k.volume);
+    if (!klines || klines.length < 30) return { score: 0, risks: ['K线数据不足，技术形态无法确认'] };
+    const closes = klines.map(k => k.close);
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
     const n = closes.length;
     const last = closes[n - 1];
-    const kLast = kl[n - 1];
     let score = 0;
 
-    // ===== 维度1：资金面（20分）=====
-    let f1 = 0;
-    const mainPct = s.mainPct || 0;
-    const mainFlow = s.mainFlow || 0;
-    if (mainPct >= 15) f1 += 8;
-    else if (mainPct >= 10) f1 += 6;
-    else if (mainPct >= 6) f1 += 4;
-    else if (mainPct >= 3) f1 += 2;
-    if (mainFlow >= 3e8) f1 += 5;
-    else if (mainFlow >= 1.5e8) f1 += 4;
-    else if (mainFlow >= 7e7) f1 += 3;
-    else if (mainFlow >= 3e7) f1 += 1;
-    // 近2日资金连续性
-    const cf = s._cf;
-    if (cf && cf.flows && cf.flows.length >= 2) {
-      const f0 = cf.flows[cf.flows.length - 1].main;
-      const fPrev = cf.flows[cf.flows.length - 2].main;
-      if (f0 > 0 && fPrev > 0) { f1 += 7; factors.push('主力连续2日净流入'); }
-      else if (f0 > 0) f1 += 4;
-      else if (f0 < 0 && fPrev > 0) { f1 += 1; risks.push('前一日主力流入今日转为流出，资金接力存疑'); }
-      else f1 += 0;
-    } else { f1 += 3; } // 数据缺失给中性分
-    if (mainPct < 0) risks.push('主力资金今日净流出，占比' + mainPct.toFixed(1) + '%，机构在撤而非在进');
-    score += f1;
-
-    // ===== 维度2：量价动能（22分）=====
-    let f2 = 0;
-    const vol5 = vols.slice(-6, -1).reduce((a, b) => a + b, 0) / 5;
-    const volRatio = vol5 > 0 ? vols[n - 1] / vol5 : 1;
-    if (volRatio >= 1.5 && volRatio <= 3) { f2 += 8; factors.push('温和放量' + volRatio.toFixed(1) + '倍'); }
-    else if (volRatio > 3 && volRatio <= 5) { f2 += 5; risks.push('今日放量' + volRatio.toFixed(1) + '倍偏大，若股价滞涨需防主力出货'); }
-    else if (volRatio > 5) { f2 += 3; risks.push('巨量' + volRatio.toFixed(1) + '倍成交，多空分歧剧烈，次日方向不确定'); }
-    else if (volRatio >= 0.8 && volRatio < 1.5) f2 += 5;
-    else if (volRatio >= 0.5) f2 += 2;
-    else risks.push('今日缩量明显（量比' + volRatio.toFixed(2) + '），上涨缺乏跟风资金');
-    // 收盘位置
-    const dayRange = (kLast.high - kLast.low) || 1;
-    const closePos = (last - kLast.low) / dayRange;
-    if (closePos >= 0.8) { f2 += 7; factors.push('收在全天高位'); }
-    else if (closePos >= 0.5) f2 += 5;
-    else if (closePos >= 0.3) { f2 += 2; risks.push('收盘位置偏低（' + Math.round(closePos * 100) + '%分位），尾盘有抛压'); }
-    else { risks.push('收盘接近全天最低，长上影/光头阴，次日低开概率大'); }
-    // K线实体
-    const body = (last - kLast.open) / (kLast.open || 1) * 100;
-    const upperShadow = (kLast.high - Math.max(last, kLast.open)) / (kLast.open || 1) * 100;
-    if (body >= 3) f2 += 4;
-    else if (body >= 1) f2 += 3;
-    else if (body >= 0) f2 += 1;
-    if (upperShadow >= 4) risks.push('今日上影线' + upperShadow.toFixed(1) + '%，冲高回落显示上方套牢盘抛压重');
-    // 涨幅强度（温和上涨最优）
-    const cp = s.changePct || 0;
-    if (cp >= 2 && cp < 6) f2 += 3;
-    else if (cp >= 1 && cp < 2) f2 += 2;
-    else if (cp >= 6 && cp < 9.5) { f2 += 1; risks.push('今日涨幅' + cp.toFixed(1) + '%偏大，短线获利盘堆积，次日高开易遭兑现'); }
-    else if (cp >= 9.5) { f2 += 0; risks.push('今日涨停，次日溢价不确定性高，炸板或低开风险大'); }
-    score += f2;
-
-    // ===== 维度3：趋势技术（20分）=====
-    let f3 = 0;
+    // B1 MA均线多头排列（12分）
     const ma5 = Utils.calcMASeries(closes, 5);
     const ma10 = Utils.calcMASeries(closes, 10);
     const ma20 = Utils.calcMASeries(closes, 20);
     const ma60 = Utils.calcMASeries(closes, 60);
     const v5 = ma5[n - 1], v10 = ma10[n - 1], v20 = ma20[n - 1], v60 = ma60[n - 1];
     if (v5 && v10 && v20) {
-      if (v5 > v10 && v10 > v20 && last > v5) { f3 += 6; factors.push('均线多头排列'); }
-      else if (v5 > v10 && last > v5) f3 += 4;
-      else if (last > v20) f3 += 2;
+      if (v5 > v10 && v10 > v20 && last > v5) score += 7;
+      else if (v5 > v10 && last > v5) score += 5;
+      else if (last > v20) score += 3;
       else if (last < v20) risks.push('股价收在20日均线下方，中期趋势偏弱');
-      if (v60 && v20 > v60) f3 += 3;
+      if (v60 && v20 > v60) score += 5;
       else if (v60 && v20 < v60) risks.push('20日线在60日线下方，中期趋势仍受压制');
-      else f3 += 1;
+      else score += 2;
     }
+
+    // B2 MACD（8分）
     const macd = Utils.calcMACDSeries(closes);
-    const dif = macd.dif[n - 1], dea = macd.dea[n - 1];
+    const dif = macd.dif[n - 1], dea = macd.dea[n - 1], mBar = macd.macd[n - 1];
     const difPrev = macd.dif[n - 2], deaPrev = macd.dea[n - 2];
     if (dif != null && dea != null) {
-      if (dif > dea && dif > 0) f3 += 4;
-      else if (dif > dea) f3 += 2;
-      if (difPrev != null && deaPrev != null && difPrev <= deaPrev && dif > dea) { f3 += 3; factors.push('MACD金叉'); }
-      if (macd.macd[n - 1] < 0 && dif < 0) risks.push('MACD处于零轴下方绿柱区，空头动能未释放完');
+      if (dif > dea && dif > 0) score += 5;
+      else if (dif > dea) score += 3;
+      if (difPrev != null && deaPrev != null && difPrev <= deaPrev && dif > dea) score += 3; // 金叉
+      if (mBar < 0 && dif < 0) risks.push('MACD处于零轴下方绿柱区，空头动能未释放完');
     }
+
+    // B3 KDJ（6分）
     const kdj = Utils.calcKDJSeries(closes, highs, lows);
-    const k = kdj.k[n - 1], j = kdj.j[n - 1];
+    const k = kdj.k[n - 1], d = kdj.d[n - 1], j = kdj.j[n - 1];
     if (k != null) {
-      if (k > kdj.d[n - 1] && k < 80) f3 += 2;
-      else if (k > kdj.d[n - 1]) f3 += 1;
+      if (k > d && k < 80) score += 4;
+      else if (k > d) score += 2;
       if (j > 100) risks.push('KDJ的J值' + j.toFixed(0) + '超买，短线技术性回调概率上升');
-      else if (k < 30) f3 += 1;
+      else if (k < 30) score += 2; // 低位金叉潜力
     }
+
+    // B4 RSI（4分）
     const rsi6 = Utils.calcRSISeries(closes, 6)[n - 1];
     const rsi14 = Utils.calcRSISeries(closes, 14)[n - 1];
     if (rsi6 != null) {
-      if (rsi6 >= 50 && rsi6 < 80) f3 += 1;
+      if (rsi6 >= 50 && rsi6 < 80) score += 2;
+      if (rsi14 != null && rsi14 >= 45 && rsi14 < 70) score += 2;
       if (rsi6 >= 85) risks.push('6日RSI达' + rsi6.toFixed(0) + '进入超买区，追高风险大');
-      else if (rsi14 != null && rsi14 >= 45 && rsi14 < 70) f3 += 1;
     }
-    score += f3;
 
-    // ===== 维度4：位置与动量（18分）=====
-    let f4 = 0;
-    const high20 = Math.max.apply(null, highs.slice(-21, -1));
-    const low20 = Math.min.apply(null, lows.slice(-21, -1));
-    if (v20) {
-      const bias = (last - v20) / v20 * 100;
-      if (bias >= 3 && bias <= 12) { f4 += 6; factors.push('站稳20日线上方' + bias.toFixed(1) + '%'); }
-      else if (bias > 12 && bias <= 20) { f4 += 3; risks.push('股价偏离20日线' + bias.toFixed(1) + '%，乖离偏大，回踩均线风险'); }
-      else if (bias > 20) { f4 += 1; risks.push('短线暴涨偏离20日线' + bias.toFixed(1) + '%，均值回归压力大，追高风险极高'); }
-      else if (bias >= 0 && bias < 3) f4 += 3;
-      else if (bias >= -3 && bias < 0) f4 += 2;
-      else risks.push('股价在20日线下方' + bias.toFixed(1) + '%，未站上中期均线');
+    // B5 BOLL位置（5分）
+    const boll = Utils.calcBOLLSeries(closes);
+    const up = boll.upper[n - 1], mid = boll.mid[n - 1], lowB = boll.lower[n - 1];
+    if (up != null) {
+      if (last > mid && last < up) score += 5;
+      else if (last >= up) { score += 2; risks.push('股价触及布林上轨，短线超涨，回归中轨压力大'); }
+      else if (last < mid && last > lowB) score += 2;
+      else if (last <= lowB) risks.push('股价跌破布林下轨，弱势格局未改');
     }
-    if (last > high20) { f4 += 5; factors.push('突破20日新高'); }
-    else if (last >= high20 * 0.97) f4 += 3;
-    if (last <= low20 * 1.05 && last > low20) f4 += 2; // 低位企稳
-    // 近5日小阳爬升
-    let upDays = 0, c5 = 0;
-    for (let i = n - 5; i < n; i++) {
-      if (i > 0 && closes[i] > closes[i - 1]) upDays++;
-    }
-    if (n >= 6) c5 = (closes[n - 1] - closes[n - 6]) / closes[n - 6] * 100;
-    if (upDays >= 4 && c5 > 2 && c5 < 12) { f4 += 4; factors.push('5日小阳爬升' + c5.toFixed(1) + '%'); }
-    else if (upDays >= 3) f4 += 2;
-    // 回踩MA10企稳
-    if (v10 && lows[n - 1] <= v10 * 1.01 && last > v10 && (s.changePct || 0) > 0) f4 += 3;
-    score += f4;
 
-    // ===== 维度5：板块共振（12分）=====
-    let f5 = 0;
-    const indScore = s._indScore || 0;
-    if (s.industry && indScore >= 18) { f5 += 12; factors.push('所属「' + s.industry + '」板块今日领涨'); }
-    else if (s.industry && indScore >= 12) { f5 += 8; factors.push('「' + s.industry + '」板块偏强'); }
-    else if (s.industry && indScore >= 6) f5 += 4;
-    else if (s.industry) f5 += 0;
-    score += f5;
-
-    // ===== 维度6：事件催化（8分）=====
-    let f6 = 0;
-    const dt = s._dt;
-    if (dt) {
-      const seat = dt.seatInfo || '';
-      const isInstBuy = seat.indexOf('机构买入') >= 0 || seat.indexOf('机构净买入') >= 0;
-      const isInstSell = seat.indexOf('机构卖出') >= 0 || seat.indexOf('机构净卖出') >= 0;
-      const isLHB = seat.indexOf('知名') >= 0 || seat.indexOf('游资') >= 0;
-      if (dt.netBuy > 0 && (isInstBuy || isLHB)) { f6 += 8; factors.push('龙虎榜' + (isInstBuy ? '机构' : '游资') + '净买入'); }
-      else if (dt.netBuy > 0) f6 += 5;
-      else if (dt.netBuy < 0 && isInstSell) { f6 -= 4; risks.push('近3日龙虎榜机构净卖出' + Utils.formatAmount(Math.abs(dt.netBuy)) + '，主力借榜出货'); }
-      else if (dt.netBuy < 0) f6 += 0;
-      if (dt.times >= 2) factors.push('3日' + dt.times + '次登榜');
-    }
-    score += f6;
-
-    return { score: Math.max(0, Math.min(100, score)), risks, factors: factors.slice(0, 4) };
+    return { score, risks };
   },
 
   // ---------- 风险合并（保证≥2条） ----------
@@ -4933,31 +3938,20 @@ const NextDayPrediction = {
         ? '<span style="color:#00e676;font-size:12px">✅ 已核实：' + snapshot.hitCount + '/' + snapshot.stocks.length + ' 只次日收涨（胜率' + snapshot.winRate + '%）</span>'
         : '<span style="color:#8a8e9b;font-size:12px">⏳ 次日尚未开盘/数据未更新，开盘后可核实</span>')
       : '';
-    const mktLine = snapshot.marketTag
-      ? '<div style="font-size:11px;color:var(--text-secondary);margin:2px 0 8px">🌡️ 大盘情绪：' + snapshot.marketTag
-        + (snapshot.marketAdjust ? '（全局' + (snapshot.marketAdjust > 0 ? '+' : '') + snapshot.marketAdjust + '分）' : '') + '</div>'
-      : '';
-    let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">📅 数据基准日：' + snapshot.date + '（盘后） · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
-    html += mktLine;
+    let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:10px">📅 数据基准日：' + snapshot.date + '（盘后） · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
     html += '<div class="hot-stocks-list">';
     snapshot.stocks.forEach((s, idx) => {
       const rankCls = idx < 3 ? 'rank-top3' : 'rank-normal';
+      const chgCls = s.verified === true ? (s.nextChangePct >= 0 ? 'up' : 'down') : '';
       const chgColor = s.verified === true ? (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') : (s.changePct >= 0 ? '#00e676' : '#ff5252');
       const verify = s.verified === true
         ? '<div style="font-size:11px;color:' + (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') + '">次日实际：' + (s.nextChangePct >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>'
         : '';
-      const factorLine = (s.factors && s.factors.length)
-        ? '<div style="font-size:10px;color:#ffd54f;margin-top:2px">🔑 ' + s.factors.join(' · ') + '</div>'
-        : '';
-      const indLine = s.industry
-        ? '<span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + '·' + s.industry + ']</span>'
-        : '<span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + ']</span>';
       html += '<div class="hot-stock-item st-card" onclick="App.analyzeStock(\'' + s.code + '\')">'
         + '<div class="rank ' + rankCls + '">' + (idx + 1) + '</div>'
         + '<div class="hs-info">'
-        +   '<div class="hs-name">' + s.name + ' ' + indLine + '</div>'
+        +   '<div class="hs-name">' + s.name + ' <span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + ']</span></div>'
         +   '<div class="hs-code">' + s.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
-        +   factorLine
         +   verify
         + '</div>'
         + '<div class="hs-price">'
@@ -4969,11 +3963,12 @@ const NextDayPrediction = {
         +   '<div class="hs-score-label">概率分</div>'
         + '</div>'
         + '</div>';
+      // 风险提示（展开区）
       html += '<div style="padding:0 0 10px 38px;font-size:11px;line-height:1.6;color:#ffab91;border-bottom:1px solid var(--border-color)">'
         + '⚠️ 下跌风险：' + s.risks.slice(0, 2).join('；') + '</div>';
     });
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">六维模型：资金持续性20 · 量价动能22 · 趋势技术20 · 位置动量18 · 板块共振12 · 龙虎榜催化8，大盘情绪全局±10。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">点击个股可进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
@@ -4996,9 +3991,11 @@ const NextDayPrediction = {
     const body = document.getElementById('nextDayBody');
     body.innerHTML = '<div class="loading-pulse">正在拉取最新行情核实昨日排名...</div>';
 
+    // 找到最近一个未核实且基准日早于今天的快照
     const today = this._todayStr();
     let target = snaps.find(x => x.verified !== true && x.date < today);
     if (!target) {
+      // 全部已核实，展示最新一个
       this._renderList(snaps[0]);
       Utils.toast ? Utils.toast('暂无待核实的排名（今日快照需等下一交易日）') : null;
       return;
@@ -5015,6 +4012,7 @@ const NextDayPrediction = {
           if (klines && klines.length > 0) {
             const next = klines.find(k => k.date > target.date);
             if (next) {
+              // 找基准日收盘价
               const base = klines.filter(k => k.date <= target.date).pop();
               if (base) {
                 s.nextChangePct = (next.close - base.close) / base.close * 100;
@@ -5130,28 +4128,6 @@ const App = {
     }
   },
 
-  /** 首页双榜Tab切换（v4.1：短线潜力 / 次日上涨概率） */
-  switchTopList(tab) {
-    const tabHot = document.getElementById('tabHot');
-    const tabNext = document.getElementById('tabNext');
-    const paneHot = document.getElementById('paneHot');
-    const paneNext = document.getElementById('paneNext');
-    if (!tabHot || !tabNext) return;
-    if (tab === 'next') {
-      tabHot.classList.remove('active');
-      tabNext.classList.add('active');
-      paneHot.style.display = 'none';
-      paneNext.style.display = '';
-      // 首次切到次日榜：有快照直接展示，无快照保留默认提示
-      NextDayPrediction.renderLatest();
-    } else {
-      tabNext.classList.remove('active');
-      tabHot.classList.add('active');
-      paneNext.style.display = 'none';
-      paneHot.style.display = '';
-    }
-  },
-
   /** 更新时间显示 */
   updateTime() {
     const now = new Date();
@@ -5164,14 +4140,12 @@ const App = {
     Navigation.switchTo(pageName);
     // 页面切换时触发数据刷新
     if (pageName === 'watchlist') {
-      this.renderBookmarks(); // 书签即时渲染（行情名在 Watchlist.render 后二次刷新）
       Watchlist.render();
     }
     if (pageName === 'settings') {
       Auth.initSettingsPage();
     }
-    if (pageName === 'home') {
-      // v4.1 次日榜在首页：切回首页时若已有快照则渲染
+    if (pageName === 'analysis') {
       NextDayPrediction.renderLatest();
     }
   },
@@ -6306,39 +5280,6 @@ const App = {
     await this.runAnalysis(code);
   },
 
-  /** 渲染自选股页关注书签（自选股按分组展示，点击直接分析） */
-  renderBookmarks() {
-    const box = document.getElementById('watchlistBookmarks');
-    if (!box) return;
-    const card = document.getElementById('bookmarkCard');
-    const list = Watchlist.getList();
-    if (!list || list.length === 0) {
-      if (card) card.style.display = 'none';
-      box.innerHTML = '';
-      return;
-    }
-    if (card) card.style.display = '';
-    const groupMap = Watchlist.getGroupMap();
-    const groups = Watchlist.getAllGroups();
-    // 分组顺序：默认在最前
-    const ordered = ['默认'].concat(groups.filter(g => g !== '默认'));
-    let html = '';
-    ordered.forEach(g => {
-      const members = list.filter(c => (groupMap[c] || '默认') === g);
-      if (members.length === 0) return;
-      if (groups.length > 1) html += '<div class="bk-group-title">📂 ' + g.replace(/</g,'&lt;') + '</div>';
-      html += '<div class="bk-row">';
-      members.forEach(code => {
-        const name = CODE_TO_NAME[code] || code;
-        const active = this.currentStock === code ? ' active' : '';
-        html += '<button class="bk-chip' + active + '" onclick="App.analyzeStock(\'' + code + '\')" title="' + code + '">' +
-                name.replace(/</g,'&lt;') + '</button>';
-      });
-      html += '</div>';
-    });
-    box.innerHTML = html || '<div class="bk-empty">暂无关注股票</div>';
-  },
-
   /** 更新关注按钮状态 */
   _updateWatchlistBtn(code) {
     const btn = document.getElementById('btnWatchlist');
@@ -6356,19 +5297,16 @@ const App = {
     }
   },
 
-  /** 分析页切换关注状态（长按/点★加分组；再次点击取消） */
+  /** 分析页切换关注状态 */
   toggleWatchlistFromAnalysis() {
     const code = this.currentStock;
     if (!code) return;
     if (Watchlist.has(code)) {
       Watchlist.remove(code);
     } else {
-      // 添加并弹出分组选择
       Watchlist.add(code);
-      Watchlist.showGroupPicker(code);
     }
     this._updateWatchlistBtn(code);
-    this.renderBookmarks();
   },
 
   /** 执行分析 */
@@ -6392,13 +5330,11 @@ const App = {
 
     try {
       // 并行获取数据
-      const [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
+      const [quote, klines, capitalFlow, news] = await Promise.all([
         DataAPI.fetchQuote(code),
         DataAPI.fetchKline(code),
         DataAPI.fetchCapitalFlow(code),
-        DataAPI.fetchNews(code),
-        DataAPI.fetchFinancials(code).catch(() => null),
-        DataAPI.fetchDragonTiger(code).catch(() => null)
+        DataAPI.fetchNews(code)
       ]);
 
       if (!quote) {
@@ -6417,8 +5353,7 @@ const App = {
       // 七维度评分
       let scores;
       try {
-        scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow, financials);
-        scores.financials = financials; // 供诊断模块展示
+        scores = SevenDimAnalyzer.analyze(quote, klines, capitalFlow);
       } catch(e) {
         console.warn('[分析] 七维度评分异常:', e);
         scores = { total: 50, dims: { fundamental: 50, technical: 50, capital: 50, valuation: 50, sentiment: 50 }, message: '', macro: 50, risk: 50 };
@@ -6427,7 +5362,7 @@ const App = {
       // 持仓诊断
       let report;
       try {
-        report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores, financials, dragonTiger);
+        report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores);
       } catch(e) {
         console.warn('[分析] 诊断报告异常:', e);
         report = { mod1: '', mod2: '', mod3: '', mod4: '', mod5: { html: '', risks: [] }, mod6: '', mod7: '', mod8: '', riskSummary: '' };
@@ -6572,24 +5507,18 @@ const App = {
     this._updateWatchlistBtn(code);
 
     // 元数据
-    const isHKStock = !!quote.isHK;
-    const volUnit = isHKStock ? '万股' : '万手';
-    const volShow = isHKStock
-      ? ((quote.volumeShares || quote.volume * 100) / 10000).toFixed(0)
-      : (quote.volume / 10000).toFixed(0);
-    const capUnit = isHKStock ? '亿港元' : '亿';
     document.getElementById('stockMeta').innerHTML = `
       <div class="meta-item"><span class="meta-label">开盘</span><span class="meta-val">${quote.open.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">最高</span><span class="meta-val color-up">${quote.high.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">最低</span><span class="meta-val color-down">${quote.low.toFixed(2)}</span></div>
       <div class="meta-item"><span class="meta-label">昨收</span><span class="meta-val">${quote.prevClose.toFixed(2)}</span></div>
-      <div class="meta-item"><span class="meta-label">成交量</span><span class="meta-val">${volShow}${volUnit}</span></div>
+      <div class="meta-item"><span class="meta-label">成交量</span><span class="meta-val">${(quote.volume / 10000).toFixed(0)}万手</span></div>
       <div class="meta-item"><span class="meta-label">成交额</span><span class="meta-val">${(quote.amount / 10000).toFixed(1)}亿</span></div>
-      <div class="meta-item"><span class="meta-label">换手率</span><span class="meta-val">${quote.turnover > 0 ? quote.turnover.toFixed(2) + '%' : '--'}</span></div>
+      <div class="meta-item"><span class="meta-label">换手率</span><span class="meta-val">${quote.turnover.toFixed(2)}%</span></div>
       <div class="meta-item"><span class="meta-label">PE</span><span class="meta-val">${quote.pe > 0 ? quote.pe.toFixed(1) : '--'}</span></div>
       <div class="meta-item"><span class="meta-label">PB</span><span class="meta-val">${quote.pb > 0 ? quote.pb.toFixed(2) : '--'}</span></div>
-      <div class="meta-item"><span class="meta-label">总市值</span><span class="meta-val">${quote.marketCap > 0 ? quote.marketCap.toFixed(0) + capUnit : '--'}</span></div>
-      <div class="meta-item"><span class="meta-label">流通市值</span><span class="meta-val">${quote.circCap > 0 ? quote.circCap.toFixed(0) + capUnit : '--'}</span></div>
+      <div class="meta-item"><span class="meta-label">总市值</span><span class="meta-val">${quote.marketCap.toFixed(0)}亿</span></div>
+      <div class="meta-item"><span class="meta-label">流通市值</span><span class="meta-val">${quote.circCap.toFixed(0)}亿</span></div>
       <div class="meta-item"><span class="meta-label">振幅</span><span class="meta-val">${quote.amplitude.toFixed(2)}%</span></div>
     `;
   },

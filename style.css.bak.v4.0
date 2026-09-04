@@ -3077,32 +3077,3 @@ body {
 .dt-reason { font-size: 11px; color: #8a94a6; text-align: right; }
 .dt-seat { font-size: 12px; color: #b8c0cc; margin: 4px 0; }
 .dt-after { font-size: 12px; color: #8a94a6; margin-top: 4px; }
-
-/* v4.1 首页双榜Tab */
-.toplist-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.toplist-tab {
-  flex: 1;
-  padding: 10px 8px;
-  border-radius: 8px;
-  border: 1px solid rgba(255,255,255,0.12);
-  background: rgba(255,255,255,0.04);
-  color: var(--text-secondary, #8a8e9b);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-}
-.toplist-tab.active {
-  background: linear-gradient(135deg, rgba(0,212,255,0.18), rgba(0,212,255,0.08));
-  border-color: rgba(0,212,255,0.55);
-  color: #00d4ff;
-  box-shadow: 0 0 12px rgba(0,212,255,0.15);
-}
-.toplist-tab:active {
-  transform: scale(0.97);
-}
