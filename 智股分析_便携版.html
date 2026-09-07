@@ -7866,7 +7866,8 @@ const Watchlist = {
             mainPct: mainPct,
             industry: industry,
             turnover: info.turnover || 0,
-            amplitude: info.amplitude || 0
+            amplitude: info.amplitude || 0,
+            _hasData: !!info.industry
           }
         };
       });
@@ -8362,7 +8363,7 @@ const Watchlist = {
       html += '<span class="wl-info-val">' + vwapStr + costDiff + '</span>';
       html += '</div>';
       // v4.3: 资金流向
-      if (nd0 && nd0.data && typeof nd0.data.mainFlow === 'number' && !item.code.startsWith('hk')) {
+      if (nd0 && nd0.data && nd0.data._hasData && typeof nd0.data.mainFlow === 'number' && !item.code.startsWith('hk')) {
         const mf = nd0.data.mainFlow;
         const mp = nd0.data.mainPct;
         const mfStr = Utils.formatAmount(Math.abs(mf));
