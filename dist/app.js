@@ -1,5 +1,5 @@
 /**
- * 智股分析 v4.2 - 左滑/安卓返回键手势导航(history栈+边缘右滑)+自选股次日上涨概率排序(复用六维模型)+修复fetchTopMarketStocks行业字段丢失
+ * 智股分析 v4.3 - 自选股六维概率详情展开(行业标签+资金流向+六维条形图+关键因子/风险)+增强信息展示
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -4198,7 +4198,17 @@ const Watchlist = {
           _indScore: industry ? (indMap[industry] || 0) : 0
         });
         const final = Math.max(0, Math.min(100, v.score + mkt.adjust));
-        map[it.code] = { score: final, factors: v.factors, risks: v.risks };
+        map[it.code] = {
+          score: final, factors: v.factors, risks: v.risks,
+          dims: v.dims,
+          data: {
+            mainFlow: mainFlow,
+            mainPct: mainPct,
+            industry: industry,
+            turnover: snap.turnover || 0,
+            amplitude: snap.amplitude || 0
+          }
+        };
       });
 
       this._ndCache = { date: todayStr, map };
@@ -4211,6 +4221,28 @@ const Watchlist = {
       this._ndCache = { date: todayStr, map: (this._ndCache && this._ndCache.map) || {} };
     } finally {
       this._ndRunning = false;
+    }
+  },
+
+  // v4.3: 切换六维概率详情面板的展开/收起
+  toggleNdDetail(code) {
+    const el = document.getElementById('wl-nd-' + code);
+    if (!el) return;
+    const isOpen = el.style.display !== 'none';
+    // 先关闭所有已展开的详情
+    document.querySelectorAll('.wl-nd-detail').forEach(d => { d.style.display = 'none'; });
+    // 同时重置所有箭头方向
+    document.querySelectorAll('.wl-nd-arrow').forEach(a => { a.textContent = '▸'; });
+    if (!isOpen) {
+      el.style.display = 'block';
+      // 找到对应的箭头并旋转
+      const card = el.closest('.watchlist-item-v2');
+      if (card) {
+        const arrow = card.querySelector('.wl-nd-arrow');
+        if (arrow) arrow.textContent = '▾';
+      }
+      // 滚动到可见
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   },
 
@@ -4654,6 +4686,13 @@ const Watchlist = {
       html += '<div class="watchlist-item watchlist-item-v2 clickable" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += '<div class="wl-left">';
       html += '<div class="wl-name">' + item.name + '</div>';
+      // v4.3: 行业标签
+      const ndMap0 = (this._ndCache && this._ndCache.map) || {};
+      const nd0 = ndMap0[item.code];
+      const indName = (nd0 && nd0.data && nd0.data.industry) || '';
+      if (indName) {
+        html += '<div class="wl-industry-tag">' + indName + '</div>';
+      }
       html += '<div class="wl-code">' + item.code + '</div>';
       html += '</div>';
       html += '<div class="wl-middle">';
@@ -4662,6 +4701,18 @@ const Watchlist = {
       html += '<span class="wl-info-label">筹码成本</span>';
       html += '<span class="wl-info-val">' + vwapStr + costDiff + '</span>';
       html += '</div>';
+      // v4.3: 资金流向
+      if (nd0 && nd0.data && typeof nd0.data.mainFlow === 'number' && !item.code.startsWith('hk')) {
+        const mf = nd0.data.mainFlow;
+        const mp = nd0.data.mainPct;
+        const mfStr = Utils.formatAmount(Math.abs(mf));
+        const mfSign = mf >= 0 ? '+' : '-';
+        const mfColor = mf >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+        html += '<div class="wl-info-block">';
+        html += '<span class="wl-info-label">主力资金</span>';
+        html += '<span class="wl-info-val" style="color:' + mfColor + '">' + mfSign + mfStr + ' <small>' + (mp >= 0 ? '+' : '') + mp.toFixed(1) + '%</small></span>';
+        html += '</div>';
+      }
       html += '</div>';
       // 末尾：量化评分 + 操作分 + 价格
       const starLevel = Utils.scoreLevel(item.score);
@@ -4672,7 +4723,7 @@ const Watchlist = {
       html += '</div>';
       html += '<div class="wl-tail-scores">';
       html += '<div class="wl-quant-score" style="color:' + scoreColor + '"><span class="wl-qs-num">' + item.score + '</span><span class="wl-qs-stars">' + starLevel + '</span></div>';
-      // v4.2: 次日上涨概率徽标
+      // v4.3: 次日上涨概率徽标（可点击展开六维详情）
       if (item.code.startsWith('hk')) {
         html += '<div class="wl-nd-score" style="color:var(--text-muted)" title="次日概率模型暂仅支持沪深A股">🎯 港股不评</div>';
       } else {
@@ -4680,7 +4731,7 @@ const Watchlist = {
         const nd = ndMap[item.code];
         if (nd && typeof nd.score === 'number') {
           const lv = NextDayPrediction._level(nd.score);
-          html += '<div class="wl-nd-score" style="color:' + lv.color + '" title="次日上涨概率（六维模型）">🎯' + nd.score + ' ' + lv.label + '</div>';
+          html += '<div class="wl-nd-score wl-nd-clickable" style="color:' + lv.color + '" onclick="event.stopPropagation();Watchlist.toggleNdDetail(\'' + item.code + '\')" title="点击展开六维详情">🎯' + nd.score + ' ' + lv.label + ' <span class="wl-nd-arrow">▸</span></div>';
         } else {
           html += '<div class="wl-nd-score wl-nd-loading">🎯 计算中…</div>';
         }
@@ -4692,6 +4743,54 @@ const Watchlist = {
       html += '<button class="wl-move-group" title="移动到分组" onclick="event.stopPropagation();Watchlist.showGroupPicker(\'' + item.code + '\')">📂</button>';
       html += '<button class="wl-delete" onclick="event.stopPropagation();Watchlist.removeAndRefresh(\'' + item.code + '\')">✕</button>';
       html += '</div>';
+      // v4.3: 六维概率详情面板（可展开）
+      if (!item.code.startsWith('hk')) {
+        const ndMap2 = (this._ndCache && this._ndCache.map) || {};
+        const nd2 = ndMap2[item.code];
+        if (nd2 && typeof nd2.score === 'number') {
+          const dims = nd2.dims || {};
+          const data = nd2.data || {};
+          const dimDefs = [
+            { key: 'capital', name: '💰资金流向', max: 20, val: dims.capital || 0 },
+            { key: 'volume', name: '📊量价结构', max: 22, val: dims.volume || 0 },
+            { key: 'trend', name: '📈趋势形态', max: 20, val: dims.trend || 0 },
+            { key: 'momentum', name: '🚀动量指标', max: 18, val: dims.momentum || 0 },
+            { key: 'sector', name: '🏷板块热度', max: 12, val: dims.sector || 0 },
+            { key: 'dragon', name: '🐉龙虎榜', max: 8, val: dims.dragon || 0 }
+          ];
+          let detailHtml = '<div class="wl-nd-detail" id="wl-nd-' + item.code + '" style="display:none">';
+          detailHtml += '<div class="wl-nd-detail-header">📊 六维概率分析 · ' + (data.industry || '未知行业') + '</div>';
+          detailHtml += '<div class="wl-nd-bars">';
+          for (const d of dimDefs) {
+            const pct = d.max > 0 ? Math.round(d.val / d.max * 100) : 0;
+            const barColor = pct >= 70 ? 'var(--accent-green)' : pct >= 40 ? 'var(--accent-orange)' : 'var(--accent-red)';
+            detailHtml += '<div class="wl-nd-bar-row">';
+            detailHtml += '<span class="wl-nd-bar-label">' + d.name + '</span>';
+            detailHtml += '<div class="wl-nd-bar-track"><div class="wl-nd-bar-fill" style="width:' + pct + '%;background:' + barColor + '"></div></div>';
+            detailHtml += '<span class="wl-nd-bar-val">' + d.val + '/' + d.max + '</span>';
+            detailHtml += '</div>';
+          }
+          detailHtml += '</div>';
+          // 关键数据
+          detailHtml += '<div class="wl-nd-facts">';
+          if (typeof data.mainFlow === 'number') {
+            const mfSign = data.mainFlow >= 0 ? '+' : '-';
+            detailHtml += '<span class="wl-nd-fact">💰 主力净流入 ' + mfSign + Utils.formatAmount(Math.abs(data.mainFlow)) + ' (' + (data.mainPct >= 0 ? '+' : '') + data.mainPct.toFixed(1) + '%)</span>';
+          }
+          if (data.turnover) detailHtml += '<span class="wl-nd-fact">🔄 换手 ' + data.turnover.toFixed(1) + '%</span>';
+          if (data.amplitude) detailHtml += '<span class="wl-nd-fact">📏 振幅 ' + data.amplitude.toFixed(1) + '%</span>';
+          detailHtml += '</div>';
+          // 因子与风险
+          if (nd2.factors && nd2.factors.length > 0) {
+            detailHtml += '<div class="wl-nd-section">🔑 <b>上涨因子</b>：' + nd2.factors.join('；') + '</div>';
+          }
+          if (nd2.risks && nd2.risks.length > 0) {
+            detailHtml += '<div class="wl-nd-section wl-nd-risks">⚠️ <b>下跌风险</b>：' + nd2.risks.join('；') + '</div>';
+          }
+          detailHtml += '</div>';
+          html += detailHtml;
+        }
+      }
     };
 
     if (visible.length === 0) {
@@ -5175,7 +5274,7 @@ const NextDayPrediction = {
     }
     score += f6;
 
-    return { score: Math.max(0, Math.min(100, score)), risks, factors: factors.slice(0, 4) };
+    return { score: Math.max(0, Math.min(100, score)), risks, factors: factors.slice(0, 4), dims: { capital: f1, volume: f2, trend: f3, momentum: f4, sector: f5, dragon: f6 } };
   },
 
   // ---------- 风险合并（保证≥2条） ----------
