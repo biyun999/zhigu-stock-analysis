@@ -1,5 +1,6 @@
 /**
- * 智股分析 v4.3 - 自选股六维概率详情展开(行业标签+资金流向+六维条形图+关键因子/风险)+增强信息展示
+ * 智股分析 v4.3 - 自选股六维概率详情展开(行业标签+资金流向+六维条形图+关键因子/风险)
+ * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -1754,7 +1755,7 @@ const DataAPI = {
     const cached = this._cacheGet(cacheKey, 'marketRanking');
     if (cached) return cached;
     try {
-      const queryStr = 'pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23';
+      const queryStr = 'pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23,f62,f100';
       const data = await this._fetchEMClist(queryStr);
       let result = [];
       if (data) {
@@ -1781,7 +1782,9 @@ const DataAPI = {
             prevClose: item.f18 || 0,
             marketCap: (item.f20 || 0) / 100000000,
             circCap: (item.f21 || 0) / 100000000,
-            pb: item.f23 || 0
+            pb: item.f23 || 0,
+            mainFlow: parseFloat(item.f62) || 0,
+            industry: String(item.f100 || '').trim() || ''
           };
         }).filter(d => d.price > 0 && d.name && !d.name.includes('ST'));
       }
@@ -2234,7 +2237,7 @@ const DataAPI = {
   },
 
   /** 全市场活跃股（按成交额排序）—— 板块API全部失败时的最终降级 */
-  async fetchTopMarketStocks(topN = 50) {
+  async fetchTopMarketStocks(topN = 50) {  // v4.3: 调用方可传更大值（如500）以覆盖自选股行业/资金数据
     const cacheKey = 'topMarketStocks_' + topN;
     const cached = this._cacheGet(cacheKey, 'topMarketStocks');
     if (cached) return cached;
@@ -2284,7 +2287,7 @@ const DataAPI = {
     }
   },
 
-  /** v4.2 批量行情快照（东财ulist，一次请求多只）：主力净流入f62/成交额f6/行业f100/振幅f7/换手f8
+  /** v4.3 批量行情快照（东财clist，支持f62/f100字段）：主力净流入f62/成交额f6/行业f100/振幅f7/换手f8
    *  用于自选股次日概率评分；失败返回{}不阻塞主流程 */
   async fetchStockBatch(codes) {
     const today = new Date();
@@ -2292,47 +2295,38 @@ const DataAPI = {
       + '_' + codes.slice().sort().join(',');
     const cached = this._cacheGet(cacheKey, 'stockBatch');
     if (cached) return cached;
-    const secids = codes
-      .filter(c => !c.startsWith('hk')) // 港股不在沪深榜单，跳过
-      .map(c => {
-        const raw = c.replace(/^(sh|sz|bj)/, '');
-        return (c.startsWith('sh') ? '1.' : '0.') + raw;
-      })
-      .join(',');
-    if (!secids) return {};
+    const aCodes = codes.filter(c => !c.startsWith('hk'));
+    if (aCodes.length === 0) return {};
+    // v4.3: 改用 clist API（已验证支持f62/f100），按 b:secid 格式查询指定股票
+    const fsParts = aCodes.map(c => {
+      const raw = c.replace(/^(sh|sz|bj)/, '');
+      return 'b:' + (c.startsWith('sh') ? '1.' : '0.') + raw;
+    });
+    const queryStr = 'fid=f6&po=1&pz=' + aCodes.length + '&pn=1&np=1&fltt=2&invt=2'
+      + '&ut=b2884a393a59ad64002292a3e90d46a5'
+      + '&fs=' + fsParts.join(',')
+      + '&fields=f2,f3,f6,f7,f8,f12,f14,f62,f100';
     try {
-      let json = null;
-      for (const dom of ['push2.eastmoney.com', '82.push2.eastmoney.com', 'push2his.eastmoney.com']) {
-        try {
-          const url = 'https://' + dom + '/api/qt/ulist.np/get?fltt=2&invt=2&np=1'
-            + '&ut=b2884a393a59ad64002292a3e90d46a5'
-            + '&fields=f2,f3,f6,f7,f8,f12,f14,f62,f100&secids=' + secids;
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8000);
-          const resp = await fetch(url, { signal: ctrl.signal });
-          clearTimeout(timer);
-          json = await resp.json();
-          if (json && json.data && Array.isArray(json.data.diff) && json.data.diff.length > 0) break;
-        } catch (e) { continue; }
-      }
+      const json = await this._fetchEMClist(queryStr);
       const map = {};
-      const diff = (json && json.data && json.data.diff) || [];
-      diff.forEach(item => {
-        const rawCode = String(item.f12 || '');
-        if (!rawCode) return;
-        let prefix = 'sz';
-        if (rawCode.startsWith('6')) prefix = 'sh';
-        else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
-        map[prefix + rawCode] = {
-          mainFlow: parseFloat(item.f62) || 0,
-          amount: parseFloat(item.f6) || 0,
-          industry: String(item.f100 || '').trim() || '',
-          amplitude: parseFloat(item.f7) || 0,
-          turnover: parseFloat(item.f8) || 0,
-          changePct: parseFloat(item.f3) || 0,
-          name: String(item.f14 || '')
-        };
-      });
+      if (json && json.data && Array.isArray(json.data.diff)) {
+        json.data.diff.forEach(item => {
+          const rawCode = String(item.f12 || '');
+          if (!rawCode) return;
+          let prefix = 'sz';
+          if (rawCode.startsWith('6')) prefix = 'sh';
+          else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
+          map[prefix + rawCode] = {
+            mainFlow: parseFloat(item.f62) || 0,
+            amount: parseFloat(item.f6) || 0,
+            industry: String(item.f100 || '').trim() || '',
+            amplitude: parseFloat(item.f7) || 0,
+            turnover: parseFloat(item.f8) || 0,
+            changePct: parseFloat(item.f3) || 0,
+            name: String(item.f14 || '')
+          };
+        });
+      }
       this._cacheSet(cacheKey, 'stockBatch', map);
       return map;
     } catch (e) {
@@ -4150,22 +4144,26 @@ const Watchlist = {
     this._ndRunning = true;
     try {
       const codes = targets.map(it => it.code);
-      const [breadth, dtMap, batch, topStocks] = await Promise.all([
+      // v4.3-fix: 拉取500只活跃股（含行业f100+主力f62），覆盖面更广；同时拉大盘/龙虎榜
+      const [breadth, dtMap, topStocks, ranking] = await Promise.all([
         DataAPI.fetchMarketBreadth().catch(() => null),
         DataAPI.fetchDragonTigerBatch(3).catch(() => {}),
-        DataAPI.fetchStockBatch(codes).catch(() => {}),
-        DataAPI.fetchTopMarketStocks(200).catch(() => []),
+        DataAPI.fetchTopMarketStocks(500).catch(() => []),
+        DataAPI.fetchMarketRanking(500).catch(() => []),
       ]);
-      // 大盘情绪（无指数数据时用200活跃股上涨占比兜底）
+      // 大盘情绪
       const upCount = (topStocks || []).filter(x => (x.changePct || 0) > 0).length;
       const upRatio = (topStocks && topStocks.length > 0) ? upCount / topStocks.length : 0.5;
       const mkt = NextDayPrediction._marketAdjust(breadth, upRatio);
-      // 板块共振：优先用200活跃股行业热度；批量快照可作个股行业兜底来源
+      // 板块共振
       const hotInd = NextDayPrediction._hotIndustries(topStocks && topStocks.length >= 30 ? topStocks : []);
       const indMap = {};
       hotInd.forEach(x => { indMap[x.name] = x.score; });
-      const batchMap = batch || {};
       const dragonMap = dtMap || {};
+      // v4.3-fix: 构建行业/资金查找表（topStocks 优先，ranking 兜底）
+      const stockInfoMap = {};
+      (ranking || []).forEach(s => { if (s && s.code) stockInfoMap[s.code] = s; });
+      (topStocks || []).forEach(s => { if (s && s.code) stockInfoMap[s.code] = s; }); // topStocks 覆盖（含更完整字段）
 
       // 资金流：并发分批
       const cfMap = {};
@@ -4180,16 +4178,18 @@ const Watchlist = {
       const map = {};
       targets.forEach(it => {
         const kl = it._klines || [];
-        const snap = batchMap[it.code] || {};
-        const mainFlow = snap.mainFlow || 0;           // 东财f62 元
-        const aYuan = (snap.amount && snap.amount > 0) ? snap.amount : (it.amountYuan || 0); // 东财f6(元)优先，腾讯成交额兜底
+        const info = stockInfoMap[it.code] || {};
+        // v4.3-fix: 行业 + 资金流 统一从 stockInfoMap 获取
+        const industry = info.industry || '';
+        const mainFlow = info.mainFlow || 0;
+        // 成交额：info.amount 单位可能是万元(ranking)或元(topStocks)，统一转为元
+        const aYuan = info.amount > 0 ? (info.amount > 1e8 ? info.amount : info.amount * 1e4) : (it.amountYuan || 0);
         const mainPct = aYuan > 0 ? mainFlow / aYuan * 100 : 0;
-        const industry = snap.industry || '';
         const rawCode = it.code.replace(/^(sh|sz|bj)/, '');
         const v = NextDayPrediction._v2Score({
           price: it.price, changePct: it.changePct,
-          amplitude: snap.amplitude || 0,
-          turnover: snap.turnover || 0,
+          amplitude: info.amplitude || 0,
+          turnover: info.turnover || 0,
           mainFlow, mainPct,
           industry,
           _klines: kl,
@@ -4205,8 +4205,8 @@ const Watchlist = {
             mainFlow: mainFlow,
             mainPct: mainPct,
             industry: industry,
-            turnover: snap.turnover || 0,
-            amplitude: snap.amplitude || 0
+            turnover: info.turnover || 0,
+            amplitude: info.amplitude || 0
           }
         };
       });
