@@ -1,7 +1,8 @@
 /**
- * 智股分析 v4.4 - 短线预测增强P1(资金加速度+筹码结构因子)
+ * 智股分析 v4.4 - 短线预测增强P2(多源资金交叉验证+龙虎榜一致性+数据可信度评分)
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
  * v4.4-P1: 资金面新增3日加速度因子（加速流入vs减速流入区分度）；量价新增筹码结构因子（套牢盘比例评估拉升阻力）；总分仍100，区分度显著提升
+ * v4.4-P2: 多源资金交叉验证（东财fflow+腾讯实时JSONP双源比对）+龙虎榜一致性校验+数据可信度评分，分歧时自动降档+风险提示
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -4208,7 +4209,9 @@ const Watchlist = {
             industry: industry,
             turnover: info.turnover || 0,
             amplitude: info.amplitude || 0,
-            _hasData: !!info.industry
+            _hasData: !!info.industry,
+            dataQuality: v.dataQuality || 'medium',
+            qualityReasons: v.qualityReasons || []
           }
         };
       });
@@ -4761,7 +4764,14 @@ const Watchlist = {
             { key: 'dragon', name: '🐉龙虎榜', max: 8, val: dims.dragon || 0 }
           ];
           let detailHtml = '<div class="wl-nd-detail" id="wl-nd-' + item.code + '" style="display:none">';
-          detailHtml += '<div class="wl-nd-detail-header">📊 六维概率分析 · ' + (data.industry || '未知行业') + '</div>';
+          detailHtml += '<div class="wl-nd-detail-header">📊 六维概率分析 · ' + (data.industry || '未知行业');
+          // v4.4-P2: 数据可信度徽章
+          if (data.dataQuality === 'high') {
+            detailHtml += ' <span class="wl-nd-quality wl-nd-quality-high" title="' + (data.qualityReasons ? data.qualityReasons.join('、') : '双源验证一致') + '">✓ 数据可信</span>';
+          } else if (data.dataQuality === 'low') {
+            detailHtml += ' <span class="wl-nd-quality wl-nd-quality-low" title="' + (data.qualityReasons ? data.qualityReasons.join('、') : '数据源存在分歧') + '">⚠ 数据存疑</span>';
+          }
+          detailHtml += '</div>';
           detailHtml += '<div class="wl-nd-bars">';
           for (const d of dimDefs) {
             const pct = d.max > 0 ? Math.round(d.val / d.max * 100) : 0;
@@ -4945,13 +4955,15 @@ const NextDayPrediction = {
         const batch = candidates.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const [klines, cf] = await Promise.all([
+            const [klines, cf, rtFlow] = await Promise.all([
               DataAPI.fetchKline(s.code, 120),
-              DataAPI.fetchCapitalFlowStock(s.code, 3).catch(() => null)
+              DataAPI.fetchCapitalFlowStock(s.code, 3).catch(() => null),
+              DataAPI.fetchRealtimeFlow(s.code).catch(() => null)
             ]);
             s.klineOk = klines && klines.length >= 30;
             s._klines = klines || [];
             s._cf = cf;
+            s._realtimeFlow = rtFlow;  // v4.4-P2: 腾讯实时资金流（双源验证用）
             s._dt = dragonMap[s.rawCode] || null;
             s._indScore = s.industry ? (indMap[s.industry] || 0) : 0;
             const v = this._v2Score(s);
@@ -5163,6 +5175,48 @@ const NextDayPrediction = {
       }
     } else { f1 += 3; } // 数据缺失给中性分
     if (mainPct < 0) risks.push('主力资金今日净流出，占比' + mainPct.toFixed(1) + '%，机构在撤而非在进');
+    // ===== v4.4-P2 龙虎榜一致性校验 =====
+    const lhbDt = s._dt;
+    if (lhbDt && lhbDt.netBuy != null) {
+      const lhbNet = lhbDt.netBuy || 0;
+      const flowAgree = (lhbNet > 0 && mainFlow > 0) || (lhbNet < 0 && mainFlow < 0);
+      const flowContradict = (lhbNet > 0 && mainFlow < -1e7) || (lhbNet < -1e7 && mainFlow > 0);
+      if (flowContradict) {
+        f1 -= 3;
+        if (lhbNet > 0) {
+          risks.push('龙虎榜机构净买入但当日主力资金流出，榜内资金可能借榜出货，需警惕');
+        } else {
+          risks.push('龙虎榜机构净卖出但当日显示资金流入，数据存在矛盾，可信度降低');
+        }
+      } else if (flowAgree && Math.abs(lhbNet) > 5e7 && Math.abs(mainFlow) > 5e7) {
+        f1 += 2;
+        factors.push('龙虎榜与资金流向一致，数据可信度高');
+      }
+    }
+    // ===== v4.4-P2 腾讯实时资金流双源验证 =====
+    const rtFlow = s._realtimeFlow;
+    if (rtFlow && rtFlow.mainNet != null && Math.abs(mainFlow) > 1e7 && Math.abs(rtFlow.mainNet) > 1e7) {
+      const sameDir = (mainFlow > 0 && rtFlow.mainNet > 0) || (mainFlow < 0 && rtFlow.mainNet < 0);
+      // 计算偏差比例（相对较大值）
+      const maxAbs = Math.max(Math.abs(mainFlow), Math.abs(rtFlow.mainNet));
+      const diffRatio = Math.abs(Math.abs(mainFlow) - Math.abs(rtFlow.mainNet)) / maxAbs;
+      if (sameDir && diffRatio < 0.3) {
+        // 同向且偏差<30% → 高可信度
+        f1 += 2;
+        factors.push('东财/腾讯双源一致，资金数据可信度高');
+      } else if (sameDir && diffRatio < 0.6) {
+        // 同向但偏差30-60% → 中等可信度
+        f1 += 0;
+      } else if (!sameDir) {
+        // 反向 → 低可信度，降档
+        f1 -= 3;
+        risks.push('东财与腾讯资金流向数据方向相反（东财' + (mainFlow > 0 ? '流入' : '流出') + '，腾讯' + (rtFlow.mainNet > 0 ? '流入' : '流出') + '），数据存疑需谨慎');
+      } else {
+        // 同向但偏差大 → 标记
+        f1 -= 1;
+        risks.push('两源资金数据偏差较大（' + Math.round(diffRatio * 100) + '%），绝对金额仅供参考');
+      }
+    }
     score += f1;
 
     // ===== 维度2：量价动能（22分）=====
@@ -5300,7 +5354,24 @@ const NextDayPrediction = {
     }
     score += f6;
 
-    return { score: Math.max(0, Math.min(100, score)), risks, factors: factors.slice(0, 4), dims: { capital: f1, volume: f2, trend: f3, momentum: f4, sector: f5, dragon: f6 } };
+        // v4.4-P2: 数据可信度评估
+    let dataQuality = 'medium';
+    let qualityReasons = [];
+    const hasRT = rtFlow && rtFlow.mainNet != null;
+    const hasDT = lhbDt && lhbDt.netBuy != null;
+    const rtAgree = hasRT && ((mainFlow > 0 && rtFlow.mainNet > 0) || (mainFlow < 0 && rtFlow.mainNet < 0));
+    const dtAgree = hasDT && ((mainFlow > 0 && lhbDt.netBuy > 0) || (mainFlow < 0 && lhbDt.netBuy < 0));
+    if (rtAgree && dtAgree) { dataQuality = 'high'; qualityReasons.push('三源一致'); }
+    else if (rtAgree || dtAgree) { dataQuality = 'high'; qualityReasons.push('双源一致'); }
+    else if (hasRT && !rtAgree) { dataQuality = 'low'; qualityReasons.push('双源分歧'); }
+    else if (hasDT && !dtAgree && Math.abs(lhbDt.netBuy) > 5e7) { dataQuality = 'low'; qualityReasons.push('龙虎榜矛盾'); }
+    
+    return { 
+      score: Math.max(0, Math.min(100, score)), 
+      risks, factors: factors.slice(0, 4), 
+      dims: { capital: f1, volume: f2, trend: f3, momentum: f4, sector: f5, dragon: f6 },
+      dataQuality, qualityReasons
+    };
   },
 
   // ---------- 风险合并（保证≥2条） ----------

@@ -1,3 +1,41 @@
+
+// === mock 环境 ===
+const mockEl = () => ({
+  style:{}, classList:{add:()=>{}, remove:()=>{}}, appendChild:()=>{},
+  addEventListener:()=>{}, removeEventListener:()=>{},
+  querySelector:()=>null, querySelectorAll:()=>[],
+  closest:()=>null, scrollIntoView:()=>{},
+  getElementsByTagName:()=>[], textContent:'', innerHTML:'',
+  setAttribute:()=>{}, getAttribute:()=>null,
+  contains:()=>false, dataset:{}, classNames:'',
+  offsetHeight:0, offsetWidth:0
+});
+global.document = { 
+  getElementById: () => mockEl(), 
+  querySelectorAll: () => [], 
+  querySelector: () => null,
+  createElement: () => mockEl(),
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  getElementsByTagName: () => [],
+  body: mockEl(),
+  documentElement: mockEl(),
+  head: mockEl(),
+  cookie: '',
+  readyState: 'complete'
+};
+global.window = { 
+  addEventListener: () => {}, 
+  location: { hash: '' }, 
+  localStorage: { getItem: () => null, setItem: () => {} },
+  open: () => {}
+};
+global.localStorage = window.localStorage;
+global.navigator = { userAgent: 'test' };
+global.setTimeout = (fn) => { fn(); };
+global.clearTimeout = () => {};
+
+// === 加载 app.js ===
 /**
  * 智股分析 v4.4 - 短线预测增强P2(多源资金交叉验证+龙虎榜一致性+数据可信度评分)
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
@@ -8170,3 +8208,110 @@ document.addEventListener('DOMContentLoaded', () => {
     App.init();
   }
 });
+
+
+// === 生成模拟K线 ===
+function genKlines(days, basePrice, trend='flat') {
+  const kl = [];
+  let p = basePrice;
+  for (let i = 0; i < days; i++) {
+    let dailyChange;
+    if (trend === 'up') dailyChange = basePrice * 0.008;
+    else if (trend === 'down') dailyChange = -basePrice * 0.008;
+    else dailyChange = ((i % 5) - 2) * basePrice * 0.003;
+    p += dailyChange;
+    const open = p;
+    const close = p + dailyChange * 0.5;
+    const high = Math.max(open, close) + basePrice * 0.01;
+    const low = Math.min(open, close) - basePrice * 0.01;
+    kl.push({
+      date: '2026-01-' + String(i+1).padStart(2,'0'),
+      open: +open.toFixed(2), high: +high.toFixed(2), 
+      low: +low.toFixed(2), close: +close.toFixed(2),
+      volume: 10000000 + i * 50000
+    });
+    p = close;
+  }
+  return kl;
+}
+
+const kl = genKlines(60, 20, 'up');
+const baseParams = () => ({
+  price: kl[kl.length-1].close,
+  changePct: 3.5,
+  amplitude: 5.2,
+  turnover: 5,
+  mainFlow: 80000000,
+  mainPct: 8,
+  industry: '半导体',
+  _klines: kl,
+  _cf: { flows: [
+    { main: 30000000 },
+    { main: 50000000 },
+    { main: 80000000 }
+  ]},
+  _dt: null,
+  _realtimeFlow: null,
+  _indScore: 15
+});
+
+// === 测试1：基准（无双源验证） ===
+console.log('\n=== 测试1：基准（无龙虎榜+无腾讯实时） ===');
+const r1 = NextDayPrediction._v2Score(baseParams());
+console.log('总分:', r1.score.toFixed(1), '| 资金:', r1.dims.capital.toFixed(1), '| 可信度:', r1.dataQuality);
+console.log('因子:', r1.factors);
+console.log('风险数:', r1.risks.length);
+
+// === 测试2：龙虎榜一致（机构买入 + 资金流入） ===
+console.log('\n=== 测试2：龙虎榜一致（机构净买入+资金流入） ===');
+const p2 = baseParams();
+p2._dt = { netBuy: 100000000, seatInfo: '机构净买入', times: 1 };
+const r2 = NextDayPrediction._v2Score(p2);
+console.log('总分:', r2.score.toFixed(1), '| 资金:', r2.dims.capital.toFixed(1), '| 可信度:', r2.dataQuality);
+console.log('因子:', r2.factors);
+console.log('风险数:', r2.risks.length);
+
+// === 测试3：龙虎榜矛盾（机构卖出 + 资金流入） ===
+console.log('\n=== 测试3：龙虎榜矛盾（机构净卖出+资金流入） ===');
+const p3 = baseParams();
+p3._dt = { netBuy: -80000000, seatInfo: '机构净卖出', times: 1 };
+const r3 = NextDayPrediction._v2Score(p3);
+console.log('总分:', r3.score.toFixed(1), '| 资金:', r3.dims.capital.toFixed(1), '| 可信度:', r3.dataQuality);
+console.log('因子:', r3.factors);
+console.log('风险:', r3.risks.filter(r => r.indexOf('龙虎榜') >= 0 || r.indexOf('矛盾') >= 0));
+
+// === 测试4：腾讯实时双源一致 ===
+console.log('\n=== 测试4：腾讯实时双源一致（都是流入，金额接近） ===');
+const p4 = baseParams();
+p4._realtimeFlow = { mainNet: 75000000 };  // 东财8千万，腾讯7.5千万，偏差6%
+const r4 = NextDayPrediction._v2Score(p4);
+console.log('总分:', r4.score.toFixed(1), '| 资金:', r4.dims.capital.toFixed(1), '| 可信度:', r4.dataQuality);
+console.log('因子:', r4.factors.filter(f => f.indexOf('双源') >= 0 || f.indexOf('一致') >= 0));
+
+// === 测试5：腾讯实时双源反向 ===
+console.log('\n=== 测试5：腾讯实时双源反向（东财流入，腾讯流出） ===');
+const p5 = baseParams();
+p5._realtimeFlow = { mainNet: -60000000 };  // 东财+8千万，腾讯-6千万
+const r5 = NextDayPrediction._v2Score(p5);
+console.log('总分:', r5.score.toFixed(1), '| 资金:', r5.dims.capital.toFixed(1), '| 可信度:', r5.dataQuality);
+console.log('风险:', r5.risks.filter(r => r.indexOf('东财') >= 0 || r.indexOf('腾讯') >= 0 || r.indexOf('双源') >= 0));
+
+// === 测试6：三源一致（龙虎榜+腾讯+东财都流入） ===
+console.log('\n=== 测试6：三源一致（龙虎榜+腾讯+东财都流入） ===');
+const p6 = baseParams();
+p6._dt = { netBuy: 100000000, seatInfo: '机构净买入', times: 1 };
+p6._realtimeFlow = { mainNet: 75000000 };
+const r6 = NextDayPrediction._v2Score(p6);
+console.log('总分:', r6.score.toFixed(1), '| 资金:', r6.dims.capital.toFixed(1), '| 可信度:', r6.dataQuality);
+console.log('可信度原因:', r6.qualityReasons);
+console.log('因子:', r6.factors);
+
+// === 总结 ===
+console.log('\n📊 资金维度分值对比:');
+console.log('  基准（无验证）:   ', r1.dims.capital.toFixed(1), '分 | 可信度:', r1.dataQuality);
+console.log('  +龙虎榜一致:      ', r2.dims.capital.toFixed(1), '分 | 可信度:', r2.dataQuality);
+console.log('  +龙虎榜矛盾:      ', r3.dims.capital.toFixed(1), '分 | 可信度:', r3.dataQuality);
+console.log('  +腾讯一致:        ', r4.dims.capital.toFixed(1), '分 | 可信度:', r4.dataQuality);
+console.log('  +腾讯反向:        ', r5.dims.capital.toFixed(1), '分 | 可信度:', r5.dataQuality);
+console.log('  三源全一致:       ', r6.dims.capital.toFixed(1), '分 | 可信度:', r6.dataQuality);
+console.log('  最高分差:         ', (Math.max(r2.dims.capital, r4.dims.capital, r6.dims.capital) - Math.min(r3.dims.capital, r5.dims.capital)).toFixed(1), '分');
