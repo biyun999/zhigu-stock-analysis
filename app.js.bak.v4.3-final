@@ -1,7 +1,6 @@
 /**
- * 智股分析 v4.4 - 短线预测增强P1(资金加速度+筹码结构因子)
+ * 智股分析 v4.3 - 自选股六维概率详情展开(行业标签+资金流向+六维条形图+关键因子/风险)
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
- * v4.4-P1: 资金面新增3日加速度因子（加速流入vs减速流入区分度）；量价新增筹码结构因子（套牢盘比例评估拉升阻力）；总分仍100，区分度显著提升
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -5136,31 +5135,15 @@ const NextDayPrediction = {
     else if (mainFlow >= 1.5e8) f1 += 4;
     else if (mainFlow >= 7e7) f1 += 3;
     else if (mainFlow >= 3e7) f1 += 1;
-    // 近3日资金加速度（v4.4 P1增强：趋势比单点更重要）
+    // 近2日资金连续性
     const cf = s._cf;
     if (cf && cf.flows && cf.flows.length >= 2) {
-      const fl = cf.flows;
-      const f0 = fl[fl.length - 1].main; // 今日（最新）
-      const f1d = fl.length >= 2 ? fl[fl.length - 2].main : 0; // 昨日
-      const f2d = fl.length >= 3 ? fl[fl.length - 3].main : null; // 前日
-      if (f0 > 0 && f1d > 0) {
-        // 连续2日以上净流入
-        if (f2d !== null && f2d > 0 && f0 > f1d && f1d > f2d) {
-          f1 += 7; factors.push('主力连续3日加速净流入');
-        } else if (f0 >= f1d) {
-          f1 += 5; factors.push('主力连续2日净流入且放量');
-        } else {
-          f1 += 2; risks.push('主力连续流入但今日缩量，资金接力减弱');
-        }
-      } else if (f0 > 0) {
-        f1 += 3; // 仅今日流入
-      } else if (f0 < 0 && f1d > 0) {
-        f1 += 0; risks.push('前一日主力流入今日转为流出，资金接力存疑');
-      } else if (f0 < 0 && f1d < 0) {
-        f1 -= 2; risks.push('主力连续2日净流出，短线资金出逃明显');
-      } else {
-        f1 += 1;
-      }
+      const f0 = cf.flows[cf.flows.length - 1].main;
+      const fPrev = cf.flows[cf.flows.length - 2].main;
+      if (f0 > 0 && fPrev > 0) { f1 += 7; factors.push('主力连续2日净流入'); }
+      else if (f0 > 0) f1 += 4;
+      else if (f0 < 0 && fPrev > 0) { f1 += 1; risks.push('前一日主力流入今日转为流出，资金接力存疑'); }
+      else f1 += 0;
     } else { f1 += 3; } // 数据缺失给中性分
     if (mainPct < 0) risks.push('主力资金今日净流出，占比' + mainPct.toFixed(1) + '%，机构在撤而非在进');
     score += f1;
@@ -5169,40 +5152,32 @@ const NextDayPrediction = {
     let f2 = 0;
     const vol5 = vols.slice(-6, -1).reduce((a, b) => a + b, 0) / 5;
     const volRatio = vol5 > 0 ? vols[n - 1] / vol5 : 1;
-    if (volRatio >= 1.5 && volRatio <= 3) { f2 += 6; factors.push('温和放量' + volRatio.toFixed(1) + '倍'); }
-    else if (volRatio > 3 && volRatio <= 5) { f2 += 4; risks.push('今日放量' + volRatio.toFixed(1) + '倍偏大，若股价滞涨需防主力出货'); }
-    else if (volRatio > 5) { f2 += 2; risks.push('巨量' + volRatio.toFixed(1) + '倍成交，多空分歧剧烈，次日方向不确定'); }
-    else if (volRatio >= 0.8 && volRatio < 1.5) f2 += 4;
-    else if (volRatio >= 0.5) f2 += 1;
+    if (volRatio >= 1.5 && volRatio <= 3) { f2 += 8; factors.push('温和放量' + volRatio.toFixed(1) + '倍'); }
+    else if (volRatio > 3 && volRatio <= 5) { f2 += 5; risks.push('今日放量' + volRatio.toFixed(1) + '倍偏大，若股价滞涨需防主力出货'); }
+    else if (volRatio > 5) { f2 += 3; risks.push('巨量' + volRatio.toFixed(1) + '倍成交，多空分歧剧烈，次日方向不确定'); }
+    else if (volRatio >= 0.8 && volRatio < 1.5) f2 += 5;
+    else if (volRatio >= 0.5) f2 += 2;
     else risks.push('今日缩量明显（量比' + volRatio.toFixed(2) + '），上涨缺乏跟风资金');
     // 收盘位置
     const dayRange = (kLast.high - kLast.low) || 1;
     const closePos = (last - kLast.low) / dayRange;
-    if (closePos >= 0.8) { f2 += 6; factors.push('收在全天高位'); }
-    else if (closePos >= 0.5) f2 += 4;
+    if (closePos >= 0.8) { f2 += 7; factors.push('收在全天高位'); }
+    else if (closePos >= 0.5) f2 += 5;
     else if (closePos >= 0.3) { f2 += 2; risks.push('收盘位置偏低（' + Math.round(closePos * 100) + '%分位），尾盘有抛压'); }
     else { risks.push('收盘接近全天最低，长上影/光头阴，次日低开概率大'); }
     // K线实体
     const body = (last - kLast.open) / (kLast.open || 1) * 100;
     const upperShadow = (kLast.high - Math.max(last, kLast.open)) / (kLast.open || 1) * 100;
-    if (body >= 3) f2 += 3;
-    else if (body >= 1) f2 += 2;
+    if (body >= 3) f2 += 4;
+    else if (body >= 1) f2 += 3;
     else if (body >= 0) f2 += 1;
     if (upperShadow >= 4) risks.push('今日上影线' + upperShadow.toFixed(1) + '%，冲高回落显示上方套牢盘抛压重');
     // 涨幅强度（温和上涨最优）
     const cp = s.changePct || 0;
-    if (cp >= 2 && cp < 6) f2 += 2;
+    if (cp >= 2 && cp < 6) f2 += 3;
     else if (cp >= 1 && cp < 2) f2 += 2;
     else if (cp >= 6 && cp < 9.5) { f2 += 1; risks.push('今日涨幅' + cp.toFixed(1) + '%偏大，短线获利盘堆积，次日高开易遭兑现'); }
     else if (cp >= 9.5) { f2 += 0; risks.push('今日涨停，次日溢价不确定性高，炸板或低开风险大'); }
-    // 筹码结构（v4.4 P1增强：套牢盘压力决定拉升难度）
-    const chip = Utils.calcChipDistribution(kl, last);
-    const trapRatio = chip && chip.profitRatio != null ? (100 - chip.profitRatio) : 50;
-    if (trapRatio < 20) { f2 += 5; factors.push('套牢盘仅' + trapRatio + '%，上方压力极轻'); }
-    else if (trapRatio < 40) { f2 += 4; factors.push('套牢盘' + trapRatio + '%，拉升阻力较小'); }
-    else if (trapRatio < 60) { f2 += 2; }
-    else if (trapRatio < 80) { f2 += 0; risks.push('套牢盘' + trapRatio + '%，上方解套抛压较重'); }
-    else { f2 -= 2; risks.push('套牢盘高达' + trapRatio + '%，层层解套盘压制上涨空间'); }
     score += f2;
 
     // ===== 维度3：趋势技术（20分）=====
@@ -5370,7 +5345,7 @@ const NextDayPrediction = {
         + '⚠️ 下跌风险：' + s.risks.slice(0, 2).join('；') + '</div>';
     });
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">六维模型v4.4：资金加速度20 · 量价筹码22 · 趋势技术20 · 位置动量18 · 板块共振12 · 龙虎榜催化8，大盘情绪全局±10。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">六维模型：资金持续性20 · 量价动能22 · 趋势技术20 · 位置动量18 · 板块共振12 · 龙虎榜催化8，大盘情绪全局±10。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
