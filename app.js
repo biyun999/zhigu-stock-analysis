@@ -1,8 +1,10 @@
 /**
- * 智股分析 v4.4 - 短线预测增强P3(多源资金交叉验证+板块持续性+大盘情绪细化)
+ * 智股分析 v4.4 - 短线预测增强P4(历史验证台账+档位胜率统计)
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
- * v4.4-P1: 资金面新增3日加速度因子（加速流入vs减速流入区分度）；量价新增筹码结构因子（套牢盘比例评估拉升阻力）；总分仍100，区分度显著提升
- * v4.4-P3: 多源资金验证 + 板块持续性过滤(连续热门加分) + 大盘情绪细化(涨停数+量能变化)
+ * v4.4-P1: 资金加速度因子+筹码结构因子
+ * v4.4-P2: 多源资金交叉验证+龙虎榜一致性+数据可信度评分
+ * v4.4-P3: 板块持续性过滤+大盘情绪细化(涨停数+量能变化)
+ * v4.4-P4: 历史验证台账+档位胜率统计+历史排名可查询
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -5524,7 +5526,7 @@ const NextDayPrediction = {
         + '⚠️ 下跌风险：' + s.risks.slice(0, 2).join('；') + '</div>';
     });
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">六维模型v4.4 P3：资金加速度20 · 量价筹码22 · 趋势技术20 · 位置动量18 · 板块共振12(+持续性2) · 龙虎榜催化8，大盘情绪全局±10（指数+涨跌比+涨停数+量能）。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-top:10px;line-height:1.6">六维模型v4.4 P4：资金加速度20 · 量价筹码22 · 趋势技术20 · 位置动量18 · 板块共振12(+持续性2) · 龙虎榜催化8，大盘情绪全局±10（指数+涨跌比+涨停数+量能）。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。点下方「历史验证台账」查看全部排名及胜率统计。</div>';
     body.innerHTML = html;
   },
 
@@ -5592,7 +5594,205 @@ const NextDayPrediction = {
     this._saveSnapshots(snaps);
     this._renderList(target);
     Utils.toast ? Utils.toast('核实完成：' + hit + '/' + resolved + ' 只次日收涨，胜率' + target.winRate + '%') : null;
-  }
+  },
+
+  // ---------- v4.4 P4: 历史验证台账 ----------
+  async verifyAllPending() {
+    const snaps = this._loadSnapshots();
+    const pending = snaps.filter(s => s.verified !== true);
+    if (pending.length === 0) {
+      Utils.toast ? Utils.toast('所有排名都已核实') : null;
+      return;
+    }
+    // 关闭弹窗
+    this.closeLedger();
+    const body = document.getElementById('nextDayBody');
+    body.innerHTML = '<div class="loading-pulse">正在批量核实 ' + pending.length + ' 个交易日的排名...</div>';
+
+    let totalHit = 0, totalResolved = 0;
+    for (let si = 0; si < pending.length; si++) {
+      const target = pending[si];
+      body.innerHTML = '<div class="loading-pulse">核实中：' + target.date + '（' + (si + 1) + '/' + pending.length + '）</div>';
+      let hit = 0, resolved = 0;
+      const batchSize = 10;
+      const list = target.stocks || [];
+      for (let i = 0; i < list.length; i += batchSize) {
+        const batch = list.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (s) => {
+          try {
+            const klines = await DataAPI.fetchKline(s.code, 5);
+            if (klines && klines.length > 0) {
+              const next = klines.find(k => k.date > target.date);
+              if (next) {
+                const base = klines.filter(k => k.date <= target.date).pop();
+                if (base) {
+                  s.nextChangePct = (next.close - base.close) / base.close * 100;
+                  s.verified = true;
+                  resolved++;
+                  if (s.nextChangePct > 0) hit++;
+                }
+              }
+            }
+          } catch (e) { /* 单只失败不影响 */ }
+        }));
+      }
+      if (resolved > 0) {
+        target.verified = true;
+        target.hitCount = hit;
+        target.resolvedCount = resolved;
+        target.winRate = Math.round(hit / resolved * 100);
+        target.verifyDate = this._todayStr();
+        totalHit += hit;
+        totalResolved += resolved;
+      }
+    }
+    this._saveSnapshots(snaps);
+    // 重新打开台账
+    const updated = this._loadSnapshots();
+    this._renderList(updated[0] || { stocks: [] });
+    this.showLedger();
+    Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只收涨') : null;
+  },
+
+  showLedger() {
+    const snaps = this._loadSnapshots();
+    if (snaps.length === 0) {
+      Utils.toast ? Utils.toast('暂无历史排名，请先生成') : null;
+      return;
+    }
+    // 创建弹窗
+    let overlay = document.getElementById('nd-ledger-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'nd-ledger-overlay';
+      overlay.className = 'modal-overlay';
+      overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = this._renderLedger(snaps);
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  },
+
+  closeLedger() {
+    const overlay = document.getElementById('nd-ledger-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.style.overflow = '';
+  },
+
+  _renderLedger(snaps) {
+    // 计算档位统计
+    const stats = this._calcTierStats(snaps);
+    const verifiedSnaps = snaps.filter(s => s.verified === true);
+    const totalWinRate = verifiedSnaps.length
+      ? Math.round(verifiedSnaps.reduce((sum, s) => sum + (s.winRate || 0), 0) / verifiedSnaps.length)
+      : 0;
+
+    let html = '<div class="modal-card ledger-modal">';
+    html += '<div class="modal-header">';
+    html += '<span>📊 历史验证台账</span>';
+    html += '<button class="modal-close" onclick="NextDayPrediction.closeLedger()">✕</button>';
+    html += '</div>';
+    html += '<div class="ledger-body">';
+
+    // 统计概览卡片
+    html += '<div class="ledger-stats-row">';
+    html += '<div class="ledger-stat-card"><div class="ls-num">' + snaps.length + '</div><div class="ls-label">累计交易日</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedSnaps.length + '</div><div class="ls-label">已核实</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
+    html += '</div>';
+
+    // 档位胜率
+    html += '<div class="ledger-section-title">📈 档位胜率统计</div>';
+    html += '<div class="tier-stats">';
+    const tiers = [
+      { key: 'high', label: '高概率 (80+)', color: '#ff5252' },
+      { key: 'highMid', label: '较高概率 (65-80)', color: '#ff9800' },
+      { key: 'mid', label: '中等概率 (50-65)', color: '#00d4ff' },
+    ];
+    tiers.forEach(t => {
+      const st = stats[t.key];
+      const rate = st.total > 0 ? Math.round(st.win / st.total * 100) : 0;
+      html += '<div class="tier-stat-item">';
+      html += '<div class="tier-stat-label" style="color:' + t.color + '">' + t.label + '</div>';
+      html += '<div class="tier-stat-bar"><div class="tier-stat-fill" style="width:' + rate + '%;background:' + t.color + '"></div></div>';
+      html += '<div class="tier-stat-num">' + st.win + '/' + st.total + ' · ' + rate + '%</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // 待核实提示 + 批量核实按钮
+    const pending = snaps.filter(s => s.verified !== true);
+    if (pending.length > 0) {
+      html += '<div style="margin:8px 0 12px;display:flex;gap:8px;align-items:center">';
+      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实</span>';
+      html += '<button onclick="NextDayPrediction.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部</button>';
+      html += '</div>';
+    }
+    // 最近交易日列表
+    html += '<div class="ledger-section-title">📅 历史排名（' + snaps.length + '个交易日）</div>';
+    html += '<div class="ledger-list">';
+    snaps.forEach((s, idx) => {
+      const isVerified = s.verified === true;
+      const wr = s.winRate || 0;
+      const hit = s.hitCount || 0;
+      const total = s.resolvedCount || (s.stocks ? s.stocks.length : 0);
+      html += '<div class="ledger-item" onclick="NextDayPrediction._showSnapshotFromLedger(' + idx + ')">';
+      html += '<div class="ledger-date">' + s.date + '</div>';
+      html += '<div class="ledger-info">';
+      html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
+      if (s.marketTag) html += '<span class="ledger-tag">🌡 ' + s.marketTag + '</span>';
+      html += '</div>';
+      if (isVerified) {
+        const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
+        html += '<div class="ledger-winrate" style="color:' + wrColor + '">✅ ' + wr + '%</div>';
+      } else {
+        html += '<div class="ledger-winrate" style="color:#8a8e9b">⏳ 待核实</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+
+    html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px 0 4px;line-height:1.6">数据全部保存在本机，最多留存30个交易日，可点击任意日期查看详细排名及核实结果</div>';
+    html += '</div></div>';
+    return html;
+  },
+
+  _calcTierStats(snaps) {
+    const result = {
+      high: { win: 0, total: 0 },      // 80+
+      highMid: { win: 0, total: 0 },   // 65-80
+      mid: { win: 0, total: 0 },       // 50-65
+    };
+    snaps.forEach(snap => {
+      if (snap.verified !== true) return;
+      (snap.stocks || []).forEach(s => {
+        if (s.verified !== true) return;
+        const sc = s.score || 0;
+        let tier = null;
+        if (sc >= 80) tier = 'high';
+        else if (sc >= 65) tier = 'highMid';
+        else if (sc >= 50) tier = 'mid';
+        if (!tier) return;
+        result[tier].total++;
+        if ((s.nextChangePct || 0) > 0) result[tier].win++;
+      });
+    });
+    return result;
+  },
+
+  _showSnapshotFromLedger(idx) {
+    const snaps = this._loadSnapshots();
+    const snap = snaps[idx];
+    if (!snap) return;
+    this.closeLedger();
+    // 渲染该日排名
+    this._renderList(snap);
+    // 滚动到顶部
+    const body = document.getElementById('nextDayBody');
+    if (body) body.scrollTop = 0;
+    Utils.toast ? Utils.toast('已展示 ' + snap.date + ' 排名') : null;
+  },
 };
 
 // ============================================================

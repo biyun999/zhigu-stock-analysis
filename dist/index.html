@@ -129,7 +129,10 @@
           </div>
           <div style="display:flex;gap:8px;margin-top:12px">
             <button onclick="NextDayPrediction.scan()" class="btn-primary" style="flex:1">🔍 扫描生成排名</button>
-            <button onclick="NextDayPrediction.verifyAll()" class="btn-primary" style="flex:1;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">✅ 核实昨日排名</button>
+            <button onclick="NextDayPrediction.verifyAll()" class="btn-primary" style="flex:1;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">✅ 核实昨日</button>
+          </div>
+          <div style="margin-top:8px">
+            <button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="width:100%;background:rgba(100,150,255,0.12);border:1px solid rgba(100,150,255,0.35);color:#64b5f6">📊 历史验证台账</button>
           </div>
         </div>
       </section>
@@ -462,4 +465,13 @@
     </div>
     <div class="nav-item" data-page="about" onclick="App.switchPage('about')">
       <span class="nav-icon">ℹ️</span><span class="nav-label">关于</span>
-    </                                                                                                                                                          
+    </div>
+  </nav>
+
+  <!-- 全局Toast -->
+  <div id="toast" class="toast"></div>
+
+  <!-- 应用主脚本 -->
+  <script src="app.js"></script>
+</body>
+</html>
