@@ -3167,35 +3167,3 @@ body {
 .ledger-count{font-size:10px;color:var(--text-muted,#888);background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px}
 .ledger-tag{font-size:10px;color:var(--text-secondary,#a0a0a0);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ledger-winrate{font-size:12px;font-weight:600;font-family:monospace;min-width:60px;text-align:right}
-/* ---------- v4.4 P5: 台账Tab切换 ---------- */
-.ledger-tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border,#2a2d36)}
-.ledger-tab{flex:1;text-align:center;padding:10px 8px;font-size:12px;font-weight:500;color:var(--text-muted,#888);cursor:pointer;border-radius:8px 8px 0 0;transition:all .2s}
-.ledger-tab.active{color:#00d4ff;background:rgba(0,212,255,0.08)}
-.ledger-tab:hover{color:var(--text-secondary,#a0a0a0)}
-.ledger-modal .ledger-body{padding:12px 14px}
-
-/* ---------- v4.4 P5: 因子IC分析 ---------- */
-.ic-rank-list{display:flex;flex-direction:column;gap:10px}
-.ic-rank-item{background:var(--bg-light,#222630);border-radius:8px;padding:10px 12px;border:1px solid var(--border,#2a2d36)}
-.ic-rank-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.ic-rank-no{font-size:13px;font-weight:700;font-family:monospace;min-width:28px}
-.ic-rank-name{flex:1;font-size:12px;font-weight:600;color:var(--text-primary,#fff)}
-.ic-rank-val{font-size:12px;font-weight:600;font-family:monospace}
-.ic-bar-track{height:6px;background:rgba(255,255,255,0.05);border-radius:3px;overflow:hidden;margin:4px 0}
-.ic-bar-fill{height:100%;border-radius:3px;transition:width .3s}
-.ic-rank-meta{display:flex;justify-content:space-between;font-size:10px;color:var(--text-muted,#888);margin-top:4px}
-.ic-rank-meta b{color:var(--text-primary,#fff);font-weight:600}
-
-/* ---------- v4.4 P5: 单股回溯 ---------- */
-.backtrack-input-row{display:flex;gap:8px;margin-bottom:12px}
-.backtrack-input{flex:1;background:var(--bg-light,#222630);border:1px solid var(--border,#2a2d36);border-radius:8px;padding:8px 12px;font-size:12px;color:var(--text-primary,#fff);outline:none;transition:border-color .2s}
-.backtrack-input:focus{border-color:#00d4ff}
-.backtrack-summary{background:var(--bg-light,#222630);border-radius:8px;padding:12px;border:1px solid var(--border,#2a2d36)}
-.backtrack-sum-header{font-size:14px;font-weight:600;color:var(--text-primary,#fff)}
-.backtrack-item{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-light,#222630);border-radius:8px;border:1px solid var(--border,#2a2d36);cursor:pointer;transition:all .2s}
-.backtrack-item:active{transform:scale(0.98);background:rgba(100,150,255,0.1)}
-.bt-date{font-size:12px;font-weight:500;color:var(--text-primary,#fff);font-family:monospace;min-width:100px}
-.bt-info{display:flex;align-items:center;gap:8px;flex:1;justify-content:center;margin-right:10px}
-.bt-score{font-size:12px;font-weight:600;font-family:monospace}
-.bt-ind{font-size:10px;color:var(--text-muted,#888);background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bt-ret{font-size:12px;font-weight:600;font-family:monospace;min-width:60px;text-align:right}
