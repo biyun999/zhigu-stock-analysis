@@ -4142,6 +4142,10 @@ const Watchlist = {
 
   /** v4.0 财报预热：后台逐只拉取，拿到财报后若评分变化则静默刷新一次自选列表 */
   _finPreheating: false,
+  // v4.4 P6: 点击防抖与重渲染安全门
+  _clickDebounce: false,
+  _analysisInProgress: false,
+
   /** v4.2 后台计算自选股次日上涨概率（复用 NextDayPrediction 六维模型，失败静默不阻塞） */
   async _computeNextDayScores(items) {
     if (this._ndRunning) return;
@@ -4230,8 +4234,13 @@ const Watchlist = {
 
       this._ndCache = { date: todayStr, map };
       // 计算完成后：若仍停留在自选股页，静默重渲染（排序/徽标生效）
-      if (typeof Navigation !== 'undefined' && Navigation.currentPage === 'watchlist') {
-        Watchlist.render();
+      // v4.4 P6: 有正在进行的分析请求时不打断点击；用 requestAnimationFrame 平滑重渲染
+      if (typeof Navigation !== 'undefined' && Navigation.currentPage === 'watchlist' && !this._analysisInProgress) {
+        if (typeof requestAnimationFrame !== 'undefined') {
+          requestAnimationFrame(() => Watchlist.render());
+        } else {
+          Watchlist.render();
+        }
       }
     } catch (e) {
       console.warn('[自选股次日概率] 计算失败:', e && e.message);
@@ -4868,7 +4877,7 @@ const Watchlist = {
 };
 
 // ============================================================
-// 11.5 NextDayPrediction - 次日上涨概率TOP20（v4.1 六维模型 v2：盘后扫描+隔日核实）
+// 11.5 NextDayPrediction - 次日上涨概率TOP10（v4.1 六维模型 v2：盘后扫描+隔日核实）
 // ============================================================
 /**
  * 【短线上涨原因总结 → 模型方法论】
@@ -5059,7 +5068,7 @@ const NextDayPrediction = {
         })
         .filter(x => x.score >= 50)
         .sort((a, b) => b.score - a.score)
-        .slice(0, 20);
+        .slice(0, 10);
 
       setStatus('第5步/5：保存快照...');
       if (finalList.length === 0) {
@@ -5966,7 +5975,7 @@ const NextDayPrediction = {
     if (this._backtrackCode) {
       const result = this._calcStockBacktest(snaps, this._backtrackCode);
       if (!result) {
-        html += '<div class="empty-tip">近30个交易日内该股票未进入次日榜TOP20</div>';
+        html += '<div class="empty-tip">近30个交易日内该股票未进入次日榜TOP10</div>';
       } else {
         html += '<div class="backtrack-summary">';
         html += '<div class="backtrack-sum-header">📌 ' + result.name + '（' + result.code + '）</div>';
@@ -6053,6 +6062,339 @@ const NextDayPrediction = {
     const body = document.getElementById('nextDayBody');
     if (body) body.scrollTop = 0;
     Utils.toast ? Utils.toast('已展示 ' + snap.date + ' 排名') : null;
+  },
+};
+
+// ============================================================
+// 11.6 ShortTermLedger - 短线潜力榜历史验证台账（v4.4 P6）
+// ============================================================
+const ShortTermLedger = {
+  STORAGE_KEY: 'zhigu_shortterm_snapshots',
+  MAX_SNAPSHOTS: 30,
+  _ledgerTab: 'verify',
+  _backtrackInput: '',
+  _backtrackCode: null,
+
+  // ---------- 存储 ----------
+  _loadSnapshots() {
+    try { return JSON.parse(localStorage.getItem(this.STORAGE_KEY)) || []; }
+    catch (e) { return []; }
+  },
+  _saveSnapshots(list) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list.slice(0, this.MAX_SNAPSHOTS))); }
+    catch (e) { console.warn('短线快照保存失败', e); }
+  },
+  _todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  },
+
+  // ---------- 保存当日快照 ----------
+  saveSnapshot(topStocks, topSectors, fallbackMode) {
+    const today = this._todayStr();
+    const stocks = (topStocks || []).map(s => ({
+      code: s.code, name: s.name, price: s.price, changePct: s.changePct,
+      sectorName: s.sectorName || '', total: s.total || 0,
+      capitalScore: s.capitalScore || 0, sectorScore: s.sectorScore || 0,
+      policyScore: s.policyScore || 0, newsScore: s.newsScore || 0,
+      quantScore: s.quantScore || 0, probTag: s.probTag || '',
+      category: s.category || '', verified: null, nextChangePct: null
+    }));
+    const snapshot = {
+      date: today,
+      ts: Date.now(),
+      topSectors: topSectors || [],
+      fallbackMode: fallbackMode || 'normal',
+      stocks: stocks
+    };
+    const snaps = this._loadSnapshots().filter(x => x.date !== today);
+    snaps.unshift(snapshot);
+    this._saveSnapshots(snaps);
+  },
+
+  // ---------- 弹窗控制 ----------
+  showLedger() {
+    const snaps = this._loadSnapshots();
+    if (snaps.length === 0) {
+      Utils.toast ? Utils.toast('暂无历史快照，请先加载短线榜') : null;
+      return;
+    }
+    let overlay = document.getElementById('st-ledger-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'st-ledger-overlay';
+      overlay.className = 'modal-overlay st-ledger-overlay';
+      overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = this._renderLedger(snaps);
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  },
+
+  closeLedger() {
+    const overlay = document.getElementById('st-ledger-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.style.overflow = '';
+  },
+
+  switchLedgerTab(tab) {
+    this._ledgerTab = tab;
+    const snaps = this._loadSnapshots();
+    const overlay = document.getElementById('st-ledger-overlay');
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+  },
+
+  // ---------- 渲染 ----------
+  _renderLedger(snaps) {
+    const tab = this._ledgerTab || 'verify';
+    const verifiedSnaps = snaps.filter(s => s.verified === true);
+    const totalWinRate = verifiedSnaps.length
+      ? Math.round(verifiedSnaps.reduce((sum, s) => sum + (s.winRate || 0), 0) / verifiedSnaps.length)
+      : 0;
+
+    let html = '<div class="modal-card ledger-modal st-ledger-modal">';
+    html += '<div class="modal-header">';
+    html += '<span>📊 短线潜力历史台账</span>';
+    html += '<button class="modal-close" onclick="ShortTermLedger.closeLedger()">✕</button>';
+    html += '</div>';
+    html += '<div class="ledger-tabs">';
+    html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'verify\')">📈 胜率统计</div>';
+    html += '<div class="ledger-tab' + (tab === 'stock' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'stock\')">🔍 单股回溯</div>';
+    html += '</div>';
+    html += '<div class="ledger-body">';
+
+    if (tab === 'verify') {
+      html += this._renderVerifyTab(snaps, verifiedSnaps, totalWinRate);
+    } else {
+      html += this._renderStockTab(snaps);
+    }
+
+    html += '</div></div>';
+    return html;
+  },
+
+  _renderVerifyTab(snaps, verifiedSnaps, totalWinRate) {
+    let html = '';
+    html += '<div class="ledger-stats-row">';
+    html += '<div class="ledger-stat-card"><div class="ls-num">' + snaps.length + '</div><div class="ls-label">累计交易日</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedSnaps.length + '</div><div class="ls-label">已核实</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
+    html += '</div>';
+
+    // TOP10整体胜率
+    if (verifiedSnaps.length > 0) {
+      let totalHit = 0, totalResolved = 0;
+      verifiedSnaps.forEach(s => { totalHit += (s.hitCount || 0); totalResolved += (s.resolvedCount || 0); });
+      const overallRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
+      html += '<div class="ledger-section-title">🎯 TOP10整体胜率</div>';
+      html += '<div class="overall-winrate">';
+      html += '<span class="owr-num" style="color:#00e676">' + overallRate + '%</span>';
+      html += '<span class="owr-sub">共 ' + totalHit + '/' + totalResolved + ' 只次日收涨（' + verifiedSnaps.length + '个交易日）</span>';
+      html += '</div>';
+    }
+
+    // 待核实提示 + 批量核实按钮
+    const pending = snaps.filter(s => s.verified !== true);
+    if (pending.length > 0) {
+      html += '<div style="margin:8px 0 12px;display:flex;gap:8px;align-items:center">';
+      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实</span>';
+      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部</button>';
+      html += '</div>';
+    }
+    // 最近交易日列表
+    html += '<div class="ledger-section-title">📅 历史快照（' + snaps.length + '个交易日）</div>';
+    html += '<div class="ledger-list">';
+    snaps.forEach((s, idx) => {
+      const isVerified = s.verified === true;
+      const wr = s.winRate || 0;
+      html += '<div class="ledger-item" onclick="ShortTermLedger._showSnapshotDetail(' + idx + ')">';
+      html += '<div class="ledger-date">' + s.date + '</div>';
+      html += '<div class="ledger-info">';
+      html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
+      if (s.fallbackMode && s.fallbackMode !== 'normal') {
+        const modeTag = { concept: '🟡 概念', market: '🟠 全市场', static: '⚪ 静态' }[s.fallbackMode] || '';
+        if (modeTag) html += '<span class="ledger-tag">' + modeTag + '</span>';
+      }
+      html += '</div>';
+      if (isVerified) {
+        const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
+        html += '<div class="ledger-winrate" style="color:' + wrColor + '">✅ ' + wr + '%</div>';
+      } else {
+        html += '<div class="ledger-winrate" style="color:#8a8e9b">⏳ 待核实</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px 0 4px;line-height:1.6">数据全部保存在本机，最多留存30个交易日，点击任意日期查看详细榜单</div>';
+    return html;
+  },
+
+  _renderStockTab(snaps) {
+    let html = '';
+    html += '<div class="ledger-section-title">🔍 单股上榜历史回溯</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.6">输入股票代码/名称，查询其近30个交易日内在短线潜力榜的上榜次数、得分及次日实际表现。</div>';
+    html += '<div class="backtrack-input-row">';
+    html += '<input id="stBacktrackInput" type="text" placeholder="输入股票代码或名称，如 600519 / 贵州茅台" oninput="ShortTermLedger.setBacktrackInput(this.value)" onkeydown="if(event.key===\'Enter\')ShortTermLedger.doBacktrack()" class="backtrack-input">';
+    html += '<button onclick="ShortTermLedger.doBacktrack()" class="btn-primary" style="padding:8px 14px;font-size:12px">查询</button>';
+    html += '</div>';
+
+    if (this._backtrackCode) {
+      const result = this._calcStockBacktest(snaps, this._backtrackCode);
+      if (!result) {
+        html += '<div class="empty-tip">近30个交易日内该股票未进入短线潜力榜TOP10</div>';
+      } else {
+        html += '<div class="backtrack-summary">';
+        html += '<div class="backtrack-sum-header">📌 ' + result.name + '（' + result.code + '）</div>';
+        html += '<div class="ledger-stats-row" style="margin-top:10px;margin-bottom:0">';
+        html += '<div class="ledger-stat-card"><div class="ls-num">' + result.totalHits + '</div><div class="ls-label">上榜次数</div></div>';
+        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + result.winRate + '%</div><div class="ls-label">次日胜率</div></div>';
+        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:' + (result.avgRet >= 0 ? '#00e676' : '#ff5252') + '">' + (result.avgRet >= 0 ? '+' : '') + result.avgRet.toFixed(2) + '%</div><div class="ls-label">平均涨幅</div></div>';
+        html += '</div>';
+        if (result.verifiedCount > 0) {
+          html += '<div style="display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--text-secondary);flex-wrap:wrap">';
+          html += '<span>最大次日涨幅：<b style="color:#00e676">+' + result.maxRet.toFixed(2) + '%</b></span>';
+          html += '<span>最大次日跌幅：<b style="color:#ff5252">' + result.minRet.toFixed(2) + '%</b></span>';
+          html += '<span>均值得分：<b>' + result.avgScore + '</b></span>';
+          html += '</div>';
+        }
+        html += '</div>';
+
+        html += '<div class="ledger-section-title" style="margin-top:14px">📋 上榜明细</div>';
+        html += '<div class="ledger-list">';
+        result.hits.forEach(h => {
+          const s = h.stock;
+          const isV = s.verified === true;
+          const chgColor = isV ? ((s.nextChangePct || 0) >= 0 ? '#00e676' : '#ff5252') : '#8a8e9b';
+          html += '<div class="backtrack-item">';
+          html += '<div class="bt-date">' + h.snap.date + '</div>';
+          html += '<div class="bt-info">';
+          html += '<span class="bt-score" style="color:#ff9800">⚡ ' + s.total + '分</span>';
+          if (s.sectorName) html += '<span class="bt-ind">' + s.sectorName + '</span>';
+          html += '</div>';
+          if (isV) {
+            html += '<div class="bt-ret" style="color:' + chgColor + '">' + ((s.nextChangePct || 0) >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>';
+          } else {
+            html += '<div class="bt-ret" style="color:#8a8e9b">⏳ 待核实</div>';
+          }
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+    }
+    return html;
+  },
+
+  setBacktrackInput(val) {
+    this._backtrackInput = val;
+  },
+
+  doBacktrack() {
+    const val = (this._backtrackInput || '').trim();
+    if (!val) { Utils.toast ? Utils.toast('请输入股票代码或名称') : null; return; }
+    let code = Utils.normalizeCode(val);
+    if (!code && typeof DataAPI !== 'undefined' && DataAPI.findCodeByName) code = DataAPI.findCodeByName(val);
+    if (!code) { Utils.toast ? Utils.toast('未找到该股票') : null; return; }
+    this._backtrackCode = code;
+    const snaps = this._loadSnapshots();
+    const overlay = document.getElementById('st-ledger-overlay');
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+  },
+
+  _calcStockBacktest(snaps, code) {
+    const hits = [];
+    snaps.forEach(snap => {
+      const s = (snap.stocks || []).find(x => x.code === code);
+      if (s) hits.push({ snap, stock: s });
+    });
+    if (hits.length === 0) return null;
+    const verified = hits.filter(h => h.stock.verified === true);
+    const winCount = verified.filter(h => (h.stock.nextChangePct || 0) > 0).length;
+    const avgRet = verified.length
+      ? verified.reduce((sum, h) => sum + (h.stock.nextChangePct || 0), 0) / verified.length
+      : 0;
+    const maxRet = verified.length ? Math.max(...verified.map(h => h.stock.nextChangePct || 0)) : 0;
+    const minRet = verified.length ? Math.min(...verified.map(h => h.stock.nextChangePct || 0)) : 0;
+    const avgScore = hits.reduce((sum, h) => sum + (h.stock.total || 0), 0) / hits.length;
+    return {
+      code,
+      name: hits[0].stock.name || code,
+      totalHits: hits.length,
+      verifiedCount: verified.length,
+      winCount,
+      winRate: verified.length ? Math.round(winCount / verified.length * 100) : 0,
+      avgRet, maxRet, minRet,
+      avgScore: Math.round(avgScore),
+      hits: hits,
+    };
+  },
+
+  // ---------- 核实 ----------
+  async verifyAllPending() {
+    const snaps = this._loadSnapshots();
+    const today = this._todayStr();
+    const pending = snaps.filter(s => s.verified !== true && s.date < today);
+    if (pending.length === 0) {
+      Utils.toast ? Utils.toast('暂无待核实的快照') : null;
+      return;
+    }
+    this.closeLedger();
+    const container = document.getElementById('hotStocks');
+    if (container) container.innerHTML = '<div class="loading-pulse">正在批量核实 ' + pending.length + ' 个交易日的短线榜...</div>';
+
+    let totalHit = 0, totalResolved = 0;
+    for (let si = 0; si < pending.length; si++) {
+      const target = pending[si];
+      if (container) container.innerHTML = '<div class="loading-pulse">核实中：' + target.date + '（' + (si + 1) + '/' + pending.length + '）</div>';
+      let hit = 0, resolved = 0;
+      const list = target.stocks || [];
+      const batchSize = 8;
+      for (let i = 0; i < list.length; i += batchSize) {
+        const batch = list.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (s) => {
+          try {
+            // 用K线取下一交易日收盘价计算涨跌幅
+            if (typeof DataAPI !== 'undefined' && DataAPI.fetchKline) {
+              const klines = await DataAPI.fetchKline(s.code, 10);
+              if (klines && klines.length > 0) {
+                const next = klines.find(k => k.date > target.date);
+                if (next) {
+                  const base = klines.filter(k => k.date <= target.date).pop();
+                  if (base && base.close > 0) {
+                    s.nextChangePct = (next.close - base.close) / base.close * 100;
+                    s.verified = true;
+                    resolved++;
+                    if (s.nextChangePct > 0) hit++;
+                  }
+                }
+              }
+            }
+          } catch (e) { /* 单只失败不影响 */ }
+        }));
+      }
+      if (resolved > 0) {
+        target.verified = true;
+        target.hitCount = hit;
+        target.resolvedCount = resolved;
+        target.winRate = Math.round(hit / resolved * 100);
+        target.verifyDate = this._todayStr();
+        totalHit += hit;
+        totalResolved += resolved;
+      }
+    }
+    this._saveSnapshots(snaps);
+    // 恢复短线榜渲染并重新打开台账
+    if (typeof App !== 'undefined' && App.loadHotStocks) App.loadHotStocks();
+    const updated = this._loadSnapshots();
+    this.showLedger();
+    Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只次日收涨') : null;
+  },
+
+  _showSnapshotDetail(idx) {
+    const snaps = this._loadSnapshots();
+    const snap = snaps[idx];
+    if (!snap) return;
+    Utils.toast ? Utils.toast(snap.date + '：' + (snap.stocks ? snap.stocks.length : 0) + '只标的' + (snap.verified ? '，胜率' + snap.winRate + '%' : '，待核实')) : null;
   },
 };
 
@@ -6390,13 +6732,19 @@ const App = {
         });
       }
 
-      // ====== 第4步：排序取TOP20并渲染 ======
+      // ====== 第4步：排序取TOP10并渲染 ======
       scored.sort((a, b) => b.total - a.total);
-      const top20 = scored.slice(0, 20);
-      this._shortTermAll = top20;            // 保存全量供排序切换
+      const top10 = scored.slice(0, 10);
+      this._shortTermAll = top10;            // 保存全量供排序切换
       this._shortTermSortKey = 'composite';  // 默认综合排序
       this._shortTermCtx = { topSectors: hotSectors.slice(0, 5), fallbackMode };
-      this.renderShortTermTop10(top20, this._shortTermCtx.topSectors, this._shortTermCtx.fallbackMode);
+      this.renderShortTermTop10(top10, this._shortTermCtx.topSectors, this._shortTermCtx.fallbackMode);
+      // v4.4 P6: 保存当日短线快照（同日覆盖）
+      if (typeof ShortTermLedger !== 'undefined') {
+        try {
+          ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode);
+        } catch (e) { console.warn('保存短线快照失败', e); }
+      }
     } catch (e) {
       console.error('[短线TOP10] 整体异常:', e);
       container.innerHTML = `
@@ -7018,7 +7366,7 @@ const App = {
     return risks.slice(0, 5);  // 最多5条（新增筹码风险）
   },
 
-  /** 切换短线TOP20排序方式 */
+  /** 切换短线TOP10排序方式 */
   resortShortTerm(sortKey) {
     if (!this._shortTermAll || !this._shortTermAll.length) return;
     this._shortTermSortKey = sortKey;
@@ -7059,7 +7407,7 @@ const App = {
     this.renderShortTermTop10(list, ctx.topSectors, ctx.fallbackMode, sortKey);
   },
 
-  /** 渲染短线TOP20列表 */
+  /** 渲染短线TOP10列表 */
   renderShortTermTop10(top10, topSectors, fallbackMode, sortKey) {
     sortKey = sortKey || this._shortTermSortKey || 'composite';
     const container = document.getElementById('hotStocks');
@@ -7213,7 +7561,7 @@ const App = {
       </div>`;
 
     container.innerHTML = `
-      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button></div>
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button></div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${sortBarHtml}
       ${stockHtml}
@@ -7295,12 +7643,25 @@ const App = {
     await this.runAnalysis(code);
   },
 
-  /** 从其他页面跳转分析 */
+  /** 从其他页面跳转分析（v4.4 P6: 增加防抖 + 标记分析进行中防重渲染打断） */
   async analyzeStock(code) {
-    this.currentStock = code;
-    this.switchPage('analysis');
-    document.getElementById('analysisSearchInput').value = code;
-    await this.runAnalysis(code);
+    // 防抖：300ms内重复点击忽略
+    if (this._analyzeDebouncing) return;
+    this._analyzeDebouncing = true;
+    setTimeout(() => { this._analyzeDebouncing = false; }, 300);
+    // 标记分析进行中，防止 Watchlist 后台重渲染打断点击手感
+    if (typeof Watchlist !== 'undefined') Watchlist._analysisInProgress = true;
+    try {
+      this.currentStock = code;
+      this.switchPage('analysis');
+      document.getElementById('analysisSearchInput').value = code;
+      await this.runAnalysis(code);
+    } finally {
+      // 分析完成/失败后释放锁（延迟一点，让页面切换完成）
+      setTimeout(() => {
+        if (typeof Watchlist !== 'undefined') Watchlist._analysisInProgress = false;
+      }, 800);
+    }
   },
 
   /** 渲染自选股页关注书签（自选股按分组展示，点击直接分析） */
