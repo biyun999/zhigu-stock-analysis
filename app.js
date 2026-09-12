@@ -5,6 +5,7 @@
  * v4.4-P2: 多源资金交叉验证+龙虎榜一致性+数据可信度评分
  * v4.4-P3: 板块持续性过滤+大盘情绪细化(涨停数+量能变化)
  * v4.4-P4: 历史验证台账+档位胜率统计+历史排名可查询
+ * v4.4-P6b: 短线台账日期列表可展开查看TOP10明细，热门板块标签展示
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -6074,6 +6075,7 @@ const ShortTermLedger = {
   _ledgerTab: 'verify',
   _backtrackInput: '',
   _backtrackCode: null,
+  _expandedIdx: null,
 
   // ---------- 存储 ----------
   _loadSnapshots() {
@@ -6175,40 +6177,53 @@ const ShortTermLedger = {
   },
 
   _renderVerifyTab(snaps, verifiedSnaps, totalWinRate) {
+    // TOP10整体胜率计算
+    let totalHit = 0, totalResolved = 0;
+    if (verifiedSnaps.length > 0) {
+      verifiedSnaps.forEach(s => { totalHit += (s.hitCount || 0); totalResolved += (s.resolvedCount || 0); });
+    }
+    const overallRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
+
     let html = '';
-    html += '<div class="ledger-stats-row">';
+    // 紧凑统计卡片
+    html += '<div class="ledger-stats-row st-ledger-stats">';
     html += '<div class="ledger-stat-card"><div class="ls-num">' + snaps.length + '</div><div class="ls-label">累计交易日</div></div>';
     html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedSnaps.length + '</div><div class="ls-label">已核实</div></div>';
     html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
     html += '</div>';
 
-    // TOP10整体胜率
-    if (verifiedSnaps.length > 0) {
-      let totalHit = 0, totalResolved = 0;
-      verifiedSnaps.forEach(s => { totalHit += (s.hitCount || 0); totalResolved += (s.resolvedCount || 0); });
-      const overallRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
-      html += '<div class="ledger-section-title">🎯 TOP10整体胜率</div>';
-      html += '<div class="overall-winrate">';
-      html += '<span class="owr-num" style="color:#00e676">' + overallRate + '%</span>';
-      html += '<span class="owr-sub">共 ' + totalHit + '/' + totalResolved + ' 只次日收涨（' + verifiedSnaps.length + '个交易日）</span>';
+    // 待核实提示 + 批量核实按钮（紧凑行）
+    const pending = snaps.filter(s => s.verified !== true);
+    if (pending.length > 0) {
+      html += '<div class="st-ledger-pending-bar">';
+      html += '<span class="st-ledger-pending-tip">⏳ ' + pending.length + '个交易日待核实</span>';
+      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary st-ledger-verify-btn">一键核实全部</button>';
       html += '</div>';
     }
 
-    // 待核实提示 + 批量核实按钮
-    const pending = snaps.filter(s => s.verified !== true);
-    if (pending.length > 0) {
-      html += '<div style="margin:8px 0 12px;display:flex;gap:8px;align-items:center">';
-      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实</span>';
-      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部</button>';
+    // 整体胜率小标签（已核实有数据时显示）
+    if (verifiedSnaps.length > 0) {
+      html += '<div class="st-ledger-overall-bar">';
+      html += '<span>🎯 TOP10整体胜率 <b style="color:#00e676">' + overallRate + '%</b></span>';
+      html += '<span class="st-ledger-overall-sub">' + totalHit + '/' + totalResolved + ' 只次日收涨</span>';
       html += '</div>';
     }
-    // 最近交易日列表
-    html += '<div class="ledger-section-title">📅 历史快照（' + snaps.length + '个交易日）</div>';
-    html += '<div class="ledger-list">';
+
+    // 历史日期列表（主体）
+    html += '<div class="ledger-list st-ledger-list">';
     snaps.forEach((s, idx) => {
       const isVerified = s.verified === true;
       const wr = s.winRate || 0;
-      html += '<div class="ledger-item" onclick="ShortTermLedger._showSnapshotDetail(' + idx + ')">';
+      const isExpanded = this._expandedIdx === idx;
+      // 热门板块前2个
+      const sectors = s.topSectors || [];
+      const sectorTags = sectors.slice(0, 2).map(sec => {
+        const name = typeof sec === 'string' ? sec : (sec.name || sec);
+        return '<span class="ledger-tag st-sector-tag">🔥 ' + name + '</span>';
+      }).join('');
+
+      html += '<div class="ledger-item st-ledger-item' + (isExpanded ? ' expanded' : '') + '" onclick="ShortTermLedger._showSnapshotDetail(' + idx + ')">';
+      html += '<div class="st-ledger-item-main">';
       html += '<div class="ledger-date">' + s.date + '</div>';
       html += '<div class="ledger-info">';
       html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
@@ -6216,6 +6231,7 @@ const ShortTermLedger = {
         const modeTag = { concept: '🟡 概念', market: '🟠 全市场', static: '⚪ 静态' }[s.fallbackMode] || '';
         if (modeTag) html += '<span class="ledger-tag">' + modeTag + '</span>';
       }
+      html += sectorTags;
       html += '</div>';
       if (isVerified) {
         const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
@@ -6223,10 +6239,60 @@ const ShortTermLedger = {
       } else {
         html += '<div class="ledger-winrate" style="color:#8a8e9b">⏳ 待核实</div>';
       }
+      html += '<div class="st-ledger-expand-icon">' + (isExpanded ? '▲' : '▼') + '</div>';
+      html += '</div>';
+
+      // 展开的明细
+      if (isExpanded) {
+        html += '<div class="st-ledger-detail">';
+        html += '<div class="st-ledger-detail-header">';
+        html += '<span class="st-ledger-detail-date">📅 ' + s.date + ' TOP10 完整榜单</span>';
+        if (s.topSectors && s.topSectors.length > 0) {
+          const allSectors = s.topSectors.map(sec => {
+            const name = typeof sec === 'string' ? sec : (sec.name || sec);
+            return '<span class="st-detail-sector-tag">🔥 ' + name + '</span>';
+          }).join('');
+          html += '<div class="st-ledger-detail-sectors">' + allSectors + '</div>';
+        }
+        html += '</div>';
+        html += '<div class="st-ledger-detail-list">';
+        (s.stocks || []).forEach((stock, sIdx) => {
+          const rank = sIdx + 1;
+          const rankCls = rank <= 3 ? 'top' + rank : '';
+          const isV = stock.verified === true;
+          const nextChg = stock.nextChangePct;
+          const chgColor = isV
+            ? ((nextChg || 0) >= 0 ? '#00e676' : '#ff5252')
+            : '#8a8e9b';
+          const chgStr = isV
+            ? ((nextChg >= 0 ? '+' : '') + nextChg.toFixed(2) + '%')
+            : '待核实';
+          const score = stock.total || stock.score || 0;
+          const scoreColor = rank <= 3 ? '#ff5252' : rank <= 6 ? '#ff9800' : '#00d4ff';
+
+          html += '<div class="hot-stock-item st-card st-detail-stock-item" onclick="event.stopPropagation();App.analyzeStock(\'' + stock.code + '\')">';
+          html += '<div class="rank ' + rankCls + '">' + rank + '</div>';
+          html += '<div class="hs-info">';
+          html += '<div class="hs-name">' + stock.name + ' <span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + (stock.sectorName || '-') + ']</span></div>';
+          html += '<div class="hs-code">' + stock.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 次日' + chgStr + '</div>';
+          html += '</div>';
+          html += '<div class="hs-score">';
+          html += '<div class="hs-score-val" style="color:' + scoreColor + '">' + score + '</div>';
+          html += '<div class="hs-score-label">得分</div>';
+          html += '</div>';
+          html += '<div class="st-detail-nextchg" style="color:' + chgColor + '">';
+          html += '<div class="hs-price-val" style="color:' + chgColor + ';font-size:14px">' + (isV ? (nextChg >= 0 ? '+' : '') + nextChg.toFixed(2) + '%' : '—') + '</div>';
+          html += '<div class="hs-score-label" style="font-size:10px">次日涨跌幅</div>';
+          html += '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+        html += '</div>';
+      }
       html += '</div>';
     });
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px 0 4px;line-height:1.6">数据全部保存在本机，最多留存30个交易日，点击任意日期查看详细榜单</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px 0 4px;line-height:1.6">数据全部保存在本机，最多留存30个交易日，点击日期展开/收起当日TOP10明细</div>';
     return html;
   },
 
@@ -6391,10 +6457,11 @@ const ShortTermLedger = {
   },
 
   _showSnapshotDetail(idx) {
+    // 展开/收起当日明细：同一时间只展开一个
+    this._expandedIdx = (this._expandedIdx === idx) ? null : idx;
     const snaps = this._loadSnapshots();
-    const snap = snaps[idx];
-    if (!snap) return;
-    Utils.toast ? Utils.toast(snap.date + '：' + (snap.stocks ? snap.stocks.length : 0) + '只标的' + (snap.verified ? '，胜率' + snap.winRate + '%' : '，待核实')) : null;
+    const overlay = document.getElementById('st-ledger-overlay');
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 };
 

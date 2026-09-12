@@ -3204,6 +3204,39 @@ body {
 .ledger-count{font-size:10px;color:var(--text-muted,#888);background:rgba(255,255,255,0.06);padding:2px 6px;border-radius:4px}
 .ledger-tag{font-size:10px;color:var(--text-secondary,#a0a0a0);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ledger-winrate{font-size:12px;font-weight:600;font-family:monospace;min-width:60px;text-align:right}
+
+/* ===== v4.4 P6b: 短线台账展开详情样式 ===== */
+.st-ledger-stats{margin-bottom:10px}
+.st-ledger-stats .ledger-stat-card{padding:8px 6px}
+.st-ledger-stats .ls-num{font-size:16px}
+.st-ledger-stats .ls-label{font-size:10px}
+.st-ledger-pending-bar{display:flex;gap:8px;align-items:center;margin:4px 0 8px}
+.st-ledger-pending-tip{font-size:11px;color:var(--text-muted)}
+.st-ledger-verify-btn{flex:1;padding:6px 10px;font-size:11px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676}
+.st-ledger-overall-bar{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:rgba(0,230,118,0.06);border:1px solid rgba(0,230,118,0.2);border-radius:6px;font-size:11px;color:var(--text-secondary);margin-bottom:8px}
+.st-ledger-overall-sub{color:var(--text-muted);font-size:10px}
+.st-ledger-list{gap:4px}
+.st-ledger-item{display:block;padding:0}
+.st-ledger-item-main{display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+.st-ledger-item:active .st-ledger-item-main{background:rgba(100,150,255,0.1)}
+.st-ledger-expand-icon{font-size:10px;color:var(--text-muted);margin-left:8px;min-width:16px;text-align:center;transition:transform .2s}
+.st-sector-tag{background:rgba(255,152,0,0.12);color:#ff9800 !important;border-radius:4px;padding:1px 5px}
+.st-ledger-detail{padding:8px 12px 12px;border-top:1px solid var(--border-color);background:rgba(0,0,0,0.2);border-radius:0 0 8px 8px;animation:stDetailSlide .25s ease-out}
+@keyframes stDetailSlide{from{opacity:0;max-height:0;transform:translateY(-6px)}to{opacity:1;max-height:2000px;transform:translateY(0)}}
+.st-ledger-detail-header{margin-bottom:8px}
+.st-ledger-detail-date{font-size:12px;font-weight:600;color:var(--text-primary)}
+.st-ledger-detail-sectors{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.st-detail-sector-tag{font-size:10px;color:#ff9800;background:rgba(255,152,0,0.1);padding:2px 6px;border-radius:4px}
+.st-ledger-detail-list{display:flex;flex-direction:column;gap:2px}
+.st-detail-stock-item{padding:8px 10px !important;border-radius:6px !important}
+.st-detail-stock-item .rank{width:22px;height:22px;font-size:11px;line-height:22px}
+.st-detail-stock-item .hs-name{font-size:12px}
+.st-detail-stock-item .hs-code{font-size:10px}
+.st-detail-stock-item .hs-score{min-width:38px;text-align:center}
+.st-detail-stock-item .hs-score-val{font-size:14px}
+.st-detail-stock-item .hs-score-label{font-size:9px}
+.st-detail-nextchg{text-align:right;min-width:60px}
+.st-detail-nextchg .hs-price-val{font-size:13px;font-weight:600;font-family:monospace}
 /* ---------- v4.4 P5: 台账Tab切换 ---------- */
 .ledger-tabs{display:flex;gap:4px;padding:10px 14px 0;border-bottom:1px solid var(--border,#2a2d36)}
 .ledger-tab{flex:1;text-align:center;padding:10px 8px;font-size:12px;font-weight:500;color:var(--text-muted,#888);cursor:pointer;border-radius:8px 8px 0 0;transition:all .2s}
