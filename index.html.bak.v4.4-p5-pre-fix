@@ -109,8 +109,8 @@
       <!-- 双榜并列：短线潜力 + 次日上涨概率（v4.1） -->
       <section class="card">
         <div class="toplist-tabs">
-          <button id="tabHot" class="toplist-tab active" onclick="App.switchTopList('hot')">⚡ 短线潜力 TOP10</button>
-          <button id="tabNext" class="toplist-tab" onclick="App.switchTopList('next')">🎯 次日上涨概率 TOP10</button>
+          <button id="tabHot" class="toplist-tab active" onclick="App.switchTopList('hot')">⚡ 短线潜力 TOP20</button>
+          <button id="tabNext" class="toplist-tab" onclick="App.switchTopList('next')">🎯 次日上涨概率 TOP20</button>
         </div>
 
         <!-- 短线潜力榜 -->
@@ -128,9 +128,8 @@
             <div class="empty-tip">点击下方按钮，盘后扫描全市场生成次日上涨概率排名（建议收盘后16:00后使用）。<br>扫描结果保存在本机，次日可点「核实」验证胜率。</div>
           </div>
           <div style="display:flex;gap:8px;margin-top:12px">
-            <button onclick="NextDayPrediction.scan()" class="btn-primary" style="flex:1.2">🔍 扫描生成</button>
-            <button onclick="NextDayPrediction.verifyAll()" class="btn-primary" style="flex:1;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">✅ 核实</button>
-            <button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="flex:1;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">📊 台账</button>
+            <button onclick="NextDayPrediction.scan()" class="btn-primary" style="flex:1">🔍 扫描生成排名</button>
+            <button onclick="NextDayPrediction.verifyAll()" class="btn-primary" style="flex:1;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">✅ 核实昨日排名</button>
           </div>
         </div>
       </section>
@@ -401,7 +400,7 @@
       <section class="card about-card">
         <div class="about-logo">
           <div class="about-icon">智股</div>
-          <h2>智股分析 v4.4-p6c</h2>
+          <h2>智股分析 v4.3</h2>
           <p class="about-sub">A股七维度智能分析系统</p>
         </div>
         <div class="about-features">
