@@ -5000,7 +5000,7 @@ const NextDayPrediction = {
         scored.push(Object.assign({}, s, { preScore: pre.score, risks: pre.risks, mainPct: pre.mainPct }));
       }
       scored.sort((a, b) => b.preScore - a.preScore);
-      const candidates = scored.slice(0, 60);
+      const candidates = scored.slice(0, 80);
 
       // K线 + 近2日资金流（并行）
       setStatus('第3步/5：逐只计算量价/趋势/动量因子（K线+资金流，共' + candidates.length + '只）...');
@@ -5041,7 +5041,7 @@ const NextDayPrediction = {
       }
 
       setStatus('第4步/5：结合大盘情绪（' + mkt.tag + '）综合排名...');
-      const finalList = candidates
+      const scoredList = candidates
         .filter(s => s.klineOk)
         .map(s => {
           const risks = this._mergeRisks(s.risks, s.techRisks, s);
@@ -5068,8 +5068,39 @@ const NextDayPrediction = {
           };
         })
         .filter(x => x.score >= 50)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, 10);
+        .sort((a, b) => b.score - a.score);
+
+      // 保底：50分以上不足10只时，逐级降低门槛确保至少10只
+      let threshold = 50;
+      let finalList = scoredList.slice(0, 10);
+      if (scoredList.length < 10) {
+        for (const t of [45, 40, 35]) {
+          const lower = candidates
+            .filter(s => s.klineOk)
+            .map(s => ({
+              code: s.code, name: s.name, board: this._boardTag(s.code),
+              price: s.price, changePct: s.changePct, turnover: s.turnover,
+              mainFlow: s.mainFlow, mainPct: s.mainPct,
+              industry: s.industry || '',
+              factors: s.factors || [],
+              marketAdjust: mkt.adjust,
+              baseScore: s.techScore,
+              score: s.finalScore,
+              level: this._level(s.finalScore),
+              risks: this._mergeRisks(s.risks, s.techRisks, s),
+              verified: null, nextChangePct: null,
+              sectorPersistent: s._sectorPersistent || false,
+              sectorNewHot: s._sectorNewHot || false,
+              dataQuality: s._dataQuality || 'medium',
+              qualityReasons: s._qualityReasons || [],
+              dims: s._dims || {}
+            }))
+            .filter(x => x.score >= t)
+            .sort((a, b) => b.score - a.score);
+          if (lower.length >= 10) { threshold = t; finalList = lower.slice(0, 10); break; }
+          else if (lower.length > scoredList.length) { threshold = t; scoredList = lower; finalList = lower.slice(0, 10); }
+        }
+      }
 
       setStatus('第5步/5：保存快照...');
       if (finalList.length === 0) {
@@ -5505,9 +5536,9 @@ const NextDayPrediction = {
     html += '<div class="hot-stocks-list">';
     snapshot.stocks.forEach((s, idx) => {
       const rankCls = idx < 3 ? 'rank-top3' : 'rank-normal';
-      const chgColor = s.verified === true ? (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') : (s.changePct >= 0 ? '#00e676' : '#ff5252');
+      const chgColor = s.verified === true ? (s.nextChangePct >= 0 ? '#ff4757' : '#00e676') : (s.changePct >= 0 ? '#ff4757' : '#00e676');
       const verify = s.verified === true
-        ? '<div style="font-size:11px;color:' + (s.nextChangePct >= 0 ? '#00e676' : '#ff5252') + '">次日实际：' + (s.nextChangePct >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>'
+        ? '<div style="font-size:11px;color:' + (s.nextChangePct >= 0 ? '#ff4757' : '#00e676') + '">次日实际：' + (s.nextChangePct >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>'
         : '';
       const factorLine = (s.factors && s.factors.length)
         ? '<div style="font-size:10px;color:#ffd54f;margin-top:2px">🔑 ' + s.factors.join(' · ') + '</div>'
@@ -5894,7 +5925,7 @@ const NextDayPrediction = {
     analysis._sorted.forEach((key, rankIdx) => {
       const a = analysis[key];
       const icVal = a.ic;
-      const icColor = icVal >= 0 ? '#00e676' : '#ff5252';
+      const icColor = icVal >= 0 ? '#ff4757' : '#00e676';
       const barW = Math.min(100, Math.round(a.icAbs * 500));
       html += '<div class="ic-rank-item">';
       html += '<div class="ic-rank-header">';
@@ -5905,7 +5936,7 @@ const NextDayPrediction = {
       html += '<div class="ic-bar-track"><div class="ic-bar-fill" style="width:' + barW + '%;background:' + icColor + '"></div></div>';
       html += '<div class="ic-rank-meta">';
       html += '<span>高分组胜率：<b style="color:#00e676">' + a.topWinRate + '%</b> vs 低分组：<b style="color:#ff5252">' + a.botWinRate + '%</b></span>';
-      html += '<span>收益差：<b style="color:' + (a.spread >= 0 ? '#00e676' : '#ff5252') + '">' + (a.spread >= 0 ? '+' : '') + a.spread.toFixed(2) + '%</b></span>';
+      html += '<span>收益差：<b style="color:' + (a.spread >= 0 ? '#ff4757' : '#00e676') + '">' + (a.spread >= 0 ? '+' : '') + a.spread.toFixed(2) + '%</b></span>';
       html += '</div>';
       html += '</div>';
     });
@@ -5984,11 +6015,11 @@ const NextDayPrediction = {
         html += '<div class="ledger-stats-row" style="margin-top:10px;margin-bottom:0">';
         html += '<div class="ledger-stat-card"><div class="ls-num">' + result.totalHits + '</div><div class="ls-label">上榜次数</div></div>';
         html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + result.winRate + '%</div><div class="ls-label">次日胜率</div></div>';
-        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:' + (result.avgRet >= 0 ? '#00e676' : '#ff5252') + '">' + (result.avgRet >= 0 ? '+' : '') + result.avgRet.toFixed(2) + '%</div><div class="ls-label">平均涨幅</div></div>';
+        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:' + (result.avgRet >= 0 ? '#ff4757' : '#00e676') + '">' + (result.avgRet >= 0 ? '+' : '') + result.avgRet.toFixed(2) + '%</div><div class="ls-label">平均涨幅</div></div>';
         html += '</div>';
         html += '<div style="display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--text-secondary);flex-wrap:wrap">';
-        html += '<span>最大次日涨幅：<b style="color:#00e676">+' + result.maxRet.toFixed(2) + '%</b></span>';
-        html += '<span>最大次日跌幅：<b style="color:#ff5252">' + result.minRet.toFixed(2) + '%</b></span>';
+        html += '<span>最大次日涨幅：<b style="color:#ff4757">+' + result.maxRet.toFixed(2) + '%</b></span>';
+        html += '<span>最大次日跌幅：<b style="color:#00e676">' + result.minRet.toFixed(2) + '%</b></span>';
         html += '<span>均值得分：<b>' + result.avgScore + '</b></span>';
         html += '</div>';
         html += '</div>';
@@ -5998,7 +6029,7 @@ const NextDayPrediction = {
         result.hits.forEach(h => {
           const s = h.stock;
           const isV = s.verified === true;
-          const chgColor = isV ? ((s.nextChangePct || 0) >= 0 ? '#00e676' : '#ff5252') : '#8a8e9b';
+          const chgColor = isV ? ((s.nextChangePct || 0) >= 0 ? '#ff4757' : '#00e676') : '#8a8e9b';
           html += '<div class="backtrack-item" onclick="NextDayPrediction._showSnapshotFromBacktrack(\'' + h.snap.date + '\')">';
           html += '<div class="bt-date">' + h.snap.date + '</div>';
           html += '<div class="bt-info">';
@@ -6263,7 +6294,7 @@ const ShortTermLedger = {
           const isV = stock.verified === true;
           const nextChg = stock.nextChangePct;
           const chgColor = isV
-            ? ((nextChg || 0) >= 0 ? '#00e676' : '#ff5252')
+            ? ((nextChg || 0) >= 0 ? '#ff4757' : '#00e676')
             : '#8a8e9b';
           const chgStr = isV
             ? ((nextChg >= 0 ? '+' : '') + nextChg.toFixed(2) + '%')
@@ -6316,12 +6347,12 @@ const ShortTermLedger = {
         html += '<div class="ledger-stats-row" style="margin-top:10px;margin-bottom:0">';
         html += '<div class="ledger-stat-card"><div class="ls-num">' + result.totalHits + '</div><div class="ls-label">上榜次数</div></div>';
         html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + result.winRate + '%</div><div class="ls-label">次日胜率</div></div>';
-        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:' + (result.avgRet >= 0 ? '#00e676' : '#ff5252') + '">' + (result.avgRet >= 0 ? '+' : '') + result.avgRet.toFixed(2) + '%</div><div class="ls-label">平均涨幅</div></div>';
+        html += '<div class="ledger-stat-card"><div class="ls-num" style="color:' + (result.avgRet >= 0 ? '#ff4757' : '#00e676') + '">' + (result.avgRet >= 0 ? '+' : '') + result.avgRet.toFixed(2) + '%</div><div class="ls-label">平均涨幅</div></div>';
         html += '</div>';
         if (result.verifiedCount > 0) {
           html += '<div style="display:flex;gap:8px;margin-top:8px;font-size:11px;color:var(--text-secondary);flex-wrap:wrap">';
-          html += '<span>最大次日涨幅：<b style="color:#00e676">+' + result.maxRet.toFixed(2) + '%</b></span>';
-          html += '<span>最大次日跌幅：<b style="color:#ff5252">' + result.minRet.toFixed(2) + '%</b></span>';
+          html += '<span>最大次日涨幅：<b style="color:#ff4757">+' + result.maxRet.toFixed(2) + '%</b></span>';
+          html += '<span>最大次日跌幅：<b style="color:#00e676">' + result.minRet.toFixed(2) + '%</b></span>';
           html += '<span>均值得分：<b>' + result.avgScore + '</b></span>';
           html += '</div>';
         }
@@ -6332,7 +6363,7 @@ const ShortTermLedger = {
         result.hits.forEach(h => {
           const s = h.stock;
           const isV = s.verified === true;
-          const chgColor = isV ? ((s.nextChangePct || 0) >= 0 ? '#00e676' : '#ff5252') : '#8a8e9b';
+          const chgColor = isV ? ((s.nextChangePct || 0) >= 0 ? '#ff4757' : '#00e676') : '#8a8e9b';
           html += '<div class="backtrack-item">';
           html += '<div class="bt-date">' + h.snap.date + '</div>';
           html += '<div class="bt-info">';
