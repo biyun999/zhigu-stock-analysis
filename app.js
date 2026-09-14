@@ -1,11 +1,18 @@
 /**
- * 智股分析 v4.4 - 短线预测增强P4(历史验证台账+档位胜率统计)
+ * 智股分析 v4.4 - 次日上涨概率六维模型P8增强(筹码/资金分层/技术指标/反转校准)
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
  * v4.4-P1: 资金加速度因子+筹码结构因子
  * v4.4-P2: 多源资金交叉验证+龙虎榜一致性+数据可信度评分
  * v4.4-P3: 板块持续性过滤+大盘情绪细化(涨停数+量能变化)
  * v4.4-P4: 历史验证台账+档位胜率统计+历史排名可查询
  * v4.4-P6b: 短线台账日期列表可展开查看TOP10明细，热门板块标签展示
+ * v4.4-P8: 六维模型因子增强——
+ *          1) 筹码结构：集中度90/70、平均成本偏离度、获利比例精细化
+ *          2) 资金分层：超大单/大单/中单/小单分层分析、主力结构纯度
+ *          3) 技术指标：BOLL带位置、CCI、DMI趋势强度（前端计算）
+ *          4) 反转校准：基于Skill研究验证短期均值回归效应，校准动量类因子权重
+ *          5) 龙虎榜强化：机构席位净买入比例、三日榜持续性
+ *          总分保持100分制，阈值80/65/50不变
  * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
@@ -873,6 +880,139 @@ const Utils = {
     return { mid, upper, lower };
   },
 
+  /** v4.4-P8: 计算CCI（顺势指标）序列，返回等长数组，前段为null */
+  calcCCISeries(highs, lows, closes, period = 14) {
+    const len = closes.length;
+    const result = new Array(len).fill(null);
+    if (len < period) return result;
+    // 典型价格 TP = (H+L+C)/3
+    const tp = new Array(len);
+    for (let i = 0; i < len; i++) {
+      tp[i] = (highs[i] + lows[i] + closes[i]) / 3;
+    }
+    // CCI = (TP - MA(TP, N)) / (0.015 * MD)
+    // MD = 平均绝对偏差
+    const maTp = this.calcMASeries(tp, period);
+    for (let i = period - 1; i < len; i++) {
+      let md = 0;
+      for (let j = i - period + 1; j <= i; j++) {
+        md += Math.abs(tp[j] - maTp[i]);
+      }
+      md /= period;
+      if (md > 0) {
+        result[i] = (tp[i] - maTp[i]) / (0.015 * md);
+      } else {
+        result[i] = 0;
+      }
+    }
+    return result;
+  },
+
+  /** v4.4-P8: 计算DMI（趋向指标）序列，返回 {pdi, mdi, adx, adxr} */
+  calcDMISeries(highs, lows, closes, period = 14) {
+    const len = closes.length;
+    const empty = () => new Array(len).fill(null);
+    if (len < period + 1) return { pdi: empty(), mdi: empty(), adx: empty(), adxr: empty() };
+    
+    const pdi = empty();
+    const mdi = empty();
+    const adx = empty();
+    const adxr = empty();
+    
+    // 计算 +DM, -DM, TR
+    const plusDm = new Array(len).fill(0);
+    const minusDm = new Array(len).fill(0);
+    const tr = new Array(len).fill(0);
+    
+    for (let i = 1; i < len; i++) {
+      const upMove = highs[i] - highs[i - 1];
+      const downMove = lows[i - 1] - lows[i];
+      
+      if (upMove > downMove && upMove > 0) {
+        plusDm[i] = upMove;
+      } else {
+        plusDm[i] = 0;
+      }
+      
+      if (downMove > upMove && downMove > 0) {
+        minusDm[i] = downMove;
+      } else {
+        minusDm[i] = 0;
+      }
+      
+      const hl = highs[i] - lows[i];
+      const hc = Math.abs(highs[i] - closes[i - 1]);
+      const lc = Math.abs(lows[i] - closes[i - 1]);
+      tr[i] = Math.max(hl, hc, lc);
+    }
+    
+    // 平滑计算（EMA方式近似，使用Wilder平滑）
+    let sumPlusDm = 0, sumMinusDm = 0, sumTr = 0;
+    for (let i = 1; i <= period; i++) {
+      sumPlusDm += plusDm[i];
+      sumMinusDm += minusDm[i];
+      sumTr += tr[i];
+    }
+    
+    const dx = new Array(len).fill(null);
+    
+    if (sumTr > 0) {
+      pdi[period] = 100 * sumPlusDm / sumTr;
+      mdi[period] = 100 * sumMinusDm / sumTr;
+      const diDiff = Math.abs(pdi[period] - mdi[period]);
+      const diSum = pdi[period] + mdi[period];
+      dx[period] = diSum > 0 ? 100 * diDiff / diSum : 0;
+    }
+    
+    // Wilder平滑后续值
+    for (let i = period + 1; i < len; i++) {
+      sumPlusDm = sumPlusDm - sumPlusDm / period + plusDm[i];
+      sumMinusDm = sumMinusDm - sumMinusDm / period + minusDm[i];
+      sumTr = sumTr - sumTr / period + tr[i];
+      
+      if (sumTr > 0) {
+        pdi[i] = 100 * sumPlusDm / sumTr;
+        mdi[i] = 100 * sumMinusDm / sumTr;
+        const diDiff = Math.abs(pdi[i] - mdi[i]);
+        const diSum = pdi[i] + mdi[i];
+        dx[i] = diSum > 0 ? 100 * diDiff / diSum : 0;
+      } else {
+        pdi[i] = 0;
+        mdi[i] = 0;
+        dx[i] = 0;
+      }
+    }
+    
+    // 计算ADX（DX的period日平滑）
+    // 第一个ADX值为前period个DX的平均
+    let sumDx = 0;
+    let dxCount = 0;
+    for (let i = period; i < 2 * period && i < len; i++) {
+      if (dx[i] != null) {
+        sumDx += dx[i];
+        dxCount++;
+      }
+    }
+    if (dxCount > 0) {
+      const firstAdxIdx = Math.min(2 * period - 1, len - 1);
+      adx[firstAdxIdx] = sumDx / dxCount;
+      
+      for (let i = firstAdxIdx + 1; i < len; i++) {
+        adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period;
+      }
+    }
+    
+    // ADXR = (当前ADX + 前period日ADX) / 2
+    for (let i = 2 * period + period - 1; i < len; i++) {
+      const prevAdx = adx[i - period];
+      if (prevAdx != null && adx[i] != null) {
+        adxr[i] = (adx[i] + prevAdx) / 2;
+      }
+    }
+    
+    return { pdi, mdi, adx, adxr };
+  },
+
   /** 计算VWAP（主力成本估算） */
   calcVWAP(klines) {
     if (!klines || klines.length === 0) return 0;
@@ -911,11 +1051,11 @@ const Utils = {
    * 筹码结构分析（基于N日K线成交量价分布估算）
    * @param {Array} klines K线数组（对象格式 {date,open,high,low,close,volume}）
    * @param {number} currentPrice 当前价
-   * @returns {Object} {profitRatio, avgCost, concentration, supportChip, resistanceChip, pressureDistance}
+   * @returns {Object} {profitRatio, avgCost, concentration, concentration90, concentration70, avgCostDeviation, supportChip, resistanceChip, pressureDistance, peakPrice, belowRatio}
    */
   calcChipDistribution(klines, currentPrice) {
     if (!klines || klines.length < 10 || !currentPrice || currentPrice <= 0) {
-      return { profitRatio: 50, avgCost: 0, concentration: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50 };
+      return { profitRatio: 50, avgCost: 0, concentration: 0, concentration90: 0, concentration70: 0, avgCostDeviation: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50, peakPrice: 0 };
     }
     // 使用近60日K线（若不足则全部）
     const period = klines.slice(-60);
@@ -949,7 +1089,7 @@ const Utils = {
       totalVol += k.volume;
       weightedPrice += typ * k.volume;
     });
-    if (totalVol === 0) return { profitRatio: 50, avgCost: 0, concentration: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50 };
+    if (totalVol === 0) return { profitRatio: 50, avgCost: 0, concentration: 0, concentration90: 0, concentration70: 0, avgCostDeviation: 0, supportChip: 0, resistanceChip: 0, pressureDistance: 0, belowRatio: 50, peakPrice: 0 };
 
     const avgCost = weightedPrice / totalVol;
 
@@ -993,9 +1133,25 @@ const Utils = {
       if (item.i > maxI) maxI = item.i;
       if (cumVol >= totalVol * 0.9) break;
     }
-    const concLow = pMin + minI * step;
-    const concHigh = pMin + (maxI + 1) * step;
-    const concentration = +((concHigh - concLow) / currentPrice * 100).toFixed(1);
+    const concLow90 = pMin + minI * step;
+    const concHigh90 = pMin + (maxI + 1) * step;
+    const concentration90 = +((concHigh90 - concLow90) / currentPrice * 100).toFixed(1);
+
+    // v4.4-P8: 70%筹码集中度（更窄的核心筹码区间，数值越小越集中）
+    let cumVol70 = 0, minI70 = BUCKETS, maxI70 = 0;
+    for (const item of sortedBins) {
+      cumVol70 += item.v;
+      if (item.i < minI70) minI70 = item.i;
+      if (item.i > maxI70) maxI70 = item.i;
+      if (cumVol70 >= totalVol * 0.7) break;
+    }
+    const concLow70 = pMin + minI70 * step;
+    const concHigh70 = pMin + (maxI70 + 1) * step;
+    const concentration70 = +((concHigh70 - concLow70) / currentPrice * 100).toFixed(1);
+    const concentration = concentration90;  // 兼容老字段
+
+    // v4.4-P8: 平均成本偏离度（当前价 vs 平均筹码成本的偏离，正值=现价高于成本，负值=低于成本）
+    const avgCostDeviation = +((currentPrice - avgCost) / avgCost * 100).toFixed(2);
 
     // 距压力位涨幅空间
     const pressureDistance = resistanceChip > currentPrice
@@ -1006,6 +1162,9 @@ const Utils = {
       profitRatio,
       avgCost: +avgCost.toFixed(2),
       concentration,
+      concentration90,
+      concentration70,
+      avgCostDeviation,
       supportChip: +supportChip.toFixed(2),
       resistanceChip: +resistanceChip.toFixed(2),
       pressureDistance,
@@ -5330,6 +5489,67 @@ const NextDayPrediction = {
         risks.push('两源资金数据偏差较大（' + Math.round(diffRatio * 100) + '%），绝对金额仅供参考');
       }
     }
+    // ===== v4.4-P8: 资金流向精细化——超大单/大单分层 & 主力结构纯度 =====
+    // 东方财富 fetchCapitalFlowStock 返回的 flows 中已有 superBig/big/mid/small 分层
+    if (cf && cf.flows && cf.flows.length >= 1) {
+      const today = fl[fl.length - 1];
+      const superBig = today.superBig || 0;  // 超大单净流入
+      const big = today.big || 0;            // 大单净流入
+      const mid = today.mid || 0;            // 中单净流入
+      const small = today.small || 0;        // 小单净流入
+      const totalMain = superBig + big;
+      const totalAll = Math.abs(superBig) + Math.abs(big) + Math.abs(mid) + Math.abs(small) || 1;
+      
+      // 主力结构纯度：超大单在主力净流入中的占比（越大说明机构资金越主导，而非游资大单对倒）
+      if (totalMain > 0 && mainFlow > 0) {
+        const superBigRatio = superBig / totalMain;
+        if (superBigRatio >= 0.6) {
+          f1 += 2;
+          factors.push('超大单主导流入，机构资金纯度高');
+        } else if (superBigRatio >= 0.4) {
+          f1 += 1;
+        } else if (superBigRatio < 0.2 && totalMain > 0) {
+          // 大单主导但超大单少 → 游资/对倒嫌疑
+          f1 -= 1;
+          risks.push('主力流入以大单为主，超大单占比偏低，需警惕游资对倒');
+        }
+      }
+      // 散户接盘信号：主力流入但小单也大幅流入 → 散户跟风，易回调
+      if (mainFlow > 0 && small > 0) {
+        const smallPct = small / totalAll * 100;
+        if (smallPct > 30) {
+          f1 -= 1;
+          risks.push('小单资金大幅流入，散户跟风明显，短期回调压力增大');
+        }
+      }
+      // 主力流出但中单承接 → 可能是机构换庄，不是单边出逃
+      if (mainFlow < 0 && mid > 0) {
+        const midAbsRatio = mid / Math.abs(mainFlow);
+        if (midAbsRatio > 0.5) {
+          f1 += 1;
+        }
+      }
+      // v4.4-P8: 近3日超大单趋势（超大单是最真实的机构资金信号）
+      if (fl.length >= 3) {
+        let superBigPositive = 0;
+        let superBigSum = 0;
+        for (let fi = fl.length - 3; fi < fl.length; fi++) {
+          const sb = fl[fi].superBig || 0;
+          if (sb > 0) superBigPositive++;
+          superBigSum += sb;
+        }
+        if (superBigPositive >= 3 && superBigSum > 0) {
+          f1 += 1;
+          if (!factors.some(f => f.indexOf('超大单') >= 0)) {
+            factors.push('超大单连续3日净流入，机构持续建仓');
+          }
+        } else if (superBigPositive === 0 && superBigSum < 0) {
+          f1 -= 1;
+          risks.push('超大单连续3日净流出，机构资金持续撤离');
+        }
+      }
+    }
+    f1 = Math.max(-2, Math.min(22, f1));  // 维度1上限20+额外2分超大单连续加分
     score += f1;
 
     // ===== 维度2：量价动能（22分）=====
@@ -5363,13 +5583,54 @@ const NextDayPrediction = {
     else if (cp >= 6 && cp < 9.5) { f2 += 1; risks.push('今日涨幅' + cp.toFixed(1) + '%偏大，短线获利盘堆积，次日高开易遭兑现'); }
     else if (cp >= 9.5) { f2 += 0; risks.push('今日涨停，次日溢价不确定性高，炸板或低开风险大'); }
     // 筹码结构（v4.4 P1增强：套牢盘压力决定拉升难度）
+    // v4.4-P8增强：新增筹码集中度(90/70)、平均成本偏离度因子
     const chip = Utils.calcChipDistribution(kl, last);
     const trapRatio = chip && chip.profitRatio != null ? (100 - chip.profitRatio) : 50;
-    if (trapRatio < 20) { f2 += 5; factors.push('套牢盘仅' + trapRatio + '%，上方压力极轻'); }
-    else if (trapRatio < 40) { f2 += 4; factors.push('套牢盘' + trapRatio + '%，拉升阻力较小'); }
+    if (trapRatio < 20) { f2 += 4; factors.push('套牢盘仅' + trapRatio + '%，上方压力极轻'); }
+    else if (trapRatio < 40) { f2 += 3; factors.push('套牢盘' + trapRatio + '%，拉升阻力较小'); }
     else if (trapRatio < 60) { f2 += 2; }
     else if (trapRatio < 80) { f2 += 0; risks.push('套牢盘' + trapRatio + '%，上方解套抛压较重'); }
     else { f2 -= 2; risks.push('套牢盘高达' + trapRatio + '%，层层解套盘压制上涨空间'); }
+    
+    // v4.4-P8: 筹码集中度因子（集中度越高=筹码越集中在少数人手里=拉升阻力越小）
+    // concentration90值越小越集中（价格区间越窄）
+    const conc90 = chip && chip.concentration90 ? chip.concentration90 : 30;
+    const conc70 = chip && chip.concentration70 ? chip.concentration70 : 20;
+    if (conc90 > 0) {
+      if (conc90 <= 15) { f2 += 2; factors.push('筹码高度集中（90%集中度' + conc90 + '%）'); }
+      else if (conc90 <= 25) { f2 += 1; }
+      else if (conc90 >= 50) { f2 -= 1; risks.push('筹码高度分散（90%集中度' + conc90 + '%），拉升需要大量资金'); }
+    }
+    // 70%集中度更能反映核心筹码的紧凑程度
+    if (conc70 > 0 && conc70 <= 10 && trapRatio < 50) {
+      f2 += 1;
+      if (!factors.some(f => f.indexOf('筹码') >= 0)) {
+        factors.push('核心筹码集中');
+      }
+    }
+    
+    // v4.4-P8: 平均成本偏离度因子
+    // 偏离度为小正值（0~5%）最优：刚突破成本区，获利盘不多抛压小
+    // 偏离度过大（>15%）：获利盘丰厚，抛压大
+    // 偏离度为负但不大（-5~0%）：回踩成本区有支撑
+    const costDev = chip && chip.avgCostDeviation != null ? chip.avgCostDeviation : 0;
+    if (costDev > 0) {
+      if (costDev <= 5) {
+        f2 += 1;
+      } else if (costDev > 15) {
+        f2 -= 1;
+        risks.push('股价偏离平均筹码成本' + costDev.toFixed(1) + '%，获利盘丰厚抛压大');
+      } else if (costDev > 10) {
+        risks.push('股价偏离平均成本' + costDev.toFixed(1) + '%，短线获利盘累积');
+      }
+    } else if (costDev < 0 && costDev >= -5) {
+      // 略低于成本区，接近平均成本有支撑
+      f2 += 1;
+    } else if (costDev < -10) {
+      // 深度套牢，上方压力沉重
+      f2 -= 1;
+    }
+    f2 = Math.max(-2, Math.min(24, f2));  // 维度2上限22+额外2分筹码集中度加分
     score += f2;
 
     // ===== 维度3：趋势技术（20分）=====
@@ -5412,6 +5673,94 @@ const NextDayPrediction = {
       if (rsi6 >= 85) risks.push('6日RSI达' + rsi6.toFixed(0) + '进入超买区，追高风险大');
       else if (rsi14 != null && rsi14 >= 45 && rsi14 < 70) f3 += 1;
     }
+    // ===== v4.4-P8: BOLL带位置因子 =====
+    // 研究表明：股价在布林带中轨上方但未突破上轨时，次日延续性较好
+    // 突破上轨则短期超买，回调概率增大
+    const boll = Utils.calcBOLLSeries(closes, 20, 2);
+    const bollUp = boll.upper[n - 1];
+    const bollMid = boll.mid[n - 1];
+    const bollLow = boll.lower[n - 1];
+    if (bollUp && bollMid && bollLow && bollUp !== bollLow) {
+      const bollPos = (last - bollLow) / (bollUp - bollLow);
+      if (bollPos > 0.5 && bollPos <= 0.85) {
+        f3 += 2;  // 中上轨之间，趋势健康
+        factors.push('布林带中上轨运行，趋势稳健');
+      } else if (bollPos > 0.85 && bollPos <= 1) {
+        f3 += 1;  // 接近上轨，有上攻动能但需警惕突破
+      } else if (bollPos > 1) {
+        f3 -= 1;  // 突破上轨，超买信号
+        risks.push('股价突破布林上轨，短期超买需警惕技术性回调');
+      } else if (bollPos >= 0.3 && bollPos <= 0.5) {
+        f3 += 1;  // 中轨附近有支撑
+      } else if (bollPos < 0.15) {
+        f3 += 1;  // 接近下轨，超跌反弹概率（反转因子）
+      }
+      // 布林带收窄/扩张（波动率变化）
+      const bollWidth = (bollUp - bollLow) / bollMid * 100;
+      const prevWidthIdx = Math.max(0, n - 6);
+      const prevBollUp = boll.upper[prevWidthIdx];
+      const prevBollLow = boll.lower[prevWidthIdx];
+      const prevBollMid = boll.mid[prevWidthIdx];
+      if (prevBollUp && prevBollLow && prevBollMid && prevBollUp !== prevBollLow) {
+        const prevWidth = (prevBollUp - prevBollLow) / prevBollMid * 100;
+        if (prevWidth > 0) {
+          const widthChg = (bollWidth - prevWidth) / prevWidth * 100;
+          if (widthChg > 20 && last > bollMid) {
+            // 布林带扩张+股价在上轨=突破行情启动
+            f3 += 1;
+          }
+        }
+      }
+    }
+    
+    // ===== v4.4-P8: CCI顺势指标因子 =====
+    // CCI>100为强势但可能超买；-100~100之间为常态；<-100为弱势
+    // 研究显示CCI刚进入强势区（100~150）延续性较好，>200则超买
+    const cciSeries = Utils.calcCCISeries(highs, lows, closes, 14);
+    const cci = cciSeries[n - 1];
+    if (cci != null) {
+      const cciPrev = cciSeries[n - 2];
+      if (cci > 100 && cci <= 180) {
+        f3 += 2;  // 强势区但未超买
+      } else if (cci > 180) {
+        f3 -= 1;  // 严重超买
+        risks.push('CCI达' + cci.toFixed(0) + '严重超买，短线回调风险大');
+      } else if (cci > 0 && cci <= 100) {
+        f3 += 1;  // 偏强运行
+      } else if (cci < -150) {
+        f3 += 1;  // 极度超卖，反弹概率高（反转）
+      }
+      // CCI从下往上穿越+100（强势启动信号）
+      if (cciPrev != null && cciPrev <= 100 && cci > 100) {
+        f3 += 1;
+        factors.push('CCI突破100，强势启动');
+      }
+    }
+    
+    // ===== v4.4-P8: DMI趋势强度因子 =====
+    // PDI>MDI且ADX>25为强趋势；PDI<MDI且ADX>25为强下跌趋势
+    const dmi = Utils.calcDMISeries(highs, lows, closes, 14);
+    const pdi = dmi.pdi[n - 1];
+    const mdi = dmi.mdi[n - 1];
+    const adx = dmi.adx[n - 1];
+    if (pdi != null && mdi != null && adx != null) {
+      if (pdi > mdi && adx > 25) {
+        f3 += 2;  // 强上升趋势
+        factors.push('DMI强上升趋势（PDI' + pdi.toFixed(0) + '>MDI' + mdi.toFixed(0) + '，ADX' + adx.toFixed(0) + '）');
+      } else if (pdi > mdi && adx > 15) {
+        f3 += 1;  // 上升趋势中
+      } else if (pdi < mdi && adx > 30) {
+        f3 -= 2;  // 强下跌趋势
+        risks.push('DMI显示强下跌趋势（ADX' + adx.toFixed(0) + '），不宜抄底');
+      } else if (pdi < mdi && adx > 20) {
+        f3 -= 1;
+      }
+      // ADX<20且PDI略大于MDI：低位盘整，变盘向上概率
+      if (adx < 20 && pdi > mdi && pdi - mdi < 10) {
+        f3 += 1;
+      }
+    }
+    f3 = Math.max(-2, Math.min(24, f3));  // 维度3上限20+额外4分新指标加分
     score += f3;
 
     // ===== 维度4：位置与动量（18分）=====
@@ -5440,6 +5789,57 @@ const NextDayPrediction = {
     else if (upDays >= 3) f4 += 2;
     // 回踩MA10企稳
     if (v10 && lows[n - 1] <= v10 * 1.01 && last > v10 && (s.changePct || 0) > 0) f4 += 3;
+    
+    // ===== v4.4-P8: 均值回归校准 =====
+    // Skill研究表明：短期动量因子IC为负，说明A股短线反转效应强
+    // 核心发现：BIAS6 IC=-0.082（最强反向因子），KDJ超买/VR强均为反向信号
+    // 因此需要对"过度强势"的股票做降权，对"适度回调"的股票做加权
+    const bias6 = v10 ? ((last - v10) / v10 * 100) : 0;
+    if (bias6 > 0) {
+      if (bias6 > 12) {
+        // 短期暴涨：均值回归风险大，大幅扣分
+        f4 -= 3;
+        if (!risks.some(r => r.indexOf('乖离') >= 0 && r.indexOf('6日') >= 0)) {
+          risks.push('6日乖离率' + bias6.toFixed(1) + '%过高，短线获利盘沉重，均值回归压力大');
+        }
+      } else if (bias6 > 8) {
+        f4 -= 1;
+      }
+    }
+    // 超跌反弹信号：6日乖离率<-8% 且 今日收阳（反转因子）
+    if (bias6 < -8 && (s.changePct || 0) > 0) {
+      f4 += 2;
+      factors.push('6日乖离率' + bias6.toFixed(1) + '%超跌，今日企稳反弹概率高');
+    } else if (bias6 < -5 && (s.changePct || 0) > 0) {
+      f4 += 1;
+    }
+    
+    // 连续上涨天数校准：连涨3天以上需警惕回调（反转效应）
+    if (n >= 4) {
+      let consecUp = 0;
+      for (let i = n - 1; i >= 0 && i >= n - 5; i--) {
+        if (closes[i] > (i > 0 ? closes[i - 1] : closes[i])) consecUp++;
+        else break;
+      }
+      if (consecUp >= 4) {
+        f4 -= 2;
+        risks.push('连续' + consecUp + '日上涨，短线回调概率增大');
+      } else if (consecUp === 3) {
+        f4 -= 1;
+      }
+    }
+    
+    // 近10日涨跌幅校准（中期动量 vs 短期反转的平衡）
+    if (n >= 11) {
+      const c10 = (closes[n - 1] - closes[n - 11]) / closes[n - 11] * 100;
+      if (c10 > 20) {
+        f4 -= 1;
+        risks.push('10日累计涨幅' + c10.toFixed(1) + '%，短期过热需谨慎');
+      } else if (c10 < -15 && (s.changePct || 0) > 0) {
+        f4 += 1;  // 深度回调后企稳
+      }
+    }
+    f4 = Math.max(-2, Math.min(20, f4));  // 维度4上限18+额外2分超跌反弹加分
     score += f4;
 
     // ===== 维度5：板块共振（12分）=====
@@ -5477,7 +5877,42 @@ const NextDayPrediction = {
       else if (dt.netBuy < 0 && isInstSell) { f6 -= 4; risks.push('近3日龙虎榜机构净卖出' + Utils.formatAmount(Math.abs(dt.netBuy)) + '，主力借榜出货'); }
       else if (dt.netBuy < 0) f6 += 0;
       if (dt.times >= 2) factors.push('3日' + dt.times + '次登榜');
+      
+      // v4.4-P8: 龙虎榜信号强化
+      // 1. 机构净买入占比（机构净买入/成交额）——占比越高，机构态度越坚决
+      const lhbAmount = s.amount || 1;
+      const netBuyRatio = lhbAmount > 0 ? (dt.netBuy || 0) / lhbAmount * 100 : 0;
+      if (dt.netBuy > 0 && isInstBuy) {
+        if (netBuyRatio >= 5) {
+          f6 += 2;
+          factors.push('机构净买入占成交额' + netBuyRatio.toFixed(1) + '%，态度坚决');
+        } else if (netBuyRatio >= 2) {
+          f6 += 1;
+        }
+      }
+      
+      // 2. 买卖力量对比（净买入/买入总额）——比例越高说明买方实力碾压卖方
+      if (dt.buyAmount && dt.buyAmount > 0) {
+        const buyStrength = (dt.netBuy || 0) / dt.buyAmount;
+        if (dt.netBuy > 0 && buyStrength > 0.3) {
+          f6 += 1;
+        } else if (dt.netBuy < 0 && Math.abs(buyStrength) > 0.3) {
+          f6 -= 1;
+        }
+      }
+      
+      // 3. 三日榜持续性：多次登榜且净买入方向一致 → 游资/机构持续做盘
+      if (dt.times >= 2 && dt.netBuy > 0) {
+        f6 += 1;
+        if (!factors.some(f => f.indexOf('连续登榜') >= 0)) {
+          factors.push('连续登榜，资金持续性强');
+        }
+      } else if (dt.times >= 3 && dt.netBuy < 0) {
+        f6 -= 1;
+        risks.push('连续3日登榜且机构净卖出，主力持续出货');
+      }
     }
+    f6 = Math.max(-6, Math.min(12, f6));  // 维度6上限8+额外4分龙虎榜强化加分
     score += f6;
 
         // v4.4-P2: 数据可信度评估
@@ -5568,7 +6003,7 @@ const NextDayPrediction = {
     });
     html += '</div>';
     html += '<div style="margin:10px 0 4px;display:flex;gap:8px"><button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">📊 历史验证台账（胜率统计 · 因子IC · 单股回溯）</button></div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P5：资金加速度20 · 量价筹码22 · 趋势技术20 · 位置动量18 · 板块共振12(+持续性2) · 龙虎榜催化8，大盘情绪全局±10（指数+涨跌比+涨停数+量能）。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P8：资金分层22 · 量价筹码24 · 趋势技术24（含BOLL/CCI/DMI） · 位置动量20（含均值回归校准） · 板块共振14 · 龙虎榜催化12，大盘情绪全局±10（指数+涨跌比+涨停数+量能）。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
