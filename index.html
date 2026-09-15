@@ -78,6 +78,11 @@
           <span>已有账号？</span>
           <a href="javascript:void(0)" onclick="Auth.showLogin()">返回登录</a>
         </div>
+        <div class="migration-entry">
+          <a href="javascript:void(0)" onclick="DeviceManager.showImportModal()" class="migration-link">
+            🔄 已有迁移码？导入授权
+          </a>
+        </div>
       </form>
     </div>
   </div>
@@ -380,6 +385,33 @@
           </form>
         </div>
         <div class="settings-section">
+          <div class="card-subtitle">📱 我的设备</div>
+          <div class="device-current">
+            <span class="device-current-label">当前设备</span>
+            <span id="currentDeviceName" class="device-current-name">加载中...</span>
+          </div>
+          <div class="device-meta">
+            <span id="currentDeviceType" class="device-meta-item">--</span>
+            <span id="currentDeviceBrowser" class="device-meta-item">--</span>
+            <span id="deviceCount" class="device-meta-item">--/5台</span>
+          </div>
+          <button type="button" onclick="DeviceManager.showDeviceList()" class="login-btn settings-btn" style="background:transparent;border:1px solid var(--accent-cyan);color:var(--accent-cyan);margin-top:8px">
+            管理设备
+          </button>
+        </div>
+        <div class="settings-section">
+          <div class="card-subtitle">🔄 授权迁移</div>
+          <p class="migration-tip">将授权数据加密后迁移到其他设备，24小时内有效</p>
+          <div class="migration-btns">
+            <button type="button" onclick="DeviceManager.showExportModal()" class="login-btn settings-btn migration-btn">
+              📤 导出授权
+            </button>
+            <button type="button" onclick="DeviceManager.showImportModal()" class="login-btn settings-btn migration-btn" style="background:transparent;border:1px solid var(--accent-cyan);color:var(--accent-cyan)">
+              📥 导入授权
+            </button>
+          </div>
+        </div>
+        <div class="settings-section">
           <div class="card-subtitle">授权管理</div>
           <div id="adminPanel" style="display:none">
             <div id="adminUserList" class="phone-list"></div>
@@ -401,7 +433,7 @@
       <section class="card about-card">
         <div class="about-logo">
           <div class="about-icon">智股</div>
-          <h2>智股分析 v4.4-p8</h2>
+          <h2>智股分析 v4.4-p9</h2>
           <p class="about-sub">A股七维度智能分析系统</p>
         </div>
         <div class="about-features">
@@ -468,6 +500,109 @@
 
   <!-- 全局Toast -->
   <div id="toast" class="toast"></div>
+
+  <!-- ===== 设备管理弹窗 ===== -->
+  <div id="deviceListModal" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span>📱 我的设备</span>
+        <button class="modal-close" onclick="DeviceManager.hideDeviceList()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="device-limit-info">
+          <span>已激活 <strong id="deviceCountModal">0</strong>/5 台设备</span>
+        </div>
+        <div id="deviceListContainer" class="device-list"></div>
+        <div class="device-tip-box">
+          <p>💡 提示：纯前端架构下，撤销仅移除本地设备记录，无法远程撤销其他设备的授权。</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 导出迁移码弹窗 ===== -->
+  <div id="exportModal" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span>📤 导出授权</span>
+        <button class="modal-close" onclick="DeviceManager.hideExportModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="migration-step">
+          <div class="migration-step-title">第1步：设置迁移密码</div>
+          <p class="migration-step-desc">密码至少6位，用于加密授权数据，请牢记</p>
+          <div class="settings-field">
+            <input type="password" id="exportPassword" placeholder="设置迁移密码（至少6位）" minlength="6">
+          </div>
+          <div class="settings-field">
+            <input type="password" id="exportPasswordConfirm" placeholder="确认迁移密码" minlength="6">
+          </div>
+        </div>
+        <div class="migration-step" id="exportStep2" style="display:none">
+          <div class="migration-step-title">第2步：复制迁移码</div>
+          <p class="migration-step-desc">迁移码24小时内有效，仅可使用一次</p>
+          <div class="migration-code-box">
+            <textarea id="exportCodeText" readonly rows="6" style="width:100%;padding:12px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--accent-cyan);font-family:monospace;font-size:13px;line-height:1.5;resize:none;word-break:break-all;box-sizing:border-box"></textarea>
+          </div>
+          <div class="migration-actions">
+            <button type="button" onclick="DeviceManager.copyExportCode()" class="login-btn settings-btn">📋 复制迁移码</button>
+          </div>
+          <div id="exportCodeCopied" class="copy-success" style="display:none">✓ 已复制到剪贴板</div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" onclick="DeviceManager.generateExportCode()" id="exportGenerateBtn" class="login-btn settings-btn" style="width:100%">生成迁移码</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 导入迁移码弹窗 ===== -->
+  <div id="importModal" class="modal-overlay" style="display:none">
+    <div class="modal-card">
+      <div class="modal-header">
+        <span>📥 导入授权</span>
+        <button class="modal-close" onclick="DeviceManager.hideImportModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="migration-step">
+          <div class="migration-step-title">粘贴迁移码</div>
+          <p class="migration-step-desc">将从其他设备导出的迁移码粘贴到下方</p>
+          <div class="settings-field">
+            <textarea id="importCodeText" rows="4" placeholder="请粘贴迁移码..." style="width:100%;padding:12px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary);font-family:monospace;font-size:13px;line-height:1.5;resize:none;box-sizing:border-box"></textarea>
+          </div>
+        </div>
+        <div class="migration-step">
+          <div class="migration-step-title">输入迁移密码</div>
+          <p class="migration-step-desc">与导出时设置的密码一致</p>
+          <div class="settings-field">
+            <input type="password" id="importPassword" placeholder="迁移密码" minlength="6">
+          </div>
+        </div>
+        <div id="importError" class="login-error" style="display:none;margin-bottom:12px"></div>
+        <div class="modal-footer">
+          <button type="button" onclick="DeviceManager.doImport()" class="login-btn settings-btn" style="width:100%">确认导入</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 重命名设备弹窗 ===== -->
+  <div id="renameDeviceModal" class="modal-overlay" style="display:none">
+    <div class="modal-card modal-card-small">
+      <div class="modal-header">
+        <span>✏️ 重命名设备</span>
+        <button class="modal-close" onclick="DeviceManager.hideRenameModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="settings-field">
+          <input type="text" id="renameDeviceInput" placeholder="输入新的设备名称" maxlength="20">
+        </div>
+        <div class="modal-footer">
+          <button type="button" onclick="DeviceManager.doRename()" class="login-btn settings-btn" style="width:100%">确认</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- 应用主脚本 -->
   <script src="app.js"></script>

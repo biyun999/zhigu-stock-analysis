@@ -2423,6 +2423,315 @@ body {
   transition: all 0.2s;
 }
 
+/* ===== 设备管理样式 ===== */
+.device-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.1), rgba(0, 230, 118, 0.05));
+  border: 1px solid var(--accent-cyan);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+}
+
+.device-current-label {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.device-current-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+}
+
+.device-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.device-meta-item {
+  padding: 2px 8px;
+  background: var(--bg-input);
+  border-radius: 10px;
+}
+
+.device-limit-info {
+  text-align: center;
+  padding: 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.device-limit-info strong {
+  color: var(--accent-cyan);
+  font-size: 16px;
+}
+
+.device-list {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.device-item {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  background: var(--bg-input);
+  border-radius: var(--radius-sm);
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.device-item.device-current-item {
+  border-color: var(--accent-cyan);
+  background: linear-gradient(135deg, rgba(0, 212, 255, 0.08), rgba(0, 230, 118, 0.03));
+}
+
+.device-icon {
+  font-size: 24px;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.device-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.device-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-current-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  background: var(--accent-cyan);
+  color: #fff;
+  border-radius: 8px;
+  font-weight: 500;
+}
+
+.device-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.device-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.device-action-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.device-action-btn:hover {
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
+}
+
+.device-action-btn.revoke-btn {
+  color: var(--accent-red);
+  border-color: var(--accent-red);
+}
+
+.device-tip-box {
+  padding: 10px 12px;
+  background: rgba(255, 152, 0, 0.1);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.device-tip-box p {
+  margin: 0;
+}
+
+/* ===== 迁移相关样式 ===== */
+.migration-tip {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.migration-btns {
+  display: flex;
+  gap: 10px;
+}
+
+.migration-btn {
+  flex: 1;
+}
+
+.migration-entry {
+  text-align: center;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.migration-link {
+  color: var(--accent-cyan);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.migration-link:hover {
+  text-decoration: underline;
+}
+
+.migration-step {
+  margin-bottom: 16px;
+}
+
+.migration-step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.migration-step-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 10px 0;
+  line-height: 1.5;
+}
+
+.migration-code-box {
+  margin-bottom: 10px;
+}
+
+.migration-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.copy-success {
+  text-align: center;
+  color: var(--accent-green);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+/* ===== 弹窗样式 ===== */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+  backdrop-filter: blur(4px);
+}
+
+.modal-card {
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  width: 100%;
+  max-width: 420px;
+  max-height: 85vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-card-small {
+  max-width: 320px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  flex-shrink: 0;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-footer {
+  padding: 0 16px 16px 16px;
+}
+
+@media (max-width: 480px) {
+  .modal-overlay {
+    padding: 10px;
+    align-items: flex-end;
+  }
+  .modal-card {
+    max-width: 100%;
+    max-height: 90vh;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+  .migration-btns {
+    flex-direction: column;
+  }
+}
+
 .logout-btn:active {
   background: rgba(255, 71, 87, 0.1);
 }
