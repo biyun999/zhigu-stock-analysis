@@ -9156,7 +9156,7 @@ const Auth = {
   SESSION_DURATION: 7 * 24 * 60 * 60 * 1000,   // 7天
   SHORT_SESSION: 24 * 60 * 60 * 1000,          // 24小时（未勾选记住）
   ACT_CODE_HASH: 'h1_ntr9g0_14',               // 授权码哈希（原始码由主人分发）
-  ACT_CODE_VERSION: '20260823',                // 授权版本（换码时更新，旧激活自动失效）
+  ACT_CODE_VERSION: '20260917',                // 授权版本（换码时更新，旧激活自动失效）
   MAX_ATTEMPTS: 5,                              // 最大失败次数
   LOCK_DURATION: 15 * 60 * 1000,                // 锁定15分钟
   DEVICE_KEY: 'zhigu_device_id',                // 设备ID存储key
@@ -9639,6 +9639,27 @@ const Auth = {
     if (err) err.style.display = 'none';
   },
 
+  /** 切换激活Tab：code / invite */
+  switchActivateTab(tab) {
+    const tabCode = document.getElementById('actTabCode');
+    const tabInvite = document.getElementById('actTabInvite');
+    const paneCode = document.getElementById('actPaneCode');
+    const paneInvite = document.getElementById('actPaneInvite');
+    if (!tabCode || !tabInvite || !paneCode || !paneInvite) return;
+
+    if (tab === 'invite') {
+      tabInvite.classList.add('active');
+      tabCode.classList.remove('active');
+      paneInvite.style.display = '';
+      paneCode.style.display = 'none';
+    } else {
+      tabCode.classList.add('active');
+      tabInvite.classList.remove('active');
+      paneCode.style.display = '';
+      paneInvite.style.display = 'none';
+    }
+  },
+
   /** 初始化：检查登录状态 */
   init() {
     if (this.isLoggedIn()) {
@@ -9655,9 +9676,19 @@ const Auth = {
     }
   },
 
-  /** 处理激活 */
+  /** 处理激活（自动判断授权码/邀请码模式） */
   handleActivate(event) {
     event.preventDefault();
+    // 判断当前激活Tab
+    const tabInvite = document.getElementById('actTabInvite');
+    if (tabInvite && tabInvite.classList.contains('active')) {
+      return this._handleInviteActivate(event);
+    }
+    return this._handleCodeActivate(event);
+  },
+
+  /** 授权码激活（原有逻辑） */
+  _handleCodeActivate(event) {
     const code = document.getElementById('actCode').value;
     const phone = document.getElementById('actPhone').value.trim();
     const password = document.getElementById('actPassword').value;
@@ -9737,6 +9768,94 @@ const Auth = {
     this._showApp();
     App.init();
     // 刷新设置页设备信息
+    if (typeof DeviceManager !== 'undefined') DeviceManager.refreshSettingsInfo();
+    return false;
+  },
+
+  /** 邀请码激活 */
+  async _handleInviteActivate(event) {
+    const code = document.getElementById('inviteCodeInput').value;
+    const phone = document.getElementById('invitePhone').value.trim();
+    const password = document.getElementById('invitePassword').value;
+    const confirm = document.getElementById('inviteConfirm').value;
+    const errorEl = document.getElementById('inviteError');
+
+    const showErr = (msg) => {
+      errorEl.textContent = msg;
+      errorEl.style.display = 'block';
+    };
+
+    // 限速检查
+    const lockCheck = this._isLocked();
+    if (lockCheck.locked) {
+      showErr('尝试次数过多，请' + lockCheck.minutes + '分钟后再试');
+      return false;
+    }
+
+    // 验证手机号
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      showErr('请输入正确的11位手机号');
+      return false;
+    }
+
+    // 验证密码
+    if (password.length < 6) {
+      showErr('密码至少6位');
+      return false;
+    }
+    if (password !== confirm) {
+      showErr('两次输入的密码不一致');
+      return false;
+    }
+
+    // 验证邀请码
+    const result = await InviteCode.verifyInviteCode(code);
+    if (!result.valid) {
+      this._recordFailedAttempt();
+      showErr(result.error);
+      return false;
+    }
+
+    // 检查是否已有该用户
+    let auth = this._getAuth();
+    if (auth && auth.users && auth.users.find(u => u.phone === phone)) {
+      showErr('该手机号已激活，请直接登录');
+      return false;
+    }
+
+    // 检查设备数上限
+    if (auth && auth.users && auth.users.length > 0) {
+      if (Auth._isDeviceLimitReached()) {
+        showErr('已达到最大授权设备数（' + this.MAX_DEVICES + '台），请在旧设备上撤销后再试');
+        return false;
+      }
+    }
+
+    // 创建授权记录
+    auth = auth || {};
+    auth.users = auth.users || [];
+    auth.users.push({
+      phone: phone,
+      password: this._hash(password),
+      activatedAt: new Date().toISOString(),
+      inviteId: result.payload.id
+    });
+    auth.codeVersion = this.ACT_CODE_VERSION;
+    auth.devices = auth.devices || [];
+    this._saveAuth(auth);
+
+    // 注册当前设备
+    this._registerCurrentDevice();
+
+    // 标记邀请码已使用（本地记录）
+    InviteCode.markInviteUsed(result.payload.id, phone);
+
+    // 自动登录
+    this._saveSession(phone, true);
+    this._clearRateLimit();
+    errorEl.style.display = 'none';
+    this._showApp();
+    App.init();
     if (typeof DeviceManager !== 'undefined') DeviceManager.refreshSettingsInfo();
     return false;
   },
@@ -10218,6 +10337,411 @@ const DeviceManager = {
     setTimeout(() => {
       toast.style.display = 'none';
     }, 2000);
+  }
+};
+
+// ============================================================
+// 13c. InviteCode - 邀请码授权系统（HMAC-SHA256签名）
+// ============================================================
+const InviteCode = {
+  ADMIN_PWD_KEY: 'zhigu_admin_pwd',
+  INVITES_KEY: 'zhigu_invites',
+  TTL_MS: 86400000, // 24小时
+  ADMIN_VERIFIED_KEY: 'zhigu_admin_verified',
+  _countdownTimer: null,
+
+  // ===== 密码管理 =====
+
+  /** 检查是否已设置管理员密码 */
+  hasAdminPassword() {
+    return !!localStorage.getItem(this.ADMIN_PWD_KEY);
+  },
+
+  /** 验证管理员密码 */
+  _verifyAdminPassword(password) {
+    const stored = localStorage.getItem(this.ADMIN_PWD_KEY);
+    return stored && Auth._hash(password) === stored;
+  },
+
+  /** 设置管理员密码 */
+  setupAdminPassword() {
+    const pwd = document.getElementById('inviteNewPwd').value;
+    const confirm = document.getElementById('inviteNewPwdConfirm').value;
+    if (pwd.length < 6) {
+      this._toast('密码至少6位');
+      return;
+    }
+    if (pwd !== confirm) {
+      this._toast('两次输入的密码不一致');
+      return;
+    }
+    localStorage.setItem(this.ADMIN_PWD_KEY, Auth._hash(pwd));
+    localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
+    this._showManagePanel();
+    this._toast('管理员密码设置成功');
+  },
+
+  /** 验证管理员密码并进入管理面板 */
+  verifyAdminPassword() {
+    const pwd = document.getElementById('inviteAdminPwd').value;
+    const errEl = document.getElementById('inviteAdminError');
+    if (this._verifyAdminPassword(pwd)) {
+      localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
+      errEl.style.display = 'none';
+      document.getElementById('inviteAdminPwd').value = '';
+      this._showManagePanel();
+    } else {
+      errEl.textContent = '密码错误';
+      errEl.style.display = 'block';
+    }
+  },
+
+  // ===== HMAC-SHA256 签名 =====
+
+  /** 将字符串转为Uint8Array */
+  _strToBytes(str) {
+    return new TextEncoder().encode(str);
+  },
+
+  /** 将Uint8Array转为Base64URL安全字符串 */
+  _bytesToBase64Url(bytes) {
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  },
+
+  /** 将Base64URL字符串转为Uint8Array */
+  _base64UrlToBytes(b64url) {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = b64.length % 4;
+    const padded = pad ? b64 + '='.repeat(4 - pad) : b64;
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  },
+
+  /** 从管理员密码派生HMAC密钥 */
+  async _deriveHmacKey() {
+    const adminPwdHash = localStorage.getItem(this.ADMIN_PWD_KEY);
+    if (!adminPwdHash) throw new Error('未设置管理员密码');
+    // 使用固定salt + PBKDF2派生HMAC密钥
+    const salt = this._strToBytes('zhigu_invite_salt_v1');
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      this._strToBytes(adminPwdHash),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveKey']
+    );
+    return await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: salt, iterations: 10000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'HMAC', length: 256, hash: 'SHA-256' },
+      false,
+      ['sign', 'verify']
+    );
+  },
+
+  /** 计算HMAC-SHA256签名 */
+  async _computeHmac(payload, key) {
+    const signature = await crypto.subtle.sign('HMAC', key, this._strToBytes(payload));
+    return this._bytesToBase64Url(new Uint8Array(signature));
+  },
+
+  // ===== 邀请码生成 =====
+
+  async generateInviteCode() {
+    if (!this.hasAdminPassword()) {
+      this._toast('请先设置管理员密码');
+      return;
+    }
+    try {
+      const key = await this._deriveHmacKey();
+      const now = Date.now();
+      const id = 'inv_' + now + '_' + Math.random().toString(36).substring(2, 6);
+      const payload = JSON.stringify({ id: id, ts: now, ttl: this.TTL_MS });
+      const payloadB64 = this._bytesToBase64Url(this._strToBytes(payload));
+      const signature = await this._computeHmac(payloadB64, key);
+      const code = 'ZG' + payloadB64 + '.' + signature;
+
+      // 存储邀请码记录
+      const invites = this._getInvites();
+      invites.unshift({
+        id: id,
+        code: code,
+        createdAt: now,
+        expiresAt: now + this.TTL_MS,
+        used: false,
+        usedBy: null
+      });
+      localStorage.setItem(this.INVITES_KEY, JSON.stringify(invites));
+
+      // 展示最新生成的邀请码
+      this._showLatestCode(code, now + this.TTL_MS);
+      this._renderInviteList();
+      this._toast('邀请码已生成');
+    } catch (e) {
+      this._toast('生成失败：' + e.message);
+    }
+  },
+
+  // ===== 邀请码验证 =====
+
+  /** 验证邀请码（签名+有效期） */
+  async verifyInviteCode(code) {
+    const clean = (code || '').trim();
+    if (!clean.startsWith('ZG')) {
+      return { valid: false, error: '邀请码格式无效' };
+    }
+
+    const parts = clean.substring(2).split('.');
+    if (parts.length !== 2) {
+      return { valid: false, error: '邀请码格式无效' };
+    }
+
+    const [payloadB64, providedSig] = parts;
+
+    try {
+      const key = await this._deriveHmacKey();
+      const expectedSig = await this._computeHmac(payloadB64, key);
+
+      // 签名验证
+      if (expectedSig !== providedSig) {
+        return { valid: false, error: '邀请码签名无效，可能被篡改' };
+      }
+
+      // 解析payload
+      const payloadBytes = this._base64UrlToBytes(payloadB64);
+      const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
+
+      // 有效期检查
+      if (Date.now() > payload.ts + payload.ttl) {
+        return { valid: false, error: '邀请码已过期' };
+      }
+
+      return { valid: true, payload: payload };
+    } catch (e) {
+      return { valid: false, error: '邀请码验证失败：' + e.message };
+    }
+  },
+
+  // ===== 邀请码存储 =====
+
+  _getInvites() {
+    try {
+      const data = localStorage.getItem(this.INVITES_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch (e) {
+      return [];
+    }
+  },
+
+  _saveInvites(invites) {
+    localStorage.setItem(this.INVITES_KEY, JSON.stringify(invites));
+  },
+
+  /** 标记邀请码已被使用 */
+  markInviteUsed(inviteId, phone) {
+    const invites = this._getInvites();
+    const invite = invites.find(i => i.id === inviteId);
+    if (invite) {
+      invite.used = true;
+      invite.usedBy = phone;
+      invite.usedAt = new Date().toISOString();
+      this._saveInvites(invites);
+    }
+  },
+
+  // ===== UI 管理 =====
+
+  /** 显示管理面板 */
+  showAdminPanel() {
+    const modal = document.getElementById('inviteAdminModal');
+    if (modal) modal.style.display = 'flex';
+
+    if (!this.hasAdminPassword()) {
+      // 首次使用，显示设置密码界面
+      document.getElementById('inviteAuthSection').style.display = '';
+      document.getElementById('inviteSetPassword').style.display = '';
+      document.getElementById('inviteVerifyPassword').style.display = 'none';
+      document.getElementById('inviteManagePanel').style.display = 'none';
+    } else if (localStorage.getItem(this.ADMIN_VERIFIED_KEY) === '1') {
+      // 已验证，直接显示管理面板
+      this._showManagePanel();
+    } else {
+      // 需要验证密码
+      document.getElementById('inviteAuthSection').style.display = '';
+      document.getElementById('inviteSetPassword').style.display = 'none';
+      document.getElementById('inviteVerifyPassword').style.display = '';
+      document.getElementById('inviteManagePanel').style.display = 'none';
+    }
+  },
+
+  hideAdminPanel() {
+    const modal = document.getElementById('inviteAdminModal');
+    if (modal) modal.style.display = 'none';
+    if (this._countdownTimer) {
+      clearInterval(this._countdownTimer);
+      this._countdownTimer = null;
+    }
+  },
+
+  _showManagePanel() {
+    document.getElementById('inviteAuthSection').style.display = 'none';
+    document.getElementById('inviteManagePanel').style.display = '';
+    this._renderInviteList();
+  },
+
+  /** 展示最新生成的邀请码 */
+  _showLatestCode(code, expiresAt) {
+    const container = document.getElementById('latestInviteCode');
+    const codeText = document.getElementById('latestCodeText');
+    const expiryEl = document.getElementById('latestCodeExpiry');
+    const countdownEl = document.getElementById('latestCodeCountdown');
+
+    if (!container) return;
+
+    codeText.textContent = code;
+    container.dataset.expiresAt = expiresAt;
+    container.style.display = '';
+
+    // 启动倒计时
+    this._startCountdown(expiresAt, countdownEl);
+
+    const expiryDate = new Date(expiresAt);
+    expiryEl.textContent = '有效期至：' + expiryDate.toLocaleString('zh-CN');
+  },
+
+  _startCountdown(expiresAt, el) {
+    if (this._countdownTimer) clearInterval(this._countdownTimer);
+    const update = () => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        el.textContent = '已过期';
+        el.style.color = '#ff4757';
+        clearInterval(this._countdownTimer);
+        return;
+      }
+      const hours = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      el.textContent = '剩余：' + hours + '时' + mins + '分' + secs + '秒';
+    };
+    update();
+    this._countdownTimer = setInterval(update, 1000);
+  },
+
+  /** 复制最新邀请码 */
+  copyLatestCode() {
+    const codeText = document.getElementById('latestCodeText');
+    if (!codeText) return;
+    this._copyToClipboard(codeText.textContent);
+  },
+
+  /** 复制指定邀请码 */
+  copyInviteCode(code) {
+    this._copyToClipboard(code);
+  },
+
+  _copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        this._toast('已复制到剪贴板');
+      }).catch(() => {
+        this._fallbackCopy(text);
+      });
+    } else {
+      this._fallbackCopy(text);
+    }
+  },
+
+  _fallbackCopy(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      this._toast('已复制到剪贴板');
+    } catch (e) {
+      this._toast('复制失败，请手动复制');
+    }
+    document.body.removeChild(textarea);
+  },
+
+  /** 渲染邀请码列表 */
+  _renderInviteList() {
+    const container = document.getElementById('inviteListContainer');
+    if (!container) return;
+
+    const invites = this._getInvites();
+    const now = Date.now();
+
+    if (invites.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">暂无邀请码，点击上方按钮生成</div>';
+      return;
+    }
+
+    container.innerHTML = invites.map(inv => {
+      const isExpired = now > inv.expiresAt;
+      const status = isExpired ? '已过期' : (inv.used ? '已使用' : '有效');
+      const statusColor = isExpired ? '#8a8e9b' : (inv.used ? '#ffa502' : '#00e676');
+      const statusIcon = isExpired ? '⚫' : (inv.used ? '🟡' : '🟢');
+
+      const createdDate = new Date(inv.createdAt);
+      const dateStr = createdDate.toLocaleString('zh-CN');
+      const shortId = inv.id.substring(0, 18) + '...';
+      const shortCode = inv.code.length > 40 ? inv.code.substring(0, 20) + '...' + inv.code.substring(inv.code.length - 10) : inv.code;
+
+      let usedInfo = '';
+      if (inv.used && inv.usedBy) {
+        usedInfo = '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">使用人：' + inv.usedBy + '</div>';
+      }
+
+      return '<div class="invite-item" style="padding:10px 12px;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+              '<span style="font-size:11px;color:' + statusColor + '">' + statusIcon + ' ' + status + '</span>' +
+              '<span style="font-size:11px;color:var(--text-muted)">' + dateStr + '</span>' +
+            '</div>' +
+            '<div style="font-family:monospace;font-size:11px;color:var(--text-secondary);word-break:break-all;line-height:1.4">' + shortCode + '</div>' +
+            usedInfo +
+          '</div>' +
+          (!isExpired && !inv.used ? '<button class="device-action-btn" onclick="InviteCode.copyInviteCode(\'' + inv.code + '\')" style="flex-shrink:0;margin-left:8px">复制</button>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  },
+
+  /** 清理过期邀请码 */
+  cleanupExpired() {
+    const now = Date.now();
+    const invites = this._getInvites();
+    const filtered = invites.filter(inv => now <= inv.expiresAt);
+    if (filtered.length < invites.length) {
+      this._saveInvites(filtered);
+      this._renderInviteList();
+    }
+  },
+
+  _toast(msg) {
+    // 复用 DeviceManager 或 Auth 的 toast
+    const toast = document.getElementById('toast');
+    if (!toast) {
+      alert(msg);
+      return;
+    }
+    toast.textContent = msg;
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.display = 'none'; }, 2000);
   }
 };
 
