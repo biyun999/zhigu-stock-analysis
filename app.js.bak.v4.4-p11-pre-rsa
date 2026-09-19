@@ -10718,26 +10718,69 @@ const DeviceManager = {
 };
 
 // ============================================================
-// 13c. InviteCode - 邀请码授权系统（RSA-PSS 非对称签名）
-// 公钥内置在APP中（任何人都可验签），私钥由管理员密码加密后仅存在管理员设备本地
-// ========================================================================
+// 13c. InviteCode - 邀请码授权系统（HMAC-SHA256签名）
+// ============================================================
 const InviteCode = {
-  // 公钥（内置，用于验签）
-  PUBLIC_KEY: {"kty":"RSA","n":"sdDtetnb2L78C_NszWTP3hEcDaB5OpyBSvaEOntcZA1knVAKe995hAIee0qSt6DS4qScagO4SDaa_XZRN9OQAjR8wvNMoklgFpw7TDwbvI0nt6ni8DxPfVYXtEXeZK8FMbou4ojfc4rIVnVrsE6DXcQ42tQUR96tzine258cxLmaMcTreCp17HyloZCPW7BuzyS3fQxSH2UTpSN06zu8qznCk4i8PsilYuzWmaiGZ5QSbP0YRQVM9pnm0c_oBCXwBNbnuS0b-pilffTVc0a5pJVjQCWUsA8Ptc4niDdVlS4p0XB1a5vIcESdmNIiO5A7zKvwEM72mfSV_F2HzDqvcQ","e":"AQAB","alg":"PS256","use":"sig","ext":true},
-
-  ADMIN_PWD_KEY: 'zhigu_admin_pwd',          // 管理员密码hash
-  PRIVATE_KEY_KEY: 'zhigu_priv_key_enc',     // 加密后的私钥（AES-GCM）
-  INVITES_KEY: 'zhigu_invites',              // 邀请码列表
-  TTL_MS: 86400000,                           // 24小时有效期
-  ADMIN_VERIFIED_KEY: 'zhigu_admin_verified', // 管理员已验证状态
+  ADMIN_PWD_KEY: 'zhigu_admin_pwd',
+  INVITES_KEY: 'zhigu_invites',
+  TTL_MS: 86400000, // 24小时
+  ADMIN_VERIFIED_KEY: 'zhigu_admin_verified',
   _countdownTimer: null,
 
-  // ===== 工具函数 =====
+  // ===== 密码管理 =====
 
+  /** 检查是否已设置管理员密码 */
+  hasAdminPassword() {
+    return !!localStorage.getItem(this.ADMIN_PWD_KEY);
+  },
+
+  /** 验证管理员密码 */
+  _verifyAdminPassword(password) {
+    const stored = localStorage.getItem(this.ADMIN_PWD_KEY);
+    return stored && Auth._hash(password) === stored;
+  },
+
+  /** 设置管理员密码 */
+  setupAdminPassword() {
+    const pwd = document.getElementById('inviteNewPwd').value;
+    const confirm = document.getElementById('inviteNewPwdConfirm').value;
+    if (pwd.length < 6) {
+      this._toast('密码至少6位');
+      return;
+    }
+    if (pwd !== confirm) {
+      this._toast('两次输入的密码不一致');
+      return;
+    }
+    localStorage.setItem(this.ADMIN_PWD_KEY, Auth._hash(pwd));
+    localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
+    this._showManagePanel();
+    this._toast('管理员密码设置成功');
+  },
+
+  /** 验证管理员密码并进入管理面板 */
+  verifyAdminPassword() {
+    const pwd = document.getElementById('inviteAdminPwd').value;
+    const errEl = document.getElementById('inviteAdminError');
+    if (this._verifyAdminPassword(pwd)) {
+      localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
+      errEl.style.display = 'none';
+      document.getElementById('inviteAdminPwd').value = '';
+      this._showManagePanel();
+    } else {
+      errEl.textContent = '密码错误';
+      errEl.style.display = 'block';
+    }
+  },
+
+  // ===== HMAC-SHA256 签名 =====
+
+  /** 将字符串转为Uint8Array */
   _strToBytes(str) {
     return new TextEncoder().encode(str);
   },
 
+  /** 将Uint8Array转为Base64URL安全字符串 */
   _bytesToBase64Url(bytes) {
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
@@ -10746,6 +10789,7 @@ const InviteCode = {
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   },
 
+  /** 将Base64URL字符串转为Uint8Array */
   _base64UrlToBytes(b64url) {
     const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
     const pad = b64.length % 4;
@@ -10758,185 +10802,51 @@ const InviteCode = {
     return bytes;
   },
 
-  _toast(msg) {
-    let t = document.getElementById('zg-toast');
-    if (!t) {
-      t = document.createElement('div');
-      t.id = 'zg-toast';
-      t.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:#fff;padding:12px 24px;border-radius:8px;font-size:14px;z-index:99999;pointer-events:none;transition:opacity 0.3s;';
-      document.body.appendChild(t);
-    }
-    t.textContent = msg;
-    t.style.opacity = '1';
-    clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2000);
-  },
-
-  // ===== 管理员密码 =====
-
-  hasAdminPassword() {
-    return !!localStorage.getItem(this.ADMIN_PWD_KEY);
-  },
-
-  hasPrivateKey() {
-    return !!localStorage.getItem(this.PRIVATE_KEY_KEY);
-  },
-
-  _verifyAdminPassword(password) {
-    const stored = localStorage.getItem(this.ADMIN_PWD_KEY);
-    return stored && Auth._hash(password) === stored;
-  },
-
-  /** 从密码派生AES密钥（PBKDF2） */
-  async _deriveAesKey(password, salt) {
+  /** 从管理员密码派生HMAC密钥 */
+  async _deriveHmacKey() {
+    const adminPwdHash = localStorage.getItem(this.ADMIN_PWD_KEY);
+    if (!adminPwdHash) throw new Error('未设置管理员密码');
+    // 使用固定salt + PBKDF2派生HMAC密钥
+    const salt = this._strToBytes('zhigu_invite_salt_v1');
     const keyMaterial = await crypto.subtle.importKey(
-      'raw', this._strToBytes(password),
-      { name: 'PBKDF2' }, false, ['deriveKey']
+      'raw',
+      this._strToBytes(adminPwdHash),
+      { name: 'PBKDF2' },
+      false,
+      ['deriveKey']
     );
     return await crypto.subtle.deriveKey(
       { name: 'PBKDF2', salt: salt, iterations: 10000, hash: 'SHA-256' },
       keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      true,
-      ['encrypt', 'decrypt']
+      { name: 'HMAC', length: 256, hash: 'SHA-256' },
+      false,
+      ['sign', 'verify']
     );
   },
 
-  /** AES-GCM 加密 */
-  async _aesEncrypt(plaintext, password) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await this._deriveAesKey(password, salt);
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv }, key, this._strToBytes(plaintext)
-    );
-    const result = new Uint8Array(16 + 12 + encrypted.byteLength);
-    result.set(salt, 0);
-    result.set(iv, 16);
-    result.set(new Uint8Array(encrypted), 28);
-    return this._bytesToBase64Url(result);
+  /** 计算HMAC-SHA256签名 */
+  async _computeHmac(payload, key) {
+    const signature = await crypto.subtle.sign('HMAC', key, this._strToBytes(payload));
+    return this._bytesToBase64Url(new Uint8Array(signature));
   },
 
-  /** AES-GCM 解密 */
-  async _aesDecrypt(b64data, password) {
-    const data = this._base64UrlToBytes(b64data);
-    const salt = data.slice(0, 16);
-    const iv = data.slice(16, 28);
-    const ciphertext = data.slice(28);
-    const key = await this._deriveAesKey(password, salt);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv }, key, ciphertext
-    );
-    return new TextDecoder().decode(decrypted);
-  },
-
-  /** 设置管理员密码（同时生成RSA密钥对并用密码加密私钥） */
-  async setupAdminPassword() {
-    const pwd = document.getElementById('inviteNewPwd').value;
-    const confirm = document.getElementById('inviteNewPwdConfirm').value;
-    if (pwd.length < 6) {
-      this._toast('密码至少6位');
-      return;
-    }
-    if (pwd !== confirm) {
-      this._toast('两次输入的密码不一致');
-      return;
-    }
-
-    try {
-      // 生成 RSA-2048 密钥对
-      const keyPair = await crypto.subtle.generateKey(
-        { name: 'RSA-PSS', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
-        true,
-        ['sign', 'verify']
-      );
-
-      // 导出私钥 JWK 并用密码加密
-      const privJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-      const encryptedPriv = await this._aesEncrypt(JSON.stringify(privJwk), pwd);
-
-      // 保存密码hash + 加密后的私钥
-      localStorage.setItem(this.ADMIN_PWD_KEY, Auth._hash(pwd));
-      localStorage.setItem(this.PRIVATE_KEY_KEY, encryptedPriv);
-      localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
-
-      this._showManagePanel();
-      this._toast('管理员密码设置成功');
-    } catch (e) {
-      this._toast('设置失败：' + e.message);
-    }
-  },
-
-  /** 验证管理员密码（解密私钥到内存待用） */
-  async verifyAdminPassword() {
-    const pwd = document.getElementById('inviteAdminPwd').value;
-    const errEl = document.getElementById('inviteAdminError');
-
-    if (!this._verifyAdminPassword(pwd)) {
-      errEl.textContent = '密码错误';
-      errEl.style.display = 'block';
-      return;
-    }
-
-    try {
-      // 解密私钥验证密码正确
-      const encryptedPriv = localStorage.getItem(this.PRIVATE_KEY_KEY);
-      if (encryptedPriv) {
-        await this._aesDecrypt(encryptedPriv, pwd);
-      }
-      localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
-      errEl.style.display = 'none';
-      document.getElementById('inviteAdminPwd').value = '';
-      this._showManagePanel();
-    } catch (e) {
-      errEl.textContent = '密码验证失败';
-      errEl.style.display = 'block';
-    }
-  },
-
-  /** 获取私钥（解密后导入） */
-  async _getPrivateKey(password) {
-    const encryptedPriv = localStorage.getItem(this.PRIVATE_KEY_KEY);
-    if (!encryptedPriv) throw new Error('未设置私钥，请重新设置管理员密码');
-    const privJwkStr = await this._aesDecrypt(encryptedPriv, password);
-    const privJwk = JSON.parse(privJwkStr);
-    return await crypto.subtle.importKey('jwk', privJwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
-  },
-
-  /** 获取公钥 */
-  async _getPublicKey() {
-    return await crypto.subtle.importKey('jwk', this.PUBLIC_KEY, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify']);
-  },
-
-  // ===== 邀请码生成（管理员端） =====
+  // ===== 邀请码生成 =====
 
   async generateInviteCode() {
-    if (!this.hasAdminPassword() || !this.hasPrivateKey()) {
+    if (!this.hasAdminPassword()) {
       this._toast('请先设置管理员密码');
       return;
     }
-
-    // 需要管理员输入密码才能生成（安全考虑）
-    const pwd = prompt('请输入管理员密码以生成邀请码：');
-    if (!pwd) return;
-
     try {
-      const privateKey = await this._getPrivateKey(pwd);
+      const key = await this._deriveHmacKey();
       const now = Date.now();
       const id = 'inv_' + now + '_' + Math.random().toString(36).substring(2, 6);
       const payload = JSON.stringify({ id: id, ts: now, ttl: this.TTL_MS });
       const payloadB64 = this._bytesToBase64Url(this._strToBytes(payload));
+      const signature = await this._computeHmac(payloadB64, key);
+      const code = 'ZG' + payloadB64 + '.' + signature;
 
-      // RSA-PSS 签名
-      const signature = await crypto.subtle.sign(
-        { name: 'RSA-PSS', saltLength: 32 },
-        privateKey,
-        this._strToBytes(payloadB64)
-      );
-      const sigB64 = this._bytesToBase64Url(new Uint8Array(signature));
-      const code = 'ZG' + payloadB64 + '.' + sigB64;
-
-      // 保存邀请码到本地列表
+      // 存储邀请码记录
       const invites = this._getInvites();
       invites.unshift({
         id: id,
@@ -10948,17 +10858,18 @@ const InviteCode = {
       });
       localStorage.setItem(this.INVITES_KEY, JSON.stringify(invites));
 
-      // 更新UI
+      // 展示最新生成的邀请码
       this._showLatestCode(code, now + this.TTL_MS);
       this._renderInviteList();
-      this._toast('邀请码生成成功');
+      this._toast('邀请码已生成');
     } catch (e) {
       this._toast('生成失败：' + e.message);
     }
   },
 
-  // ===== 邀请码验证（任何人都可验证，无需管理员密码） =====
+  // ===== 邀请码验证 =====
 
+  /** 验证邀请码（签名+有效期） */
   async verifyInviteCode(code) {
     const clean = (code || '').trim();
     if (!clean.startsWith('ZG')) {
@@ -10973,27 +10884,21 @@ const InviteCode = {
     const [payloadB64, providedSig] = parts;
 
     try {
-      // 用内置公钥验签
-      const publicKey = await this._getPublicKey();
-      const sigBytes = this._base64UrlToBytes(providedSig);
-      const isValid = await crypto.subtle.verify(
-        { name: 'RSA-PSS', saltLength: 32 },
-        publicKey,
-        sigBytes,
-        this._strToBytes(payloadB64)
-      );
+      const key = await this._deriveHmacKey();
+      const expectedSig = await this._computeHmac(payloadB64, key);
 
-      if (!isValid) {
-        return { valid: false, error: '邀请码签名无效，请检查后重试' };
+      // 签名验证
+      if (expectedSig !== providedSig) {
+        return { valid: false, error: '邀请码签名无效，可能被篡改' };
       }
 
       // 解析payload
       const payloadBytes = this._base64UrlToBytes(payloadB64);
       const payload = JSON.parse(new TextDecoder().decode(payloadBytes));
 
-      // 检查有效期
+      // 有效期检查
       if (Date.now() > payload.ts + payload.ttl) {
-        return { valid: false, error: '邀请码已过期（有效期24小时）' };
+        return { valid: false, error: '邀请码已过期' };
       }
 
       return { valid: true, payload: payload };
@@ -11002,120 +10907,271 @@ const InviteCode = {
     }
   },
 
-  // ===== 邀请码列表管理 =====
+  // ===== 邀请码存储 =====
 
   _getInvites() {
     try {
       const data = localStorage.getItem(this.INVITES_KEY);
       return data ? JSON.parse(data) : [];
-    } catch(e) { return []; }
+    } catch (e) {
+      return [];
+    }
   },
 
+  _saveInvites(invites) {
+    localStorage.setItem(this.INVITES_KEY, JSON.stringify(invites));
+  },
+
+  /** 标记邀请码已被使用 */
+  markInviteUsed(inviteId, phone) {
+    const invites = this._getInvites();
+    const invite = invites.find(i => i.id === inviteId);
+    if (invite) {
+      invite.used = true;
+      invite.usedBy = phone;
+      invite.usedAt = new Date().toISOString();
+      this._saveInvites(invites);
+    }
+  },
+
+  // ===== UI 管理 =====
+
+  /** 显示管理面板 */
+  showAdminPanel() {
+    const modal = document.getElementById('inviteAdminModal');
+    if (modal) modal.style.display = 'flex';
+
+    if (!this.hasAdminPassword()) {
+      // 首次使用，显示设置密码界面
+      document.getElementById('inviteAuthSection').style.display = '';
+      document.getElementById('inviteSetPassword').style.display = '';
+      document.getElementById('inviteVerifyPassword').style.display = 'none';
+      document.getElementById('inviteManagePanel').style.display = 'none';
+    } else if (localStorage.getItem(this.ADMIN_VERIFIED_KEY) === '1') {
+      // 已验证，直接显示管理面板
+      this._showManagePanel();
+    } else {
+      // 需要验证密码
+      document.getElementById('inviteAuthSection').style.display = '';
+      document.getElementById('inviteSetPassword').style.display = 'none';
+      document.getElementById('inviteVerifyPassword').style.display = '';
+      document.getElementById('inviteManagePanel').style.display = 'none';
+    }
+  },
+
+  hideAdminPanel() {
+    const modal = document.getElementById('inviteAdminModal');
+    if (modal) modal.style.display = 'none';
+    if (this._countdownTimer) {
+      clearInterval(this._countdownTimer);
+      this._countdownTimer = null;
+    }
+  },
+
+  _showManagePanel() {
+    document.getElementById('inviteAuthSection').style.display = 'none';
+    document.getElementById('inviteManagePanel').style.display = '';
+    this._renderInviteList();
+  },
+
+  /** 展示最新生成的邀请码 */
   _showLatestCode(code, expiresAt) {
-    const display = document.getElementById('latestCode');
-    const copyBtn = document.getElementById('copyLatestBtn');
-    const expireEl = document.getElementById('latestExpire');
-    if (!display) return;
+    const container = document.getElementById('latestInviteCode');
+    const codeText = document.getElementById('latestCodeText');
+    const expiryEl = document.getElementById('latestCodeExpiry');
+    const countdownEl = document.getElementById('latestCodeCountdown');
 
-    display.textContent = code;
-    display.style.display = 'block';
-    if (copyBtn) copyBtn.style.display = 'inline-block';
+    if (!container) return;
 
-    // 倒计时
-    clearInterval(this._countdownTimer);
+    codeText.textContent = code;
+    container.dataset.expiresAt = expiresAt;
+    container.style.display = '';
+
+    // 启动倒计时
+    this._startCountdown(expiresAt, countdownEl);
+
+    const expiryDate = new Date(expiresAt);
+    expiryEl.textContent = '有效期至：' + expiryDate.toLocaleString('zh-CN');
+  },
+
+  _startCountdown(expiresAt, el) {
+    if (this._countdownTimer) clearInterval(this._countdownTimer);
     const update = () => {
-      const remain = expiresAt - Date.now();
-      if (remain <= 0) {
-        expireEl.textContent = '已过期';
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        el.textContent = '已过期';
+        el.style.color = '#ff4757';
         clearInterval(this._countdownTimer);
         return;
       }
-      const h = Math.floor(remain / 3600000);
-      const m = Math.floor((remain % 3600000) / 60000);
-      const s = Math.floor((remain % 60000) / 1000);
-      expireEl.textContent = '有效期剩余：' + h + '时' + m + '分' + s + '秒';
+      const hours = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      el.textContent = '剩余：' + hours + '时' + mins + '分' + secs + '秒';
     };
     update();
     this._countdownTimer = setInterval(update, 1000);
   },
 
+  /** 复制最新邀请码 */
   copyLatestCode() {
-    const code = document.getElementById('latestCode')?.textContent;
-    if (!code) return;
+    const codeText = document.getElementById('latestCodeText');
+    if (!codeText) return;
+    this._copyToClipboard(codeText.textContent);
+  },
+
+  /** 复制指定邀请码 */
+  copyInviteCode(code) {
     this._copyToClipboard(code);
   },
 
-  async _copyToClipboard(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-      this._toast('已复制到剪贴板');
-    } catch(e) {
-      // fallback
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); this._toast('已复制'); }
-      catch(err) { this._toast('复制失败，请手动复制'); }
-      document.body.removeChild(ta);
+  _copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        this._toast('已复制到剪贴板');
+      }).catch(() => {
+        this._fallbackCopy(text);
+      });
+    } else {
+      this._fallbackCopy(text);
     }
   },
 
+  _fallbackCopy(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand('copy');
+      this._toast('已复制到剪贴板');
+    } catch (e) {
+      this._toast('复制失败，请手动复制');
+    }
+    document.body.removeChild(textarea);
+  },
+
+  /** 渲染邀请码列表 */
   _renderInviteList() {
-    const list = document.getElementById('inviteList');
-    if (!list) return;
+    const container = document.getElementById('inviteListContainer');
+    if (!container) return;
+
     const invites = this._getInvites();
+    const now = Date.now();
+
     if (invites.length === 0) {
-      list.innerHTML = '<div style="text-align:center;color:var(--text-secondary);padding:20px 0">暂无邀请码记录</div>';
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px">暂无邀请码，点击上方按钮生成</div>';
       return;
     }
-    let html = '';
+
+    container.innerHTML = invites.map(inv => {
+      const isExpired = now > inv.expiresAt;
+      const status = isExpired ? '已过期' : (inv.used ? '已使用' : '有效');
+      const statusColor = isExpired ? '#8a8e9b' : (inv.used ? '#ffa502' : '#00e676');
+      const statusIcon = isExpired ? '⚫' : (inv.used ? '🟡' : '🟢');
+
+      const createdDate = new Date(inv.createdAt);
+      const dateStr = createdDate.toLocaleString('zh-CN');
+      const shortId = inv.id.substring(0, 18) + '...';
+      const shortCode = inv.code.length > 40 ? inv.code.substring(0, 20) + '...' + inv.code.substring(inv.code.length - 10) : inv.code;
+
+      let usedInfo = '';
+      if (inv.used && inv.usedBy) {
+        usedInfo = '<div style="font-size:11px;color:var(--text-muted);margin-top:4px">使用人：' + inv.usedBy + '</div>';
+      }
+
+      return '<div class="invite-item" style="padding:10px 12px;margin-bottom:8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:8px">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center">' +
+          '<div style="flex:1;min-width:0">' +
+            '<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">' +
+              '<span style="font-size:11px;color:' + statusColor + '">' + statusIcon + ' ' + status + '</span>' +
+              '<span style="font-size:11px;color:var(--text-muted)">' + dateStr + '</span>' +
+            '</div>' +
+            '<div style="font-family:monospace;font-size:11px;color:var(--text-secondary);word-break:break-all;line-height:1.4">' + shortCode + '</div>' +
+            usedInfo +
+          '</div>' +
+          (!isExpired && !inv.used ? '<button class="device-action-btn" onclick="InviteCode.copyInviteCode(\'' + inv.code + '\')" style="flex-shrink:0;margin-left:8px">复制</button>' : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+  },
+
+  /** 清理过期邀请码 */
+  cleanupExpired() {
     const now = Date.now();
-    invites.slice(0, 20).forEach(inv => {
-      const expired = now > inv.expiresAt;
-      const date = new Date(inv.createdAt).toLocaleString('zh-CN');
-      const shortCode = inv.code.substring(0, 20) + '...';
-      html += '<div style="padding:10px 0;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;align-items:center;gap:8px">';
-      html += '<div style="flex:1;min-width:0">';
-      html += '<div style="font-family:monospace;font-size:12px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + shortCode + '</div>';
-      html += '<div style="font-size:11px;color:var(--text-secondary);margin-top:4px">' + date + ' · ' + (expired ? '已过期' : '有效') + '</div>';
-      html += '</div>';
-      html += '<button onclick="InviteCode._copyInviteCode(\'' + inv.code.replace(/'/g, '\\\'') + '\')" style="padding:4px 10px;font-size:12px;background:var(--accent-cyan);color:#fff;border:none;border-radius:4px;cursor:pointer;flex-shrink:0">复制</button>';
-      html += '</div>';
-    });
-    list.innerHTML = html;
-  },
-
-  _copyInviteCode(code) {
-    this._copyToClipboard(code);
-  },
-
-  // ===== UI 交互 =====
-
-  showAdminPanel() {
-    if (!this.hasAdminPassword()) {
-      document.getElementById('inviteSetPassword').style.display = 'block';
-      document.getElementById('inviteVerifyPassword').style.display = 'none';
-      document.getElementById('inviteManagePanel').style.display = 'none';
-    } else if (localStorage.getItem(this.ADMIN_VERIFIED_KEY) === '1') {
-      this._showManagePanel();
-    } else {
-      document.getElementById('inviteSetPassword').style.display = 'none';
-      document.getElementById('inviteVerifyPassword').style.display = 'block';
-      document.getElementById('inviteManagePanel').style.display = 'none';
+    const invites = this._getInvites();
+    const filtered = invites.filter(inv => now <= inv.expiresAt);
+    if (filtered.length < invites.length) {
+      this._saveInvites(filtered);
+      this._renderInviteList();
     }
-    document.getElementById('inviteAdminModal').style.display = 'flex';
   },
 
-  hideAdminPanel() {
-    document.getElementById('inviteAdminModal').style.display = 'none';
-    clearInterval(this._countdownTimer);
-  },
-
-  _showManagePanel() {
-    document.getElementById('inviteSetPassword').style.display = 'none';
-    document.getElementById('inviteVerifyPassword').style.display = 'none';
-    document.getElementById('inviteManagePanel').style.display = 'block';
-    this._renderInviteList();
+  _toast(msg) {
+    // 复用 DeviceManager 或 Auth 的 toast
+    const toast = document.getElementById('toast');
+    if (!toast) {
+      alert(msg);
+      return;
+    }
+    toast.textContent = msg;
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.display = 'none'; }, 2000);
   }
 };
+
+// ============================================================
+// 离线/网络状态检测
+// ============================================================
+const NetworkStatus = {
+  banner: null,
+  init() {
+    this.banner = document.getElementById('offlineBanner');
+    window.addEventListener('online', () => this.update(true));
+    window.addEventListener('offline', () => this.update(false));
+    this.update(navigator.onLine);
+  },
+  update(isOnline) {
+    if (!this.banner) return;
+    if (!isOnline) {
+      this.banner.textContent = '⚠️ 当前网络不可用，显示缓存数据（行情可能延迟）';
+      this.banner.style.display = 'block';
+      document.body.style.paddingTop = '40px';
+    } else {
+      this.banner.style.display = 'none';
+      document.body.style.paddingTop = '';
+    }
+  },
+  /** 显示数据过期提示（SW返回了stale缓存） */
+  showStale(age) {
+    if (!this.banner || !navigator.onLine) return;
+    const mins = Math.round(age / 60000);
+    if (mins < 1) return;
+    this.banner.textContent = `📡 数据已过期 ${mins} 分钟，正在刷新…`;
+    this.banner.style.display = 'block';
+    document.body.style.paddingTop = '40px';
+    setTimeout(() => {
+      if (navigator.onLine) {
+        this.banner.style.display = 'none';
+        document.body.style.paddingTop = '';
+      }
+    }, 3000);
+  }
+};
+
+// ============================================================
+// 应用启动（带登录检查）
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  // 初始化网络状态检测
+  NetworkStatus.init();
+  // 先初始化登录检查
+  Auth.init();
+  
+  // 如果已登录，初始化APP
+  if (Auth.isLoggedIn()) {
+    App.init();
+  }
+});
