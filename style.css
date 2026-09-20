@@ -3628,6 +3628,7 @@ body {
 /* v4.1 首页双榜Tab */
 .toplist-tabs {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 12px;
 }

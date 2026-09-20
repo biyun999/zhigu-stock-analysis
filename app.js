@@ -2744,7 +2744,10 @@ const Navigation = {
     // 页面切换副作用
     if (pageName === 'watchlist') { App.renderBookmarks(); Watchlist.render(); }
     if (pageName === 'settings') { Auth.initSettingsPage(); }
-    if (pageName === 'home') { NextDayPrediction.renderLatest(); }
+    if (pageName === 'home') {
+      try { NextDayPrediction.renderLatest(); } catch(e) { console.warn('[NextDay] render error:', e); }
+      try { if (typeof HomeLedger !== 'undefined') HomeLedger.render(); } catch(e) { console.warn('[HomeLedger] render error:', e); }
+    }
   },
 
   /** 页面切换：压入history栈，支持手势/返回键回退 */
@@ -7312,8 +7315,10 @@ const App = {
     // 加载首页数据
     this.loadHotStocks();
 
-    // v4.4 P11: 静默自动核实昨日及更早未核实数据
-    setTimeout(() => AutoVerify.silentVerify(), 3000);
+    // v4.4 P11: 静默自动核实昨日及更早未核实数据（异常隔离，不影响主功能）
+    setTimeout(() => {
+      try { AutoVerify.silentVerify(); } catch(e) { console.warn('[AutoVerify] init error:', e); }
+    }, 3000);
 
     // 定时刷新（5分钟）
     setInterval(() => {
