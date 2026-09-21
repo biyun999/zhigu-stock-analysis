@@ -11124,3 +11124,58 @@ const InviteCode = {
     this._renderInviteList();
   }
 };
+
+
+// ============================================================
+// 离线/网络状态检测
+// ============================================================
+const NetworkStatus = {
+  banner: null,
+  init() {
+    this.banner = document.getElementById('offlineBanner');
+    window.addEventListener('online', () => this.update(true));
+    window.addEventListener('offline', () => this.update(false));
+    this.update(navigator.onLine);
+  },
+  update(isOnline) {
+    if (!this.banner) return;
+    if (!isOnline) {
+      this.banner.textContent = '⚠️ 当前网络不可用，显示缓存数据（行情可能延迟）';
+      this.banner.style.display = 'block';
+      document.body.style.paddingTop = '40px';
+    } else {
+      this.banner.style.display = 'none';
+      document.body.style.paddingTop = '';
+    }
+  },
+  /** 显示数据过期提示（SW返回了stale缓存） */
+  showStale(age) {
+    if (!this.banner || !navigator.onLine) return;
+    const mins = Math.round(age / 60000);
+    if (mins < 1) return;
+    this.banner.textContent = `📡 数据已过期 ${mins} 分钟，正在刷新…`;
+    this.banner.style.display = 'block';
+    document.body.style.paddingTop = '40px';
+    setTimeout(() => {
+      if (navigator.onLine) {
+        this.banner.style.display = 'none';
+        document.body.style.paddingTop = '';
+      }
+    }, 3000);
+  }
+};
+
+// ============================================================
+// 应用启动（带登录检查）
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  // 初始化网络状态检测
+  NetworkStatus.init();
+  // 先初始化登录检查
+  Auth.init();
+  
+  // 如果已登录，初始化APP
+  if (Auth.isLoggedIn()) {
+    App.init();
+  }
+});
