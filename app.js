@@ -11017,35 +11017,39 @@ const InviteCode = {
   },
 
   _showLatestCode(code, expiresAt) {
-    const display = document.getElementById('latestCode');
-    const copyBtn = document.getElementById('copyLatestBtn');
-    const expireEl = document.getElementById('latestExpire');
-    if (!display) return;
+    const container = document.getElementById('latestInviteCode');
+    const display = document.getElementById('latestCodeText');
+    const expiryEl = document.getElementById('latestCodeExpiry');
+    const countdownEl = document.getElementById('latestCodeCountdown');
+    if (!container || !display) return;
 
     display.textContent = code;
-    display.style.display = 'block';
-    if (copyBtn) copyBtn.style.display = 'inline-block';
+    container.style.display = 'block';
+    if (expiryEl) {
+      const expDate = new Date(expiresAt);
+      expiryEl.textContent = '到期时间：' + expDate.toLocaleString('zh-CN');
+    }
 
     // 倒计时
     clearInterval(this._countdownTimer);
     const update = () => {
       const remain = expiresAt - Date.now();
       if (remain <= 0) {
-        expireEl.textContent = '已过期';
+        if (countdownEl) countdownEl.textContent = '已过期';
         clearInterval(this._countdownTimer);
         return;
       }
       const h = Math.floor(remain / 3600000);
       const m = Math.floor((remain % 3600000) / 60000);
       const s = Math.floor((remain % 60000) / 1000);
-      expireEl.textContent = '有效期剩余：' + h + '时' + m + '分' + s + '秒';
+      if (countdownEl) countdownEl.textContent = '剩余：' + h + '时' + m + '分' + s + '秒';
     };
     update();
     this._countdownTimer = setInterval(update, 1000);
   },
 
   copyLatestCode() {
-    const code = document.getElementById('latestCode')?.textContent;
+    const code = document.getElementById('latestCodeText')?.textContent;
     if (!code) return;
     this._copyToClipboard(code);
   },
@@ -11067,7 +11071,7 @@ const InviteCode = {
   },
 
   _renderInviteList() {
-    const list = document.getElementById('inviteList');
+    const list = document.getElementById('inviteListContainer');
     if (!list) return;
     const invites = this._getInvites();
     if (invites.length === 0) {
