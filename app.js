@@ -5299,7 +5299,7 @@ const NextDayPrediction = {
           if (mkt.adjust < 0 && !risks.some(r => r.indexOf('大盘') >= 0)) {
             risks.unshift('大盘情绪偏弱（' + mkt.tag + '），系统性风险下个股难独善其身');
           }
-          return {
+          const item = {
             code: s.code, name: s.name, board: this._boardTag(s.code),
             price: s.price, changePct: s.changePct, turnover: s.turnover,
             mainFlow: s.mainFlow, mainPct: s.mainPct,
@@ -5317,39 +5317,49 @@ const NextDayPrediction = {
             qualityReasons: s._qualityReasons || [],
             dims: s._dims || {}
           };
+          // v4.4 P13: 预计算量化筛选属性（用于快速过滤）
+          item._quantFilter = this._buildQuantFilter(s);
+          return item;
         })
         .filter(x => x.score >= 50)
         .sort((a, b) => b.score - a.score);
 
-      // 保底：50分以上不足10只时，逐级降低门槛确保至少10只
+      // v4.4 P13: 先用量化筛选取TOP10，再逐级放宽
+      let finalList = this._applyQuantFilter(scoredList, 10);
       let threshold = 50;
-      let finalList = scoredList.slice(0, 10);
-      if (scoredList.length < 10) {
+
+      // 保底：高分过滤后不足10只时，逐级降低分数门槛
+      if (finalList.length < 10) {
         for (const t of [45, 40, 35]) {
           const lower = candidates
             .filter(s => s.klineOk)
-            .map(s => ({
-              code: s.code, name: s.name, board: this._boardTag(s.code),
-              price: s.price, changePct: s.changePct, turnover: s.turnover,
-              mainFlow: s.mainFlow, mainPct: s.mainPct,
-              industry: s.industry || '',
-              factors: s.factors || [],
-              marketAdjust: mkt.adjust,
-              baseScore: s.techScore,
-              score: s.finalScore,
-              level: this._level(s.finalScore),
-              risks: this._mergeRisks(s.risks, s.techRisks, s),
-              verified: null, nextChangePct: null,
-              sectorPersistent: s._sectorPersistent || false,
-              sectorNewHot: s._sectorNewHot || false,
-              dataQuality: s._dataQuality || 'medium',
-              qualityReasons: s._qualityReasons || [],
-              dims: s._dims || {}
-            }))
+            .map(s => {
+              const item = {
+                code: s.code, name: s.name, board: this._boardTag(s.code),
+                price: s.price, changePct: s.changePct, turnover: s.turnover,
+                mainFlow: s.mainFlow, mainPct: s.mainPct,
+                industry: s.industry || '',
+                factors: s.factors || [],
+                marketAdjust: mkt.adjust,
+                baseScore: s.techScore,
+                score: s.finalScore,
+                level: this._level(s.finalScore),
+                risks: this._mergeRisks(s.risks, s.techRisks, s),
+                verified: null, nextChangePct: null,
+                sectorPersistent: s._sectorPersistent || false,
+                sectorNewHot: s._sectorNewHot || false,
+                dataQuality: s._dataQuality || 'medium',
+                qualityReasons: s._qualityReasons || [],
+                dims: s._dims || {}
+              };
+              item._quantFilter = this._buildQuantFilter(s);
+              return item;
+            })
             .filter(x => x.score >= t)
             .sort((a, b) => b.score - a.score);
-          if (lower.length >= 10) { threshold = t; finalList = lower.slice(0, 10); break; }
-          else if (lower.length > scoredList.length) { threshold = t; scoredList = lower; finalList = lower.slice(0, 10); }
+          const filtered = this._applyQuantFilter(lower, 10);
+          if (filtered.length >= 10) { threshold = t; finalList = filtered; break; }
+          else if (filtered.length > finalList.length) { threshold = t; finalList = filtered; }
         }
       }
 
@@ -5641,7 +5651,47 @@ const NextDayPrediction = {
         }
       }
     }
-    f1 = Math.max(-2, Math.min(22, f1));  // 维度1上限20+额外2分超大单连续加分
+    f1 = Math.max(-2, Math.min(22, f1));  // 维度1基础上限22
+
+    // ===== v4.4-P13: 资金撬动效率因子（+3分上限） =====
+    // 资金撬动效率 = 当日主力净流入 / 流通市值
+    const quote = s._quote || {};
+    let circMktCap = quote.circulatingMarketCap || 0;
+    if (!circMktCap && quote.totalMarketCap) circMktCap = quote.totalMarketCap * 0.7;
+    // 若无quote数据，用成交额/换手率反推（换手率%）
+    if (!circMktCap && s.amount && s.turnover && s.turnover > 0) {
+      circMktCap = s.amount / (s.turnover / 100);
+    }
+    if (mainFlow > 0 && circMktCap > 0) {
+      const leverageEff = mainFlow / circMktCap * 100;
+      if (leverageEff > 2) {
+        f1 += 3;
+        factors.push('资金撬动效率极高（' + leverageEff.toFixed(2) + '%），主力控盘度强');
+      } else if (leverageEff >= 1) {
+        f1 += 2;
+        factors.push('资金撬动效率高（' + leverageEff.toFixed(2) + '%）');
+      } else if (leverageEff >= 0.5) {
+        f1 += 1;
+      }
+    }
+
+    // ===== v4.4-P13: 高控盘/散户跟风过滤（+2/-2分） =====
+    const turnoverRate = s.turnover || 0;
+    if (cf && cf.flows && cf.flows.length >= 1) {
+      const todayFlow = cf.flows[cf.flows.length - 1];
+      const smallFlow = todayFlow.small || 0;
+      // 高控盘特征：主力流入比>10% + 换手率<3% + 主力流入>0
+      if (mainPct > 10 && turnoverRate > 0 && turnoverRate < 3 && mainFlow > 0) {
+        f1 += 2;
+        factors.push('高控盘特征：主力大幅流入但换手低，筹码锁定度高');
+      }
+      // 散户跟风：主力流入但小单净流入极高
+      if (mainFlow > 0 && smallFlow > 0 && smallFlow > mainFlow * 0.5) {
+        f1 -= 2;
+        risks.push('主力流入但散户跟风盘重，警惕主力借散户情绪出货');
+      }
+    }
+    f1 = Math.max(-4, Math.min(27, f1));  // 维度1上限：22+3撬动效率+2高控盘=27
     score += f1;
 
     // ===== 维度2：量价动能（22分）=====
@@ -5722,7 +5772,31 @@ const NextDayPrediction = {
       // 深度套牢，上方压力沉重
       f2 -= 1;
     }
-    f2 = Math.max(-2, Math.min(24, f2));  // 维度2上限22+额外2分筹码集中度加分
+    f2 = Math.max(-2, Math.min(24, f2));  // 维度2基础上限24
+
+    // ===== v4.4-P13: 换手率健康度因子（+2/-2分） =====
+    const f2Turnover = s.turnover || 0;
+    const f2MainFlow = s.mainFlow || 0;
+    const f2Chg = s.changePct || 0;
+    if (f2Turnover > 0) {
+      if (f2Turnover >= 3 && f2Turnover <= 8 && f2MainFlow > 0) {
+        f2 += 2;
+        factors.push('健康换手放量，资金承接好');
+      } else if (f2Turnover >= 1 && f2Turnover < 3) {
+        f2 += 1; // 温和换手
+      } else if (f2Turnover < 1) {
+        f2 -= 1;
+        risks.push('换手率过低（' + f2Turnover.toFixed(2) + '%），流动性不足');
+      }
+      if (f2Turnover > 15 && f2MainFlow < 0) {
+        f2 -= 2;
+        risks.push('高换手+主力流出，放量出货风险');
+      } else if (f2Turnover > 12 && f2Chg > 5) {
+        f2 -= 1;
+        risks.push('高换手高波动，情绪过热');
+      }
+    }
+    f2 = Math.max(-4, Math.min(26, f2));  // 维度2上限24+2换手健康度=26
     score += f2;
 
     // ===== 维度3：趋势技术（20分）=====
@@ -5852,7 +5926,23 @@ const NextDayPrediction = {
         f3 += 1;
       }
     }
-    f3 = Math.max(-2, Math.min(24, f3));  // 维度3上限20+额外4分新指标加分
+    f3 = Math.max(-2, Math.min(24, f3));  // 维度3基础上限24
+
+    // ===== v4.4-P13: RSI14 黄金区校准（+2/-2分） =====
+    if (rsi14 != null) {
+      if (rsi14 >= 45 && rsi14 <= 60) {
+        f3 += 2;
+        factors.push('RSI处于黄金区（' + rsi14.toFixed(0) + '），多空平衡未过热');
+      } else if (rsi14 > 60 && rsi14 <= 70) {
+        f3 += 1; // 强势但未超买
+      } else if (rsi14 > 75) {
+        f3 -= 2;
+        risks.push('RSI14超买（' + rsi14.toFixed(0) + '），技术性回调概率上升');
+      } else if (rsi14 < 25) {
+        f3 += 1; // 超跌反弹机会
+      }
+    }
+    f3 = Math.max(-4, Math.min(26, f3));  // 维度3上限24+2RSI黄金区=26
     score += f3;
 
     // ===== 维度4：位置与动量（18分）=====
@@ -5931,7 +6021,30 @@ const NextDayPrediction = {
         f4 += 1;  // 深度回调后企稳
       }
     }
-    f4 = Math.max(-2, Math.min(20, f4));  // 维度4上限18+额外2分超跌反弹加分
+    f4 = Math.max(-2, Math.min(20, f4));  // 维度4基础上限20
+
+    // ===== v4.4-P13: 5日振幅波动过滤（+2/-3分） =====
+    if (n >= 6) {
+      const hi5 = Math.max.apply(null, highs.slice(n - 5, n));
+      const lo5 = Math.min.apply(null, lows.slice(n - 5, n));
+      const close5dAgo = closes[n - 6];
+      const amp5d = close5dAgo > 0 ? (hi5 - lo5) / close5dAgo * 100 : 0;
+      const todayChg = s.changePct || 0;
+      if (amp5d > 25) {
+        f4 -= 3;
+        risks.push('5日振幅达' + amp5d.toFixed(1) + '%，波动剧烈属妖股特征，追高风险极大');
+      } else if (amp5d > 20) {
+        f4 -= 2;
+        risks.push('5日振幅过大（' + amp5d.toFixed(1) + '%），短期波动剧烈');
+      } else if (amp5d >= 8 && amp5d <= 15 && todayChg >= 0 && todayChg <= 5) {
+        f4 += 2;
+        factors.push('5日振幅适中（' + amp5d.toFixed(1) + '%），横盘蓄势');
+      } else if (amp5d < 8 && todayChg > 0) {
+        f4 += 1;
+        factors.push('低波蓄势，上方抛压轻');
+      }
+    }
+    f4 = Math.max(-5, Math.min(22, f4));  // 维度4上限20+2振幅加分=22，下限-5
     score += f4;
 
     // ===== 维度5：板块共振（12分）=====
@@ -6027,6 +6140,71 @@ const NextDayPrediction = {
     };
   },
 
+  // ---------- v4.4 P13: 量化筛选——前置过滤 ----------
+  // 给候选股添加 _quantFilter 属性，并按阈值过滤取TOP N
+  _buildQuantFilter(s) {
+    const name = s.name || '';
+    const chg = s.changePct || 0;
+    const turnover = s.turnover || 0;
+    const kl = s._klines || [];
+    const n = kl.length;
+    let amp5d = 0;
+    if (n >= 6) {
+      const hi5 = Math.max.apply(null, kl.slice(n - 5, n).map(k => k.high));
+      const lo5 = Math.min.apply(null, kl.slice(n - 5, n).map(k => k.low));
+      const close5dAgo = kl[n - 6].close;
+      amp5d = close5dAgo > 0 ? (hi5 - lo5) / close5dAgo * 100 : 0;
+    }
+    // 市值（亿元）：优先流通市值，否则用成交额/换手率反推
+    let mktCap = 0;
+    const q = s._quote || {};
+    if (q.circulatingMarketCap) mktCap = q.circulatingMarketCap;
+    else if (q.totalMarketCap) mktCap = q.totalMarketCap * 0.7;
+    else if (s.amount && turnover > 0) mktCap = s.amount / (turnover / 100);
+    mktCap = mktCap / 1e8; // 亿元
+    return {
+      isST: name.indexOf('ST') >= 0 || name.indexOf('*ST') >= 0,
+      isLimitUp: chg >= 9.8,
+      isLimitDown: chg <= -9.8,
+      amplitude5d: amp5d,
+      turnoverRate: turnover,
+      marketCap: mktCap
+    };
+  },
+
+  // 应用量化筛选并取TOP N，自动逐级放宽阈值
+  _applyQuantFilter(list, topN) {
+    const withFilter = list.map(s => {
+      s._quantFilter = s._quantFilter || this._buildQuantFilter(s);
+      return s;
+    });
+
+    const thresholds = [
+      { amp: 25, turnover: 18, label: '严格' },
+      { amp: 30, turnover: 25, label: '放宽' },
+      { amp: 40, turnover: 35, label: '再放宽' },
+      { amp: 999, turnover: 999, label: '全部' }
+    ];
+
+    for (let ti = 0; ti < thresholds.length; ti++) {
+      const th = thresholds[ti];
+      const filtered = withFilter.filter(s => {
+        const f = s._quantFilter;
+        if (f.isST) return false;
+        if (f.isLimitUp || f.isLimitDown) return false;
+        if (f.amplitude5d > th.amp) return false;
+        if (f.turnoverRate > th.turnover) return false;
+        if (f.marketCap > 0 && f.marketCap < 20) return false;
+        // 低可信度且分数>75的排除
+        if (s.dataQuality === 'low' && (s.score || 0) > 75) return false;
+        return true;
+      });
+      if (filtered.length >= topN) return filtered.slice(0, topN);
+      if (ti === thresholds.length - 1) return filtered.slice(0, topN);
+    }
+    return withFilter.slice(0, topN);
+  },
+
   // ---------- 风险合并（保证≥2条） ----------
   _mergeRisks(preRisks, techRisks, s) {
     const all = [];
@@ -6095,7 +6273,7 @@ const NextDayPrediction = {
     });
     html += '</div>';
     html += '<div style="margin:10px 0 4px;display:flex;gap:8px"><button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">📊 历史验证台账（胜率统计 · 因子IC · 单股回溯）</button></div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P8：资金分层22 · 量价筹码24 · 趋势技术24（含BOLL/CCI/DMI） · 位置动量20（含均值回归校准） · 板块共振14 · 龙虎榜催化12，大盘情绪全局±10（指数+涨跌比+涨停数+量能）。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P13：资金分层25（含撬动效率+高控盘识别） · 量价筹码26（含换手健康度） · 趋势技术26（含BOLL/CCI/DMI/RSI黄金区） · 位置动量22（含5日振幅过滤+均值回归校准） · 板块共振14 · 龙虎榜催化12，大盘情绪全局±10。前置量化筛选：剔除ST/涨跌停/妖股/情绪过热/低市值。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
@@ -6470,6 +6648,114 @@ const NextDayPrediction = {
     html += '</div>';
 
     html += '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:8px 0 4px;line-height:1.5">注：样本量较少时 IC 波动较大，建议累计 10+ 个交易日后再参考。因子排名用于后续模型迭代优化方向。</div>';
+
+    // ===== v4.4-P13: 量化因子分档胜率统计 =====
+    html += '<div class="ledger-section-title">📊 量化因子分档胜率</div>';
+    const quantResult = this._calcQuantFactorStats(snaps);
+
+    // 资金撬动效率
+    html += '<div class="quant-factor-block">';
+    html += '<div class="quant-factor-title">💰 资金撬动效率（主力净流入/流通市值）</div>';
+    html += this._renderQuantFactorTable(quantResult.leverage);
+    html += '</div>';
+
+    // 5日振幅
+    html += '<div class="quant-factor-block">';
+    html += '<div class="quant-factor-title">📐 5日振幅（波动特征）</div>';
+    html += this._renderQuantFactorTable(quantResult.amplitude);
+    html += '</div>';
+
+    // 换手率健康度
+    html += '<div class="quant-factor-block">';
+    html += '<div class="quant-factor-title">🔄 换手率健康度（流动性）</div>';
+    html += this._renderQuantFactorTable(quantResult.turnover);
+    html += '</div>';
+
+    return html;
+  },
+
+  // ---------- v4.4 P13: 量化因子分档统计 ----------
+  _calcQuantFactorStats(snaps) {
+    const samples = [];
+    snaps.forEach(snap => {
+      if (snap.verified !== true) return;
+      (snap.stocks || []).forEach(s => {
+        if (s.verified !== true || s.nextChangePct == null) return;
+        const qf = s._quantFilter || {};
+        // 资金撬动效率：mainFlow / 流通市值
+        const mainFlow = s.mainFlow || 0;
+        const mktCap = qf.marketCap || 0;
+        let leverage = 0;
+        if (mktCap > 0) leverage = mainFlow / (mktCap * 1e8) * 100;
+        samples.push({
+          ret: s.nextChangePct || 0,
+          leverage: leverage,
+          amplitude: qf.amplitude5d || 0,
+          turnover: qf.turnoverRate || 0
+        });
+      });
+    });
+
+    const buildStats = (items, key, bins) => {
+      return bins.map(bin => {
+        const matched = items.filter(it => {
+          const v = it[key];
+          if (bin.min !== undefined && bin.min !== null && v < bin.min) return false;
+          if (bin.max !== undefined && bin.max !== null && v >= bin.max) return false;
+          return true;
+        });
+        const total = matched.length;
+        const win = matched.filter(x => x.ret > 0).length;
+        const avgRet = total ? matched.reduce((s, x) => s + x.ret, 0) / total : 0;
+        const winRate = total ? Math.round(win / total * 100) : 0;
+        return { label: bin.label, total, win, winRate, avgRet };
+      });
+    };
+
+    return {
+      leverage: buildStats(samples, 'leverage', [
+        { label: '> 2%', min: 2 },
+        { label: '1-2%', min: 1, max: 2 },
+        { label: '0.5-1%', min: 0.5, max: 1 },
+        { label: '< 0.5%', max: 0.5 }
+      ]),
+      amplitude: buildStats(samples, 'amplitude', [
+        { label: '< 8%', max: 8 },
+        { label: '8-15%', min: 8, max: 15 },
+        { label: '15-20%', min: 15, max: 20 },
+        { label: '20-25%', min: 20, max: 25 },
+        { label: '> 25%', min: 25 }
+      ]),
+      turnover: buildStats(samples, 'turnover', [
+        { label: '< 1%', max: 1 },
+        { label: '1-3%', min: 1, max: 3 },
+        { label: '3-8%', min: 3, max: 8 },
+        { label: '8-12%', min: 8, max: 12 },
+        { label: '12-15%', min: 12, max: 15 },
+        { label: '> 15%', min: 15 }
+      ])
+    };
+  },
+
+  _renderQuantFactorTable(rows) {
+    let html = '<table class="quant-factor-table">';
+    html += '<thead><tr><th>分档</th><th>样本数</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>';
+    html += '<tbody>';
+    rows.forEach(r => {
+      if (r.total < 10) {
+        html += '<tr><td>' + r.label + '</td><td colspan="3" style="text-align:center;color:var(--text-muted)">样本不足（' + r.total + '），待累计</td></tr>';
+      } else {
+        const retColor = r.avgRet >= 0 ? '#ff4757' : '#00e676';
+        const wrColor = r.winRate >= 60 ? '#00e676' : r.winRate >= 50 ? '#ff9800' : '#ff5252';
+        html += '<tr>';
+        html += '<td>' + r.label + '</td>';
+        html += '<td>' + r.total + '</td>';
+        html += '<td style="color:' + wrColor + '">' + r.winRate + '%</td>';
+        html += '<td style="color:' + retColor + '">' + (r.avgRet >= 0 ? '+' : '') + r.avgRet.toFixed(2) + '%</td>';
+        html += '</tr>';
+      }
+    });
+    html += '</tbody></table>';
     return html;
   },
 

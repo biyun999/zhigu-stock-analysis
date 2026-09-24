@@ -4004,3 +4004,76 @@ body {
 .sh-focus-text { color: #00d4ff; font-weight: 500; }
 .sh-up-text { color: #ff4757; }
 .sh-down-text { color: #00e676; }
+
+/* ===== v4.4 P13: 量化因子分档统计 ===== */
+.quant-factor-block {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.quant-factor-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 600;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+.quant-factor-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.quant-factor-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: var(--text-muted);
+  font-weight: 400;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 11px;
+}
+.quant-factor-table td {
+  padding: 5px 8px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.quant-factor-table tr:last-child td {
+  border-bottom: none;
+}
+.quant-factor-table th:nth-child(2),
+.quant-factor-table td:nth-child(2),
+.quant-factor-table th:nth-child(3),
+.quant-factor-table td:nth-child(3),
+.quant-factor-table th:nth-child(4),
+.quant-factor-table td:nth-child(4) {
+  text-align: right;
+}
+
+/* 量化筛选标签 */
+.quant-filter-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  margin-right: 4px;
+  background: rgba(0, 212, 255, 0.15);
+  color: #00d4ff;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+}
+.quant-filter-badge.warn {
+  background: rgba(255, 152, 0, 0.15);
+  color: #ff9800;
+  border-color: rgba(255, 152, 0, 0.3);
+}
+.quant-filter-badge.risk {
+  background: rgba(255, 82, 82, 0.15);
+  color: #ff5252;
+  border-color: rgba(255, 82, 82, 0.3);
+}
+.quant-filter-badge.pass {
+  background: rgba(0, 230, 118, 0.15);
+  color: #00e676;
+  border-color: rgba(0, 230, 118, 0.3);
+}
