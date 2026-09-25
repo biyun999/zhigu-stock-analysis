@@ -3570,6 +3570,168 @@ body {
 .home-ledger-detail .hld-code { color: var(--text-muted); font-size: 11px; margin-left: 4px; }
 .home-ledger-detail .hld-chg { min-width: 60px; text-align: right; font-weight: 600; }
 
+/* ========== v4.4 P14: 准确率总览卡片（仪表盘风格） ========== */
+.accuracy-card {
+  background: linear-gradient(135deg, rgba(26, 31, 46, 0.95), rgba(15, 18, 28, 0.95));
+  border: 1px solid rgba(255, 213, 79, 0.2);
+  border-radius: 12px;
+  padding: 14px 12px 12px;
+  margin-bottom: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 213, 79, 0.08);
+}
+.accuracy-card-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffd54f;
+  margin-bottom: 12px;
+  text-align: center;
+  letter-spacing: 1px;
+}
+.accuracy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.accuracy-item {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 8px;
+  text-align: center;
+}
+.accuracy-item--main {
+  grid-column: 1 / -1;
+  background: linear-gradient(135deg, rgba(255, 213, 79, 0.1), rgba(255, 152, 0, 0.08));
+  border-color: rgba(255, 213, 79, 0.3);
+}
+.accuracy-value {
+  font-size: 32px;
+  font-weight: 800;
+  color: #ffd54f;
+  line-height: 1;
+  text-shadow: 0 0 20px rgba(255, 213, 79, 0.4);
+  margin-bottom: 4px;
+}
+.accuracy-value-sm {
+  font-size: 18px;
+  font-weight: 700;
+  color: #00d4ff;
+  line-height: 1.2;
+  margin-bottom: 2px;
+}
+.accuracy-label {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.3;
+}
+.accuracy-empty {
+  text-align: center;
+  padding: 16px 8px;
+  color: var(--text-muted, #6b7280);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* ========== v4.4 P14: 核实结果顶部提示条 ========== */
+#verifyResultBanner {
+  position: fixed;
+  top: -60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9998;
+  background: linear-gradient(90deg, rgba(0, 230, 118, 0.95), rgba(0, 200, 100, 0.95));
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 0 0 12px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 2px 12px rgba(0, 230, 118, 0.4);
+  transition: top 0.4s cubic-bezier(0.25, 0.8, 0.25, 1);
+  pointer-events: none;
+  white-space: nowrap;
+}
+#verifyResultBanner.show {
+  top: 0;
+}
+
+/* ========== v4.4 P14: 六维分数档位胜率表格 ========== */
+.score-bucket-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+.score-bucket-table thead th {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary, #a0aec0);
+  font-weight: 600;
+  padding: 8px 6px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+.score-bucket-table tbody td {
+  padding: 8px 6px;
+  text-align: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #e8e8e8);
+}
+.score-bucket-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* ========== v4.4 P14: 双榜胜率对比卡片 ========== */
+.rank-compare-card {
+  background: linear-gradient(135deg, rgba(26, 31, 46, 0.6), rgba(15, 18, 28, 0.6));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.rank-compare-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary, #e8e8e8);
+  text-align: center;
+  margin-bottom: 10px;
+}
+.rank-compare-grid {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  gap: 8px;
+}
+.rank-compare-item {
+  flex: 1;
+  text-align: center;
+  padding: 8px 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.rank-compare-vs {
+  font-size: 14px;
+  font-weight: 800;
+  color: #ffd54f;
+  padding: 0 4px;
+}
+.rc-label {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  margin-bottom: 4px;
+}
+.rc-rate {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-bottom: 4px;
+}
+.rc-sub {
+  font-size: 10px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.3;
+}
+
 /* v4.4 P11 导出弹窗 */
 .export-popup-overlay {
   position: fixed;

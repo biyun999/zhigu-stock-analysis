@@ -6897,6 +6897,47 @@ const NextDayPrediction = {
     return result;
   },
 
+  // ---------- v4.4 P14: 六维分数档位胜率统计（合并次日榜+短线榜） ----------
+  _calcScoreBucketStats() {
+    const ndSnaps = (typeof NextDayPrediction !== 'undefined' ? NextDayPrediction._loadSnapshots() : []);
+    const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : []);
+    const allSnaps = [...ndSnaps, ...stSnaps];
+
+    const buckets = [
+      { label: '90-100', min: 90, max: Infinity, total: 0, win: 0, retSum: 0 },
+      { label: '80-89', min: 80, max: 90, total: 0, win: 0, retSum: 0 },
+      { label: '70-79', min: 70, max: 80, total: 0, win: 0, retSum: 0 },
+      { label: '60-69', min: 60, max: 70, total: 0, win: 0, retSum: 0 },
+      { label: '50-59', min: 50, max: 60, total: 0, win: 0, retSum: 0 },
+      { label: '<50', min: -Infinity, max: 50, total: 0, win: 0, retSum: 0 },
+    ];
+
+    allSnaps.forEach(snap => {
+      if (snap.verified !== true) return;
+      (snap.stocks || []).forEach(s => {
+        if (s.verified !== true || s.nextChangePct == null) return;
+        const sc = s.score || 0;
+        for (const b of buckets) {
+          if (sc >= b.min && sc < b.max) {
+            b.total++;
+            if (s.nextChangePct > 0) b.win++;
+            b.retSum += s.nextChangePct;
+            break;
+          }
+        }
+      });
+    });
+
+    // 计算胜率和平均涨跌幅
+    return buckets.map(b => ({
+      label: b.label,
+      total: b.total,
+      win: b.win,
+      winRate: b.total > 0 ? Math.round(b.win / b.total * 100) : 0,
+      avgRet: b.total > 0 ? b.retSum / b.total : 0
+    }));
+  },
+
   _showSnapshotFromLedger(idx) {
     const snaps = this._loadSnapshots();
     const snap = snaps[idx];
@@ -7054,6 +7095,12 @@ const ShortTermLedger = {
       html += '</div>';
     }
 
+    // ===== v4.4 P14: 次日榜 vs 短线榜 胜率对比 =====
+    html += this._renderRankCompareCard();
+
+    // ===== v4.4 P14: 六维分数档位胜率统计 =====
+    html += this._renderScoreBuckets();
+
     // 历史日期列表（主体）
     html += '<div class="ledger-list st-ledger-list">';
     snaps.forEach((s, idx) => {
@@ -7138,6 +7185,80 @@ const ShortTermLedger = {
     });
     html += '</div>';
     html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:12px 0 4px;line-height:1.6">数据全部保存在本机，最多留存30个交易日，点击日期展开/收起当日TOP10明细</div>';
+    return html;
+  },
+
+  // ---------- v4.4 P14: 六维分数档位胜率统计 ----------
+  _renderScoreBuckets() {
+    const buckets = NextDayPrediction._calcScoreBucketStats();
+    let html = '';
+    html += '<div class="ledger-section-title">📊 六维分数档位胜率（合并次日榜+短线榜）</div>';
+    html += '<table class="score-bucket-table">';
+    html += '<thead><tr><th>分数档</th><th>样本数</th><th>上涨数</th><th>胜率</th><th>平均涨跌幅</th></tr></thead>';
+    html += '<tbody>';
+    let hasData = false;
+    buckets.forEach(b => {
+      if (b.total > 0) hasData = true;
+      if (b.total === 0) {
+        html += '<tr><td>' + b.label + '</td><td colspan="4" style="text-align:center;color:var(--text-muted)">—</td></tr>';
+      } else {
+        const wrColor = b.winRate >= 60 ? '#ff5252' : b.winRate >= 40 ? '#ff9800' : '#00e676';
+        const retColor = b.avgRet >= 0 ? '#ff4757' : '#00e676';
+        html += '<tr>';
+        html += '<td>' + b.label + '</td>';
+        html += '<td>' + b.total + '</td>';
+        html += '<td>' + b.win + '</td>';
+        html += '<td style="color:' + wrColor + ';font-weight:600">' + b.winRate + '%</td>';
+        html += '<td style="color:' + retColor + '">' + (b.avgRet >= 0 ? '+' : '') + b.avgRet.toFixed(2) + '%</td>';
+        html += '</tr>';
+      }
+    });
+    html += '</tbody></table>';
+    if (!hasData) {
+      html += '<div style="font-size:11px;color:var(--text-muted);text-align:center;padding:8px 0">暂无已核实数据，明日开盘后自动统计</div>';
+    } else {
+      html += '<div style="font-size:10px;color:var(--text-muted);text-align:center;padding:4px 0;line-height:1.5">注：所有已核实的次日榜和短线榜股票合并统计，均使用六维模型打分。胜率列：&gt;60%红色、&lt;40%绿色。</div>';
+    }
+    return html;
+  },
+
+  // ---------- v4.4 P14: 次日榜 vs 短线榜 胜率对比 ----------
+  _renderRankCompareCard() {
+    const calcTypeStats = (snaps) => {
+      const verified = snaps.filter(s => s.verified === true);
+      const hit = verified.reduce((sum, s) => sum + (s.hitCount || 0), 0);
+      const resolved = verified.reduce((sum, s) => sum + (s.resolvedCount || 0), 0);
+      return {
+        days: verified.length,
+        hit,
+        resolved,
+        rate: resolved > 0 ? Math.round(hit / resolved * 100) : 0
+      };
+    };
+    const nd = calcTypeStats(NextDayPrediction._loadSnapshots());
+    const st = calcTypeStats(ShortTermLedger._loadSnapshots());
+
+    let html = '';
+    html += '<div class="rank-compare-card">';
+    html += '<div class="rank-compare-title">⚔️ 双榜胜率对比</div>';
+    html += '<div class="rank-compare-grid">';
+
+    html += '<div class="rank-compare-item">';
+    html += '<div class="rc-label">🎯 次日榜</div>';
+    html += '<div class="rc-rate" style="color:#00d4ff">' + nd.rate + '%</div>';
+    html += '<div class="rc-sub">' + nd.hit + '/' + nd.resolved + '只 · ' + nd.days + '个交易日</div>';
+    html += '</div>';
+
+    html += '<div class="rank-compare-vs">VS</div>';
+
+    html += '<div class="rank-compare-item">';
+    html += '<div class="rc-label">⚡ 短线榜</div>';
+    html += '<div class="rc-rate" style="color:#ff9800">' + st.rate + '%</div>';
+    html += '<div class="rc-sub">' + st.hit + '/' + st.resolved + '只 · ' + st.days + '个交易日</div>';
+    html += '</div>';
+
+    html += '</div>';
+    html += '</div>';
     return html;
   },
 
@@ -7315,17 +7436,111 @@ const ShortTermLedger = {
 // ============================================================
 const AutoVerify = {
   _done: false,
+  _lastVerifyResult: null,  // 最近一次自动核实结果：{ date, totalHit, totalResolved, winRate, newDays }
 
   /** APP初始化后静默核实所有未核实的昨日及更早数据 */
   async silentVerify() {
     if (this._done) return;
     this._done = true;
     try {
+      const ndBefore = NextDayPrediction._loadSnapshots().filter(s => s.verified === true).length;
+      const stBefore = ShortTermLedger._loadSnapshots().filter(s => s.verified === true).length;
+
       await this._verifyNextDay();
       await this._verifyShortTerm();
+
+      // 计算本次新核实了多少，供首页提示用
+      const ndAfter = NextDayPrediction._loadSnapshots().filter(s => s.verified === true).length;
+      const stAfter = ShortTermLedger._loadSnapshots().filter(s => s.verified === true).length;
+      const newDays = (ndAfter - ndBefore) + (stAfter - stBefore);
+
+      if (newDays > 0) {
+        const stats = this.getStats();
+        this._lastVerifyResult = {
+          date: NextDayPrediction._todayStr(),
+          totalHit: stats.totalHit,
+          totalResolved: stats.totalResolved,
+          winRate: stats.totalWinRate,
+          newDays: newDays
+        };
+        // 顶部轻量提示条
+        this._showVerifyBanner();
+      }
     } catch (e) {
       console.warn('自动核实异常，下次打开重试', e);
     }
+  },
+
+  /** 显示核实完成顶部提示条 */
+  _showVerifyBanner() {
+    const r = this._lastVerifyResult;
+    if (!r) return;
+    // 创建提示条（一次性，不影响现有 toast）
+    let banner = document.getElementById('verifyResultBanner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'verifyResultBanner';
+      document.body.appendChild(banner);
+    }
+    banner.innerHTML = '✅ 已自动核实昨日TOP10，胜率 <b style="color:#00e676">' + r.winRate + '%</b>';
+    banner.classList.add('show');
+    setTimeout(() => banner.classList.remove('show'), 3000);
+  },
+
+  /** 计算累计/近7日/近30日/最佳单日等准确率统计 */
+  getStats() {
+    const ndSnaps = (typeof NextDayPrediction !== 'undefined' ? NextDayPrediction._loadSnapshots() : [])
+      .map(s => ({ ...s, _type: 'nextday' }));
+    const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
+      .map(s => ({ ...s, _type: 'shortterm' }));
+    const all = [...ndSnaps, ...stSnaps];
+    const verified = all.filter(s => s.verified === true);
+
+    // 累计
+    const totalHit = verified.reduce((sum, s) => sum + (s.hitCount || 0), 0);
+    const totalResolved = verified.reduce((sum, s) => sum + (s.resolvedCount || 0), 0);
+    const totalWinRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
+
+    // 去重交易日数（同日可能有次日+短线两条）
+    const uniqueDays = new Set(verified.map(s => s.date)).size;
+
+    // 按日期倒序排列，取最近的
+    const sorted = [...verified];
+    sorted.sort((a, b) => b.date.localeCompare(a.date));
+
+    // 近7日/近30日（基于交易日数量，不是自然日）
+    const pickWeighted = (days) => {
+      const recent = sorted.slice(0, days);
+      const h = recent.reduce((sum, s) => sum + (s.hitCount || 0), 0);
+      const r = recent.reduce((sum, s) => sum + (s.resolvedCount || 0), 0);
+      return { hit: h, resolved: r, rate: r > 0 ? Math.round(h / r * 100) : 0, days: recent.length };
+    };
+    const last7 = pickWeighted(7);
+    const last30 = pickWeighted(30);
+
+    // 最佳单日（按 winRate 排序，相同比样本量）
+    let bestDay = null;
+    if (verified.length > 0) {
+      let best = verified[0];
+      for (const s of verified) {
+        if (s.winRate > best.winRate ||
+            (s.winRate === best.winRate && (s.resolvedCount || 0) > (best.resolvedCount || 0))) {
+          best = s;
+        }
+      }
+      bestDay = { date: best.date, winRate: best.winRate, hitCount: best.hitCount, resolvedCount: best.resolvedCount };
+    }
+
+    return {
+      totalHit,
+      totalResolved,
+      totalWinRate,
+      uniqueDays,
+      totalStockCount: totalResolved,
+      last7,
+      last30,
+      bestDay
+    };
   },
 
   async _verifyNextDay() {
@@ -7422,6 +7637,62 @@ const HomeLedger = {
   _exportTextAll: '',
   _exportCodesCsv: '',
 
+  /** 渲染首页准确率卡片（仪表盘风格） */
+  _renderAccuracyCard() {
+    const stats = AutoVerify.getStats();
+    let html = '';
+
+    if (stats.uniqueDays === 0) {
+      html += '<div class="accuracy-card">';
+      html += '<div class="accuracy-empty">暂无核实数据，明日开盘后自动统计</div>';
+      html += '</div>';
+      return html;
+    }
+
+    html += '<div class="accuracy-card">';
+    html += '<div class="accuracy-card-header">🎯 模型准确率总览</div>';
+    html += '<div class="accuracy-grid">';
+
+    // 累计胜率（大数字金色）
+    html += '<div class="accuracy-item accuracy-item--main">';
+    html += '<div class="accuracy-value">' + stats.totalWinRate + '%</div>';
+    html += '<div class="accuracy-label">累计胜率</div>';
+    html += '</div>';
+
+    // 累计样本
+    html += '<div class="accuracy-item">';
+    html += '<div class="accuracy-value-sm">' + stats.uniqueDays + '天 / ' + stats.totalStockCount + '只</div>';
+    html += '<div class="accuracy-label">累计样本</div>';
+    html += '</div>';
+
+    // 近7日胜率
+    const last7Color = stats.last7.rate >= 70 ? '#00e676' : stats.last7.rate >= 50 ? '#ff9800' : '#ff5252';
+    html += '<div class="accuracy-item">';
+    html += '<div class="accuracy-value-sm" style="color:' + last7Color + '">' + stats.last7.rate + '%</div>';
+    html += '<div class="accuracy-label">近' + stats.last7.days + '日胜率</div>';
+    html += '</div>';
+
+    // 近30日胜率
+    const last30Color = stats.last30.rate >= 70 ? '#00e676' : stats.last30.rate >= 50 ? '#ff9800' : '#ff5252';
+    html += '<div class="accuracy-item">';
+    html += '<div class="accuracy-value-sm" style="color:' + last30Color + '">' + stats.last30.rate + '%</div>';
+    html += '<div class="accuracy-label">近' + stats.last30.days + '日胜率</div>';
+    html += '</div>';
+
+    // 最佳单日
+    if (stats.bestDay) {
+      html += '<div class="accuracy-item">';
+      html += '<div class="accuracy-value-sm" style="color:#ffd54f">' + stats.bestDay.winRate + '%</div>';
+      html += '<div class="accuracy-label">🏆 最佳单日 · ' + stats.bestDay.date + '</div>';
+      html += '</div>';
+    }
+
+    html += '</div>'; // accuracy-grid
+    html += '</div>'; // accuracy-card
+
+    return html;
+  },
+
   /** 渲染首页台账内容 */
   render() {
     const container = document.getElementById('homeLedgerBody');
@@ -7450,6 +7721,10 @@ const HomeLedger = {
     const pendingCount = all.filter(s => s.verified !== true && s.date !== NextDayPrediction._todayStr()).length;
 
     let html = '';
+
+    // ===== v4.4 P14: 准确率总览卡片（仪表盘风格） =====
+    html += this._renderAccuracyCard();
+
     // 筛选Tab
     html += '<div class="toplist-tabs" style="margin-bottom:10px">';
     html += '<button class="toplist-tab' + (this._filterType === 'all' ? ' active' : '') + '" onclick="HomeLedger.setFilter(\'all\')" style="font-size:12px;padding:8px 4px">全部</button>';
