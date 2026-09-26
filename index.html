@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="智股分析 - A股七维度智能分析系统，零Token纯前端算法">
-  <title>智股分析 v4.4-p14</title>
+  <title>智股分析 v4.4-p15</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%230a0e17'/><text x='50' y='42' text-anchor='middle' font-size='30' fill='%2300d4ff'>智</text><text x='50' y='75' text-anchor='middle' font-size='22' fill='%2300e676'>股</text></svg>">
   <link rel="stylesheet" href="style.css">
@@ -155,6 +155,13 @@
 
         <!-- 明日预测 pane -->
         <div id="mainPanePredict">
+        <!-- v4.4 P15: 板块热度榜（三维评分） -->
+        <div id="sectorHeatBar" class="sector-heat-bar-wrap">
+          <div class="sector-heat-bar-title">🔥 板块热度榜（资金/情绪/趋势三维评分）</div>
+          <div id="sectorHeatScroller" class="sector-heat-scroller">
+            <div class="loading-pulse" style="padding:16px;font-size:12px">加载中...</div>
+          </div>
+        </div>
         <!-- 双榜并列：短线潜力 + 次日上涨概率（v4.1） -->
         <div class="toplist-tabs">
           <button id="tabHot" class="toplist-tab active" onclick="App.switchTopList('hot')">⚡ 短线潜力 TOP10 <span class="export-mini-btn" onclick="event.stopPropagation();HomeLedger.exportCurrentList('shortterm')" title="导出股票">📋</span></button>
@@ -171,7 +178,7 @@
 
         <!-- 次日上涨概率榜 -->
         <div id="paneNext" style="display:none">
-          <div class="score-intro">六维模型v4.4 P13：资金分层25 · 量价筹码26 · 趋势技术26 · 位置动量22 · 板块共振14 · 龙虎榜催化12，大盘情绪全局±10，前置量化筛选剔除妖股/情绪过热。盘后扫描全市场，仅作概率参考不预测涨幅，附逐股下跌风险</div>
+          <div class="score-intro">六维模型v4.4 P15：资金分层25 · 量价筹码26 · 趋势技术26 · 位置动量22 · 板块共振22（三维评分+赚钱效应+概念共振+龙头识别） · 龙虎榜催化12，大盘情绪全局±10，前置量化筛选剔除妖股/情绪过热。盘后扫描全市场，仅作概率参考不预测涨幅，附逐股下跌风险</div>
           <div id="nextDayBody">
             <div class="empty-tip">点击下方按钮，盘后扫描全市场生成次日上涨概率排名（建议收盘后16:00后使用）。<br>扫描结果保存在本机，次日可点「核实」验证胜率。</div>
           </div>
@@ -364,6 +371,12 @@
           <div class="sh-section-title">💡 股东结构分析结论</div>
           <div id="shAnalysisContent" class="sh-analysis"></div>
         </div>
+      </section>
+
+      <!-- 板块热度详情（v4.4 P15） -->
+      <section class="card" id="sectorHeatCard" style="display:none">
+        <div class="card-title">🔥 板块热度详情（三维评分）</div>
+        <div id="sectorHeatDetail"></div>
       </section>
 
       <!-- 公告/新闻 -->

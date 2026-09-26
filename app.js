@@ -2414,6 +2414,315 @@ const DataAPI = {
     }
   },
 
+  /** v4.4 P15: 板块三维热度评分（资金40 + 情绪30 + 趋势30 = 100分）
+   * @param {Object} sector - 板块对象 {name, changePct, mainFlow, turnoverPct, upCount, downCount, ...}
+   * @param {Object} [opts] - { prevSector: 昨日同板块快照, sectorAmount: 板块成交额估算 }
+   * @returns {Object} { totalScore, fundScore, sentimentScore, trendScore, details }
+   */
+  calcSectorHeatScore(sector, opts) {
+    opts = opts || {};
+    const prev = opts.prevSector || null;
+    const details = {};
+
+    // ========== 资金维度（40分）==========
+    let fundScore = 0;
+    const mainFlow = sector.mainFlow || 0; // 单位：元（东财f62单位为元）
+    const mainFlowYi = mainFlow / 1e8; // 转为亿元
+    // 1) 主力净流入额（15分）：>5亿满分，线性递减
+    const flowScore = Math.max(0, Math.min(15, (mainFlowYi / 5) * 15));
+    fundScore += flowScore;
+    details.mainFlowScore = flowScore;
+    details.mainFlowYi = mainFlowYi;
+
+    // 2) 主力净流入比（10分）：流入额/成交额，>3%满分
+    // 板块成交额估算：换手率 × 流通市值（粗略估计用 turnoverPct 代替比例，或者从成分股估算）
+    // 降级方案：用净流入/上涨家数粗略替代（因为没有板块总成交额），或直接给保守分
+    let mainRatioScore = 5; // 无数据时给5分基准
+    if (sector.amount && sector.amount > 0) {
+      const ratio = (mainFlow / sector.amount) * 100;
+      mainRatioScore = Math.max(0, Math.min(10, (ratio / 3) * 10));
+    } else if (sector.upCount > 0) {
+      // 用 净流入/上涨家数 粗略判断（亿元/只）
+      const perStock = Math.abs(mainFlowYi) / Math.max(1, sector.upCount);
+      if (mainFlowYi > 0) {
+        mainRatioScore = Math.max(0, Math.min(10, perStock * 20)); // 每只0.5亿即满分
+      } else {
+        mainRatioScore = 0;
+      }
+    }
+    fundScore += mainRatioScore;
+    details.mainRatioScore = mainRatioScore;
+
+    // 3) 板块上涨家数占比（10分）：上涨家数/(上涨+下跌)，>70%满分
+    const totalActive = (sector.upCount || 0) + (sector.downCount || 0);
+    let upRatioScore = 0;
+    if (totalActive > 0) {
+      const upRatio = sector.upCount / totalActive;
+      upRatioScore = Math.max(0, Math.min(10, (upRatio / 0.7) * 10));
+      details.upRatio = upRatio;
+    } else {
+      details.upRatio = 0.5;
+      upRatioScore = 5; // 无数据保守估计
+    }
+    fundScore += upRatioScore;
+    details.upRatioScore = upRatioScore;
+
+    // 4) 板块换手率（5分）：3-8%健康区间满分
+    const turnover = sector.turnoverPct || 0;
+    let turnoverScore = 0;
+    if (turnover >= 3 && turnover <= 8) {
+      turnoverScore = 5;
+    } else if (turnover > 8 && turnover <= 15) {
+      turnoverScore = 3 + (15 - turnover) / 7 * 2; // 8-15%从3分到5分递减... 不对，过热应该减分
+      turnoverScore = 5 - (turnover - 8) / 7 * 2; // 8-15%: 5→3
+      turnoverScore = Math.max(2, turnoverScore);
+    } else if (turnover > 15) {
+      turnoverScore = 2; // 过热
+    } else if (turnover > 0 && turnover < 3) {
+      turnoverScore = Math.max(1, (turnover / 3) * 5); // 0-3%线性递增
+    } else {
+      turnoverScore = 2; // 无数据保守
+    }
+    fundScore += turnoverScore;
+    details.turnoverScore = turnoverScore;
+    details.fundScore = fundScore;
+
+    // ========== 情绪维度（30分）==========
+    let sentimentScore = 0;
+    // 1) 板块涨幅（15分）：>3%满分，0-3%线性
+    const chg = sector.changePct || 0;
+    let chgScore = 0;
+    if (chg > 0) {
+      chgScore = Math.max(0, Math.min(15, (chg / 3) * 15));
+    } else if (chg < -2) {
+      chgScore = -5; // 大跌反向扣分
+    } else {
+      chgScore = 0;
+    }
+    sentimentScore += chgScore;
+    details.chgScore = chgScore;
+
+    // 2) 板块内涨停股数（10分）：>5只满分（从上涨家数和涨幅估算）
+    // 东财板块API没有直接的涨停股数字段，用上涨家数×涨停率粗略估算
+    // 估算：板块涨幅越大，涨停率越高；上涨家数越多，涨停数越多
+    let limitUpEstimate = 0;
+    if (sector.upCount > 0 && chg > 0) {
+      // 粗略估算：板块涨幅每1%约有2%的个股涨停
+      const limitUpRate = Math.min(0.15, chg * 0.02);
+      limitUpEstimate = Math.round(sector.upCount * limitUpRate);
+    }
+    const limitUpScore = Math.max(0, Math.min(10, (limitUpEstimate / 5) * 10));
+    sentimentScore += limitUpScore;
+    details.limitUpEstimate = limitUpEstimate;
+    details.limitUpScore = limitUpScore;
+
+    // 3) 龙头领涨强度（5分）：板块内涨幅最大的几只平均涨幅
+    // 没有成分股数据时，用板块涨幅×1.5作为龙头涨幅估计（龙头涨幅通常是板块平均的1.5-2倍）
+    let leaderStrengthScore = 0;
+    if (chg > 0) {
+      const leaderChg = chg * 1.8;
+      leaderStrengthScore = Math.max(0, Math.min(5, (leaderChg / 6) * 5)); // 6%涨幅满分
+    }
+    sentimentScore += leaderStrengthScore;
+    details.leaderStrengthScore = leaderStrengthScore;
+    sentimentScore = Math.max(0, sentimentScore); // 情绪不低于0
+    details.sentimentScore = sentimentScore;
+
+    // ========== 趋势维度（30分）==========
+    let trendScore = 0;
+    // 1) 连续上榜天数（10分）：从昨日快照推断
+    let consecutiveDays = 1;
+    if (prev && prev.consecutiveDays) {
+      consecutiveDays = prev.consecutiveDays + 1;
+    } else if (prev) {
+      consecutiveDays = 2; // 昨日也在榜
+    }
+    const consecutiveScore = Math.min(10, consecutiveDays * 3); // 1天=3分，2天=6分，3天以上=10分
+    trendScore += consecutiveScore;
+    details.consecutiveDays = consecutiveDays;
+    details.consecutiveScore = consecutiveScore;
+
+    // 2) 涨幅加速度（10分）：今日涨幅 vs 昨日涨幅的变化
+    let accelScore = 5; // 无历史数据给5分基准
+    if (prev && prev.changePct != null) {
+      const accel = chg - prev.changePct;
+      if (accel > 0) {
+        accelScore = Math.min(10, 5 + accel * 2); // 加速上涨加分
+      } else {
+        accelScore = Math.max(0, 5 + accel * 2); // 减速或转跌减分
+      }
+    }
+    trendScore += accelScore;
+    details.accelScore = accelScore;
+
+    // 3) 量能放大（10分）：今日换手率 vs 前日换手率之比
+    let volumeBoostScore = 5; // 无历史数据给5分基准
+    if (prev && prev.turnoverPct && prev.turnoverPct > 0) {
+      const ratio = turnover / prev.turnoverPct;
+      if (ratio >= 1.5) {
+        volumeBoostScore = 10; // 放量50%以上满分
+      } else if (ratio >= 1.1) {
+        volumeBoostScore = 7 + (ratio - 1.1) / 0.4 * 3; // 1.1-1.5: 7→10
+      } else if (ratio >= 0.8) {
+        volumeBoostScore = 5 + (ratio - 0.8) / 0.3 * 2; // 0.8-1.1: 5→7
+      } else {
+        volumeBoostScore = Math.max(1, ratio / 0.8 * 5); // <0.8: 缩量
+      }
+    }
+    trendScore += volumeBoostScore;
+    details.volumeBoostScore = volumeBoostScore;
+    details.trendScore = trendScore;
+
+    // ========== 总分 ==========
+    const totalScore = Math.round(fundScore + sentimentScore + trendScore);
+
+    return {
+      totalScore,
+      fundScore: Math.round(fundScore),
+      sentimentScore: Math.round(sentimentScore),
+      trendScore: Math.round(trendScore),
+      details
+    };
+  },
+
+  /** v4.4 P15: 行业-概念模糊匹配（判断概念板块与行业板块是否相关）
+   * 采用关键词重叠+语义近似的降级方案
+   */
+  _matchConceptToIndustry(conceptName, industryName) {
+    if (!conceptName || !industryName) return false;
+    const c = conceptName.replace(/板块|概念|指数|ETF/g, '');
+    const ind = industryName.replace(/行业|板块|指数/g, '');
+
+    // 完全包含
+    if (c.indexOf(ind) >= 0 || ind.indexOf(c) >= 0) return true;
+
+    // 常见的行业-概念对应关系映射
+    const mapping = [
+      ['半导体', '芯片'],
+      ['半导体', '集成电路'],
+      ['半导体', '第三代半导体'],
+      ['电子元件', '消费电子'],
+      ['电子元件', 'PCB'],
+      ['电子元件', 'MLCC'],
+      ['通信设备', '5G'],
+      ['通信设备', '6G'],
+      ['通信设备', '算力'],
+      ['计算机设备', 'AI'],
+      ['计算机设备', '人工智能'],
+      ['软件开发', 'AI'],
+      ['软件开发', '人工智能'],
+      ['软件开发', '信创'],
+      ['软件开发', '国产软件'],
+      ['互联网服务', 'AI'],
+      ['互联网服务', '算力'],
+      ['互联网服务', '大模型'],
+      ['电力设备', '新能源'],
+      ['电力设备', '光伏'],
+      ['电力设备', '储能'],
+      ['电力设备', '锂电池'],
+      ['汽车整车', '新能源汽车'],
+      ['汽车零部件', '新能源汽车'],
+      ['汽车零部件', '汽车电子'],
+      ['电池', '锂电池'],
+      ['电池', '储能'],
+      ['电池', '动力电池'],
+      ['光伏设备', '光伏'],
+      ['光伏设备', 'HJT'],
+      ['风电设备', '风电'],
+      ['风电设备', '海上风电'],
+      ['环保', '碳中和'],
+      ['环保', '碳交易'],
+      ['钢铁', '特钢'],
+      ['钢铁', '钢铁碳中和'],
+      ['有色金属', '小金属'],
+      ['有色金属', '稀土'],
+      ['有色金属', '锂矿'],
+      ['化学制品', '化工'],
+      ['化学制品', '新材料'],
+      ['医药商业', '医药电商'],
+      ['中药', '中医药'],
+      ['中药', '新冠药'],
+      ['化学制药', '创新药'],
+      ['化学制药', 'CRO'],
+      ['医疗器械', '医疗设备'],
+      ['医疗器械', '体外诊断'],
+      ['生物制品', '生物科技'],
+      ['生物制品', '疫苗'],
+      ['证券', '券商'],
+      ['证券', '大金融'],
+      ['银行', '大金融'],
+      ['保险', '大金融'],
+      ['房地产开发', '房地产'],
+      ['房地产开发', '保障房'],
+      ['建筑装饰', '基建'],
+      ['建筑材料', '基建'],
+      ['水泥建材', '基建'],
+      ['煤炭', '煤炭开采'],
+      ['煤炭', '煤化工'],
+      ['石油', '油气'],
+      ['石油', '石油开采'],
+      ['燃气', '天然气'],
+      ['公用事业', '电力'],
+      ['电力', '绿电'],
+      ['电力', '核电'],
+      ['航空机场', '民航'],
+      ['航空机场', '免税'],
+      ['航运港口', '航运'],
+      ['航运港口', '一带一路'],
+      ['物流', '快递'],
+      ['物流', '跨境电商'],
+      ['零售', '新零售'],
+      ['零售', '免税'],
+      ['食品饮料', '消费'],
+      ['食品饮料', '白酒'],
+      ['食品饮料', '调味品'],
+      ['家电', '消费电子'],
+      ['家电', '智能家居'],
+      ['纺织服装', '纺织'],
+      ['纺织服装', '消费'],
+      ['农林牧渔', '乡村振兴'],
+      ['农林牧渔', '养猪'],
+      ['国防军工', '军工'],
+      ['国防军工', '航天'],
+      ['国防军工', '无人机'],
+      ['造纸', '纸浆'],
+      ['包装印刷', '包装'],
+      ['传媒', '游戏'],
+      ['传媒', 'AIGC'],
+      ['传媒', '影视'],
+      ['传媒', '短剧'],
+      ['文化传媒', '游戏'],
+      ['文化传媒', 'AI'],
+      ['旅游酒店', '旅游'],
+      ['旅游酒店', '酒店'],
+      ['旅游酒店', '消费复苏'],
+      ['教育', '在线教育'],
+      ['教育', 'AI教育'],
+      ['美容护理', '医美'],
+      ['美容护理', '化妆品'],
+      ['贵金属', '黄金'],
+      ['贵金属', '白银'],
+      ['工程建设', '一带一路'],
+      ['工程建设', '中字头'],
+      ['装修装饰', '装修'],
+      ['交运设备', '高铁'],
+      ['交运设备', '轨道交通'],
+    ];
+    for (const pair of mapping) {
+      if (ind.indexOf(pair[0]) >= 0 && c.indexOf(pair[1]) >= 0) return true;
+      if (c.indexOf(pair[0]) >= 0 && ind.indexOf(pair[1]) >= 0) return true;
+    }
+
+    // 单字重叠度（两个词共享≥2个汉字则认为相关）
+    let shared = 0;
+    for (let i = 0; i < c.length; i++) {
+      if (ind.indexOf(c[i]) >= 0) shared++;
+    }
+    if (shared >= 2 && shared >= Math.min(c.length, ind.length) * 0.4) return true;
+
+    return false;
+  },
+
   /** 全市场活跃股（按成交额排序）—— 板块API全部失败时的最终降级 */
   async fetchTopMarketStocks(topN = 50) {  // v4.3: 调用方可传更大值（如500）以覆盖自选股行业/资金数据
     const cacheKey = 'topMarketStocks_' + topN;
@@ -2828,6 +3137,7 @@ const Navigation = {
     if (pageName === 'home') {
       try { NextDayPrediction.renderLatest(); } catch(e) { console.warn('[NextDay] render error:', e); }
       try { if (typeof HomeLedger !== 'undefined') HomeLedger.render(); } catch(e) { console.warn('[HomeLedger] render error:', e); }
+      try { NextDayPrediction._renderSectorHeatBar(); } catch(e) { console.warn('[板块热度榜] render error:', e); }
     }
   },
 
@@ -5224,10 +5534,14 @@ const NextDayPrediction = {
         return;
       }
 
-      // 热门行业统计（板块共振用）
-      const hotIndustries = this._hotIndustries(stocks);
+      // 热门行业统计（板块共振用）v4.4 P15: 三维热度版
+      const hotIndustries = this._hotIndustries(stocks, { prevSnap });
       const indMap = {};
-      hotIndustries.forEach(x => { indMap[x.name] = x.score; });
+      const industryHeatMap = {}; // 行业名 → 完整热度数据
+      hotIndustries.forEach(x => {
+        indMap[x.name] = x.score;
+        industryHeatMap[x.name] = x;
+      });
       // v4.4 P3: 板块持续性判断（对比昨日快照热门行业TOP8）
       const persistentSet = new Set();
       const newHotSet = new Set();
@@ -5242,6 +5556,24 @@ const NextDayPrediction = {
         // 无历史数据时，今日全算新上榜
         top5Today.forEach(name => newHotSet.add(name));
       }
+
+      // v4.4 P15: 获取概念板块用于概念共振叠加
+      let conceptSectors = [];
+      try {
+        conceptSectors = await DataAPI.fetchConceptSectors(30);
+      } catch (e) { console.warn('概念板块获取失败', e); conceptSectors = []; }
+      // TOP10热门概念
+      const topConcepts = conceptSectors.slice(0, 10);
+      // 行业→相关热门概念映射
+      const industryToConcepts = {};
+      hotIndustries.forEach(ind => {
+        industryToConcepts[ind.name] = [];
+        topConcepts.forEach(concept => {
+          if (DataAPI._matchConceptToIndustry(concept.name, ind.name)) {
+            industryToConcepts[ind.name].push(concept.name);
+          }
+        });
+      });
 
       setStatus('第2步/5：资金面与量价初筛（' + stocks.length + '只）...');
       const scored = [];
@@ -5274,6 +5606,10 @@ const NextDayPrediction = {
             // v4.4 P3: 板块持续性标记
             s._sectorPersistent = s.industry ? persistentSet.has(s.industry) : false;
             s._sectorNewHot = s.industry ? newHotSet.has(s.industry) : false;
+            // v4.4 P15: 板块三维热度数据
+            s._sectorHeat = s.industry ? (industryHeatMap[s.industry] || null) : null;
+            // v4.4 P15: 概念共振匹配（该行业命中的热门概念数）
+            s._matchedConcepts = s.industry ? (industryToConcepts[s.industry] || []) : [];
             const v = this._v2Score(s);
             s.techScore = v.score;
             s.techRisks = v.risks;
@@ -5427,28 +5763,69 @@ const NextDayPrediction = {
     return { adjust, tag };
   },
 
-  // ---------- 热门行业（板块共振） ----------
-  _hotIndustries(stocks) {
+  // ---------- 热门行业（板块共振·v4.4 P15 三维热度版） ----------
+  _hotIndustries(stocks, opts) {
+    opts = opts || {};
     const map = {};
     for (const s of stocks) {
       const ind = s.industry;
       if (!ind) continue;
-      if (!map[ind]) map[ind] = { name: ind, count: 0, chgSum: 0, amount: 0, flow: 0 };
+      if (!map[ind]) map[ind] = { name: ind, count: 0, chgSum: 0, amount: 0, flow: 0, upCount: 0, downCount: 0, turnoverSum: 0 };
       const m = map[ind];
       m.count++;
       m.chgSum += (s.changePct || 0);
       m.amount += (s.amount || 0);
       m.flow += (s.mainFlow || 0);
+      if ((s.changePct || 0) > 0) m.upCount++;
+      else m.downCount++;
+      m.turnoverSum += (s.turnover || 0);
     }
-    return Object.values(map)
+    const prevSnap = opts.prevSnap || null;
+    const prevHot = prevSnap && prevSnap.hotIndustries ? prevSnap.hotIndustries : [];
+    const prevMap = {};
+    prevHot.forEach(p => { prevMap[p.name] = p; });
+
+    const list = Object.values(map)
       .filter(m => m.count >= 3)
-      .map(m => ({
-        name: m.name,
-        avgChg: m.chgSum / m.count,
-        score: m.avgChg * 2 + Math.min(6, m.count * 0.5) + (m.flow > 0 ? 2 : 0)
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
+      .map(m => {
+        const avgChg = m.chgSum / m.count;
+        const avgTurnover = m.turnoverSum / m.count;
+        // 构造板块对象传入三维评分
+        const sectorObj = {
+          name: m.name,
+          changePct: avgChg,
+          mainFlow: m.flow,
+          turnoverPct: avgTurnover,
+          upCount: m.upCount,
+          downCount: m.downCount,
+          amount: m.amount
+        };
+        const prev = prevMap[m.name] || null;
+        const heat = DataAPI.calcSectorHeatScore(sectorObj, { prevSector: prev });
+        return {
+          name: m.name,
+          avgChg,
+          avgTurnover,
+          count: m.count,
+          totalFlow: m.flow,
+          upCount: m.upCount,
+          downCount: m.downCount,
+          totalAmount: m.amount,
+          // v4.4 P15: 三维热度评分
+          heatScore: heat.totalScore,
+          fundScore: heat.fundScore,
+          sentimentScore: heat.sentimentScore,
+          trendScore: heat.trendScore,
+          heatDetails: heat.details,
+          consecutiveDays: heat.details.consecutiveDays || 1,
+          // 保留旧版score字段，向下兼容
+          score: heat.totalScore * 0.2 + avgChg * 2 + Math.min(6, m.count * 0.5) + (m.flow > 0 ? 2 : 0)
+        };
+      })
+      .sort((a, b) => b.heatScore - a.heatScore)
+      .slice(0, 10);
+
+    return list;
   },
 
   // ---------- 预筛打分（当日资金面+量价，仅用于初筛排序） ----------
@@ -6047,14 +6424,20 @@ const NextDayPrediction = {
     f4 = Math.max(-5, Math.min(22, f4));  // 维度4上限20+2振幅加分=22，下限-5
     score += f4;
 
-    // ===== 维度5：板块共振（12分）=====
+    // ===== 维度5：板块共振（v4.4 P15 三维增强版，上限22分）=====
     let f5 = 0;
     const indScore = s._indScore || 0;
+    const heat = s._sectorHeat || null;
+    const changePct = s.changePct || 0;
+    const sectorChg = heat ? heat.avgChg : 0;
+
+    // 基础分（板块强弱，原12分体系）
     if (s.industry && indScore >= 18) { f5 += 12; factors.push('所属「' + s.industry + '」板块今日领涨'); }
     else if (s.industry && indScore >= 12) { f5 += 8; factors.push('「' + s.industry + '」板块偏强'); }
     else if (s.industry && indScore >= 6) f5 += 4;
     else if (s.industry) f5 += 0;
-    // v4.4 P3: 板块持续性加分（连续2日出现在热门板块TOP5 → 说明资金抱团不是一日游）
+
+    // v4.4 P3: 板块持续性加分（连续2日出现在热门板块TOP5）
     if (s.industry && s._sectorPersistent === true) {
       f5 += 2;
       if (!factors.some(f => f.indexOf(s.industry) >= 0)) {
@@ -6063,10 +6446,61 @@ const NextDayPrediction = {
         factors.push('板块连续领涨，资金抱团持续性强');
       }
     } else if (s.industry && s._sectorNewHot === true) {
-      // 新上榜板块给中等加分（新题材刚启动）
       factors.push('「' + s.industry + '」为新启动热门板块');
     }
-    f5 = Math.min(14, f5); // 维度5上限12+持续性2=14
+
+    // v4.4 P15 增强1：板块赚钱效应因子（+3分上限）
+    if (heat && heat.upCount != null && heat.downCount != null) {
+      const total = heat.upCount + heat.downCount;
+      if (total > 0) {
+        const upRatio = heat.upCount / total;
+        if (upRatio > 0.8) {
+          f5 += 3;
+          factors.push('板块赚钱效应极强，几乎普涨');
+        } else if (upRatio >= 0.6) {
+          f5 += 2;
+          factors.push('板块赚钱效应好，多数个股上涨');
+        } else if (upRatio >= 0.4) {
+          f5 += 1;
+        } else if (upRatio >= 0.2) {
+          f5 += 0;
+        } else if (sectorChg > 0) {
+          f5 -= 1;
+          risks.push('板块指数涨但个股普跌，属权重股拉抬，持续性存疑');
+        }
+      }
+    }
+
+    // v4.4 P15 增强2：多重概念共振（+3分上限）
+    const matchedConcepts = s._matchedConcepts || [];
+    // 行业本身在TOP10的情况下，叠加相关热门概念
+    const indInTop10 = s._sectorNewHot === true || s._sectorPersistent === true || indScore >= 12;
+    if (s.industry && indInTop10 && matchedConcepts.length > 0) {
+      const conceptCount = matchedConcepts.length + 1; // +1 行业本身
+      if (conceptCount >= 3) {
+        f5 += 3;
+        factors.push('多概念叠加共振（' + s.industry + '+' + matchedConcepts.slice(0, 2).join('+') + '等）');
+      } else if (conceptCount >= 2) {
+        f5 += 2;
+        factors.push('多重概念共振：' + s.industry + '+' + matchedConcepts[0]);
+      }
+    }
+
+    // v4.4 P15 增强3：板块龙头/跟风识别（+2/-2分）
+    if (s.industry && sectorChg !== 0) {
+      if (sectorChg > 2 && changePct > sectorChg * 1.5) {
+        f5 += 2;
+        factors.push('板块领涨龙头');
+      } else if (sectorChg > 2 && changePct < sectorChg * 0.5 && changePct > 0) {
+        f5 -= 1;
+        risks.push('板块强但个股弱，非领涨品种');
+      } else if (sectorChg < 0 && changePct > 0) {
+        f5 += 1;
+        factors.push('逆势走强，独立于板块');
+      }
+    }
+
+    f5 = Math.max(-2, Math.min(22, f5)); // v4.4 P15: 维度5上限22（基础12+持续2+赚钱效应3+概念共振3+龙头2=22）
     score += f5;
 
     // ===== 维度6：事件催化（8分）=====
@@ -6273,7 +6707,7 @@ const NextDayPrediction = {
     });
     html += '</div>';
     html += '<div style="margin:10px 0 4px;display:flex;gap:8px"><button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">📊 历史验证台账（胜率统计 · 因子IC · 单股回溯）</button></div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P13：资金分层25（含撬动效率+高控盘识别） · 量价筹码26（含换手健康度） · 趋势技术26（含BOLL/CCI/DMI/RSI黄金区） · 位置动量22（含5日振幅过滤+均值回归校准） · 板块共振14 · 龙虎榜催化12，大盘情绪全局±10。前置量化筛选：剔除ST/涨跌停/妖股/情绪过热/低市值。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P15：资金分层25（含撬动效率+高控盘识别） · 量价筹码26（含换手健康度） · 趋势技术26（含BOLL/CCI/DMI/RSI黄金区） · 位置动量22（含5日振幅过滤+均值回归校准） · 板块共振22（资金/情绪/趋势三维评分+赚钱效应+概念共振+龙头识别） · 龙虎榜催化12，大盘情绪全局±10。前置量化筛选：剔除ST/涨跌停/妖股/情绪过热/低市值。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
@@ -6284,6 +6718,143 @@ const NextDayPrediction = {
     const snaps = this._loadSnapshots();
     if (snaps.length === 0) return; // 保留HTML中的默认提示
     this._renderList(snaps[0]);
+  },
+
+  // ---------- v4.4 P15: 首页板块热度榜 ----------
+  async _renderSectorHeatBar() {
+    const scroller = document.getElementById('sectorHeatScroller');
+    if (!scroller) return;
+    scroller.innerHTML = '<div class="loading-pulse" style="padding:16px;font-size:12px">加载中...</div>';
+
+    try {
+      // 优先用行业板块排行（真实数据），失败降级到从快照取
+      let sectors = [];
+      try {
+        sectors = await DataAPI.fetchSectorRank(20);
+      } catch (e) { console.warn('板块热度榜：行业板块获取失败', e); }
+
+      if (sectors.length === 0) {
+        // 降级：从本地快照取热门行业
+        const snaps = this._loadSnapshots();
+        if (snaps.length > 0 && snaps[0].hotIndustries) {
+          sectors = snaps[0].hotIndustries.map(h => ({
+            name: h.name,
+            changePct: h.avgChg || 0,
+            mainFlow: h.totalFlow || 0,
+            turnoverPct: h.avgTurnover || 0,
+            upCount: h.upCount || 0,
+            downCount: h.downCount || 0,
+            code: 'snap_' + h.name
+          }));
+        }
+      }
+
+      if (sectors.length === 0) {
+        scroller.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted)">暂无板块数据</div>';
+        return;
+      }
+
+      // 取昨日快照用于持续性判断
+      const snaps = this._loadSnapshots();
+      const prevSnap = snaps[1] || snaps[0] || null;
+      const prevMap = {};
+      if (prevSnap && prevSnap.hotIndustries) {
+        prevSnap.hotIndustries.forEach(h => { prevMap[h.name] = h; });
+      }
+
+      // 计算每个板块的三维热度分
+      const heatSectors = sectors.map((sec, idx) => {
+        const prev = prevMap[sec.name] || null;
+        const heat = DataAPI.calcSectorHeatScore(sec, { prevSector: prev });
+        return { ...sec, heat, rank: idx + 1 };
+      }).sort((a, b) => b.heat.totalScore - a.heat.totalScore);
+
+      const top8 = heatSectors.slice(0, 8);
+
+      let html = '';
+      top8.forEach(sec => {
+        const heatScore = sec.heat.totalScore;
+        // 热度颜色：红→黄→绿
+        let heatColor = '#ff6b6b';
+        if (heatScore < 60) heatColor = '#ffd93d';
+        if (heatScore < 40) heatColor = '#6bcb77';
+        const chgColor = sec.changePct >= 0 ? 'var(--color-up)' : 'var(--color-down)';
+        const flowStr = Utils.formatAmount(Math.abs(sec.mainFlow || 0));
+        const flowDir = (sec.mainFlow || 0) >= 0 ? '流入' : '流出';
+        const flowColor = (sec.mainFlow || 0) >= 0 ? 'var(--color-up)' : 'var(--color-down)';
+
+        html += '<div class="sector-heat-card" onclick="NextDayPrediction._showSectorPopup(\'' + sec.code + '\',\'' + sec.name.replace(/'/g, '\\\'') + '\')">'
+          + '<div class="shc-header">'
+          +   '<span class="shc-name" title="' + sec.name + '">' + sec.name + '</span>'
+          +   '<span class="shc-chg" style="color:' + chgColor + '">' + (sec.changePct >= 0 ? '+' : '') + sec.changePct.toFixed(2) + '%</span>'
+          + '</div>'
+          + '<div class="shc-flow" style="color:' + flowColor + '">主力' + flowDir + flowStr + '</div>'
+          // 三维进度条
+          + '<div class="shc-heat-bars">'
+          +   '<div class="shc-bar-row"><span class="shc-bar-label">资金</span><div class="shc-bar-bg"><div class="shc-bar-fill" style="width:' + (sec.heat.fundScore / 40 * 100) + '%;background:linear-gradient(90deg,#ff6b6b,#ffa502)"></div></div><span class="shc-bar-val">' + sec.heat.fundScore + '/40</span></div>'
+          +   '<div class="shc-bar-row"><span class="shc-bar-label">情绪</span><div class="shc-bar-bg"><div class="shc-bar-fill" style="width:' + (sec.heat.sentimentScore / 30 * 100) + '%;background:linear-gradient(90deg,#ffa502,#ffd93d)"></div></div><span class="shc-bar-val">' + sec.heat.sentimentScore + '/30</span></div>'
+          +   '<div class="shc-bar-row"><span class="shc-bar-label">趋势</span><div class="shc-bar-bg"><div class="shc-bar-fill" style="width:' + (sec.heat.trendScore / 30 * 100) + '%;background:linear-gradient(90deg,#00d4ff,#6bcb77)"></div></div><span class="shc-bar-val">' + sec.heat.trendScore + '/30</span></div>'
+          + '</div>'
+          + '<div class="shc-score-row">'
+          +   '<span class="shc-total-label">热度分</span>'
+          +   '<span class="shc-total-val" style="color:' + heatColor + '">' + heatScore + '</span>'
+          +   '<span class="shc-rank-badge">TOP' + sec.rank + '</span>'
+          + '</div>'
+          + '</div>';
+      });
+
+      scroller.innerHTML = html;
+    } catch (e) {
+      console.warn('[板块热度榜] 渲染失败:', e);
+      scroller.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted)">加载失败</div>';
+    }
+  },
+
+  // ---------- v4.4 P15: 板块热度卡片点击弹出板块内个股 ----------
+  _sectorPopupVisible: false,
+  async _showSectorPopup(sectorCode, sectorName) {
+    // 移除已有浮层
+    const old = document.getElementById('sectorHeatPopup');
+    if (old) old.remove();
+
+    const popup = document.createElement('div');
+    popup.id = 'sectorHeatPopup';
+    popup.className = 'sector-heat-popup';
+    popup.innerHTML = '<div class="shp-header"><span class="shp-title">' + sectorName + ' · 成分股TOP5</span><button class="shp-close" onclick="document.getElementById(\'sectorHeatPopup\').remove()">✕</button></div>'
+      + '<div class="shp-body"><div class="loading-pulse">加载中...</div></div>';
+    document.body.appendChild(popup);
+
+    try {
+      let stocks = [];
+      if (sectorCode.startsWith('snap_')) {
+        stocks = []; // 快照模式下无成分股数据
+      } else {
+        stocks = await DataAPI.fetchSectorStocks(sectorCode, 5);
+      }
+      const body = popup.querySelector('.shp-body');
+      if (!stocks || stocks.length === 0) {
+        body.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted);text-align:center">暂无成分股数据</div>';
+        return;
+      }
+      let html = '';
+      stocks.forEach(s => {
+        const chgColor = s.changePct >= 0 ? 'var(--color-up)' : 'var(--color-down)';
+        html += '<div class="shp-stock" onclick="NextDayPrediction._closeSectorPopup();App.analyzeStock(\'' + s.code + '\')">'
+          + '<div class="shp-stock-name">' + s.name + '</div>'
+          + '<div class="shp-stock-code">' + s.rawCode + '</div>'
+          + '<div class="shp-stock-chg" style="color:' + chgColor + '">' + (s.changePct >= 0 ? '+' : '') + s.changePct.toFixed(2) + '%</div>'
+          + '</div>';
+      });
+      body.innerHTML = html;
+    } catch (e) {
+      console.warn('板块成分股加载失败:', e);
+      const body = popup.querySelector('.shp-body');
+      if (body) body.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text-muted);text-align:center">加载失败</div>';
+    }
+  },
+  _closeSectorPopup() {
+    const p = document.getElementById('sectorHeatPopup');
+    if (p) p.remove();
   },
 
   // ---------- 隔日核实 ----------
@@ -9290,7 +9861,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard', 'shareholderCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -9367,6 +9938,9 @@ const App = {
 
       // v4.4 P12: 股东结构分析（异步，不阻塞主流程）
       this.renderShareholder(code).catch(e => console.warn('[分析] renderShareholder异常:', e));
+
+      // v4.4 P15: 板块热度详情（异步，不阻塞主流程）
+      this._renderSectorHeatDetail(quote, code).catch(e => console.warn('[分析] 板块热度详情异常:', e));
 
     } catch (e) {
       console.error('Analysis error:', e);
@@ -10252,6 +10826,188 @@ const App = {
     } catch (e) {
       console.warn('[股东] renderShareholder异常:', e);
     }
+  },
+
+  /** v4.4 P15: 渲染板块热度详情（分析页） */
+  async _renderSectorHeatDetail(quote, code) {
+    const card = document.getElementById('sectorHeatCard');
+    const container = document.getElementById('sectorHeatDetail');
+    if (!card || !container) return;
+
+    try {
+      // 获取行业板块排行
+      const allSectors = await DataAPI.fetchSectorRank(50).catch(() => []);
+      if (allSectors.length === 0) {
+        // 降级：从快照热门行业匹配
+        const snaps = NextDayPrediction._loadSnapshots();
+        if (snaps.length > 0 && snaps[0].hotIndustries) {
+          const matched = snaps[0].hotIndustries.find(h => quote.industry && h.name === quote.industry);
+          if (matched) {
+            this._renderSectorHeatFromSnapshot(matched, quote, snaps[0].hotIndustries.length);
+            return;
+          }
+        }
+        card.style.display = 'none';
+        return;
+      }
+
+      // 找到该股票所属行业板块
+      const industry = quote.industry || '';
+      let sector = null;
+      let rank = -1;
+      for (let i = 0; i < allSectors.length; i++) {
+        // 模糊匹配：板块名包含行业名或行业名包含板块名
+        if (industry && (allSectors[i].name.indexOf(industry) >= 0 || industry.indexOf(allSectors[i].name) >= 0)) {
+          sector = allSectors[i];
+          rank = i + 1;
+          break;
+        }
+      }
+
+      if (!sector) {
+        card.style.display = 'none';
+        return;
+      }
+
+      // 获取昨日快照用于持续性判断
+      const snaps = NextDayPrediction._loadSnapshots();
+      const prevSnap = snaps[1] || snaps[0] || null;
+      let prev = null;
+      if (prevSnap && prevSnap.hotIndustries) {
+        prev = prevSnap.hotIndustries.find(h => h.name === sector.name || sector.name.indexOf(h.name) >= 0) || null;
+      }
+
+      // 计算三维热度分
+      const heat = DataAPI.calcSectorHeatScore(sector, { prevSector: prev });
+      const totalSectors = allSectors.length;
+
+      // 渲染
+      this.showSection('sectorHeatCard', true);
+      const heatScore = heat.totalScore;
+      let heatLabel = '冷';
+      let heatColor = '#6bcb77';
+      if (heatScore >= 70) { heatLabel = '火热'; heatColor = '#ff4757'; }
+      else if (heatScore >= 50) { heatLabel = '偏热'; heatColor = '#ffa502'; }
+      else if (heatScore >= 30) { heatLabel = '温和'; heatColor = '#ffd93d'; }
+
+      const upRatio = (sector.upCount + sector.downCount) > 0 ? (sector.upCount / (sector.upCount + sector.downCount) * 100).toFixed(0) : '--';
+      const consecDays = heat.details.consecutiveDays || 1;
+      const persistentTag = consecDays >= 3 ? '<span class="shd-tag hot">连续' + consecDays + '日在榜</span>'
+        : consecDays >= 2 ? '<span class="shd-tag warm">连续' + consecDays + '日在榜</span>'
+        : '<span class="shd-tag new">新上榜</span>';
+
+      container.innerHTML = `
+        <div class="shd-top">
+          <div class="shd-sector-name">${sector.name}
+            ${persistentTag}
+          </div>
+          <div class="shd-rank">板块排名 <span class="shd-rank-num">${rank}</span> / ${totalSectors}</div>
+        </div>
+        <div class="shd-heat-ring">
+          <div class="shd-ring-score" style="color:${heatColor}">${heatScore}</div>
+          <div class="shd-ring-label">三维热度总分</div>
+          <div class="shd-ring-sub" style="color:${heatColor}">${heatLabel}</div>
+        </div>
+        <div class="shd-dim-grid">
+          <div class="shd-dim-item">
+            <div class="shd-dim-header">
+              <span class="shd-dim-icon">💰</span>
+              <span class="shd-dim-name">资金维度</span>
+              <span class="shd-dim-val">${heat.fundScore}/40</span>
+            </div>
+            <div class="shd-dim-bar"><div class="shd-dim-fill fund" style="width:${heat.fundScore / 40 * 100}%"></div></div>
+            <div class="shd-dim-sub">主力净流入 · 上涨家数占比 · 换手率</div>
+          </div>
+          <div class="shd-dim-item">
+            <div class="shd-dim-header">
+              <span class="shd-dim-icon">🔥</span>
+              <span class="shd-dim-name">情绪维度</span>
+              <span class="shd-dim-val">${heat.sentimentScore}/30</span>
+            </div>
+            <div class="shd-dim-bar"><div class="shd-dim-fill sentiment" style="width:${heat.sentimentScore / 30 * 100}%"></div></div>
+            <div class="shd-dim-sub">板块涨幅 · 涨停股数估算 · 龙头强度</div>
+          </div>
+          <div class="shd-dim-item">
+            <div class="shd-dim-header">
+              <span class="shd-dim-icon">📈</span>
+              <span class="shd-dim-name">趋势维度</span>
+              <span class="shd-dim-val">${heat.trendScore}/30</span>
+            </div>
+            <div class="shd-dim-bar"><div class="shd-dim-fill trend" style="width:${heat.trendScore / 30 * 100}%"></div></div>
+            <div class="shd-dim-sub">连续上榜 · 涨幅加速度 · 量能放大</div>
+          </div>
+        </div>
+        <div class="shd-stats">
+          <div class="shd-stat-item">
+            <span class="shd-stat-label">板块涨幅</span>
+            <span class="shd-stat-val" style="color:${sector.changePct >= 0 ? 'var(--color-up)' : 'var(--color-down)'}">${sector.changePct >= 0 ? '+' : ''}${sector.changePct.toFixed(2)}%</span>
+          </div>
+          <div class="shd-stat-item">
+            <span class="shd-stat-label">主力净流入</span>
+            <span class="shd-stat-val" style="color:${sector.mainFlow >= 0 ? 'var(--color-up)' : 'var(--color-down)'}">${Utils.formatAmount(sector.mainFlow)}</span>
+          </div>
+          <div class="shd-stat-item">
+            <span class="shd-stat-label">上涨/下跌</span>
+            <span class="shd-stat-val"><span style="color:var(--color-up)">${sector.upCount}只</span> / <span style="color:var(--color-down)">${sector.downCount}只</span></span>
+          </div>
+          <div class="shd-stat-item">
+            <span class="shd-stat-label">上涨占比</span>
+            <span class="shd-stat-val">${upRatio}%</span>
+          </div>
+          <div class="shd-stat-item">
+            <span class="shd-stat-label">换手率</span>
+            <span class="shd-stat-val">${(sector.turnoverPct || 0).toFixed(2)}%</span>
+          </div>
+        </div>
+        <div class="shd-tip">💡 热度分越高，说明板块资金、情绪、趋势三者共振越强，板块内个股次日延续上涨概率相对更高。</div>
+      `;
+    } catch (e) {
+      console.warn('[板块热度详情] 渲染失败:', e);
+      card.style.display = 'none';
+    }
+  },
+
+  _renderSectorHeatFromSnapshot(matched, quote, totalCount) {
+    // 降级：用快照数据渲染简化版
+    const card = document.getElementById('sectorHeatCard');
+    const container = document.getElementById('sectorHeatDetail');
+    if (!card || !container || !matched) { card.style.display = 'none'; return; }
+    this.showSection('sectorHeatCard', true);
+    const heatScore = matched.heatScore || 0;
+    const fund = matched.fundScore || 0;
+    const sent = matched.sentimentScore || 0;
+    const trend = matched.trendScore || 0;
+    const upRatio = (matched.upCount + matched.downCount) > 0
+      ? (matched.upCount / (matched.upCount + matched.downCount) * 100).toFixed(0) : '--';
+    container.innerHTML = `
+      <div class="shd-top">
+        <div class="shd-sector-name">${matched.name}<span class="shd-tag warm">快照数据</span></div>
+        <div class="shd-rank">热门榜第 ${heatScore > 0 ? 'N' : '--'} 名</div>
+      </div>
+      <div class="shd-heat-ring">
+        <div class="shd-ring-score">${heatScore}</div>
+        <div class="shd-ring-label">三维热度总分</div>
+      </div>
+      <div class="shd-dim-grid">
+        <div class="shd-dim-item">
+          <div class="shd-dim-header"><span class="shd-dim-icon">💰</span><span class="shd-dim-name">资金维度</span><span class="shd-dim-val">${fund}/40</span></div>
+          <div class="shd-dim-bar"><div class="shd-dim-fill fund" style="width:${fund / 40 * 100}%"></div></div>
+        </div>
+        <div class="shd-dim-item">
+          <div class="shd-dim-header"><span class="shd-dim-icon">🔥</span><span class="shd-dim-name">情绪维度</span><span class="shd-dim-val">${sent}/30</span></div>
+          <div class="shd-dim-bar"><div class="shd-dim-fill sentiment" style="width:${sent / 30 * 100}%"></div></div>
+        </div>
+        <div class="shd-dim-item">
+          <div class="shd-dim-header"><span class="shd-dim-icon">📈</span><span class="shd-dim-name">趋势维度</span><span class="shd-dim-val">${trend}/30</span></div>
+          <div class="shd-dim-bar"><div class="shd-dim-fill trend" style="width:${trend / 30 * 100}%"></div></div>
+        </div>
+      </div>
+      <div class="shd-stats">
+        <div class="shd-stat-item"><span class="shd-stat-label">平均涨幅</span><span class="shd-stat-val" style="color:var(--color-up)">+${(matched.avgChg || 0).toFixed(2)}%</span></div>
+        <div class="shd-stat-item"><span class="shd-stat-label">上涨/下跌</span><span class="shd-stat-val"><span style="color:var(--color-up)">${matched.upCount || 0}只</span> / <span style="color:var(--color-down)">${matched.downCount || 0}只</span></span></div>
+        <div class="shd-stat-item"><span class="shd-stat-label">上涨占比</span><span class="shd-stat-val">${upRatio}%</span></div>
+      </div>
+    `;
   },
 
   /** v4.4 P12: 股东类型标签 */
