@@ -6173,7 +6173,87 @@ const NextDayPrediction = {
         risks.push('高换手高波动，情绪过热');
       }
     }
-    f2 = Math.max(-4, Math.min(26, f2));  // 维度2上限24+2换手健康度=26
+    // ===== v4.4-P16: 拥挤度因子（+3/-3分） =====
+    // 拥挤度 = 近20日累计成交额 / 流通市值，近似为近20日换手率累加
+    let crowd20 = 0;
+    let crowdLevel = '';
+    const f2Quote = s._quote || {};
+    const f2CircMktCap = f2Quote.circulatingMarketCap || (f2Quote.totalMarketCap ? f2Quote.totalMarketCap * 0.7 : 0);
+    if (n >= 20 && f2CircMktCap > 0) {
+      // 用近20日成交额累加 ÷ 流通市值
+      let amt20 = 0;
+      for (let ci = n - 20; ci < n; ci++) {
+        amt20 += kl[ci].volume * kl[ci].close;
+      }
+      crowd20 = amt20 / f2CircMktCap;
+    } else if (n >= 20 && s.turnover > 0) {
+      // 降级：用当日换手率 * 20 日量比近似（粗略估计）
+      // 更准确：计算20日成交量之和 / 流通股数 = 换手率累加
+      const vol20 = vols.slice(-20).reduce((a, b) => a + b, 0);
+      // 流通股 = 今日成交额 / (收盘价 * 今日换手率%)
+      const todayAmt = vols[n - 1] * last;
+      const circShares = s.turnover > 0 ? todayAmt / (last * s.turnover / 100) : 0;
+      if (circShares > 0) crowd20 = vol20 / circShares;
+    }
+    if (crowd20 > 0) {
+      const chgPct = s.changePct || 0;
+      if (crowd20 < 0.3 && chgPct > 0) {
+        f2 += 3;
+        factors.push('低拥挤度（' + crowd20.toFixed(2) + '），筹码未过热，上行空间充足');
+        crowdLevel = '低';
+      } else if (crowd20 < 0.5) {
+        f2 += 2;
+        crowdLevel = '较低';
+      } else if (crowd20 < 0.8) {
+        f2 += 1;
+        crowdLevel = '中';
+      } else if (crowd20 < 1.2) {
+        crowdLevel = '偏高';
+      } else if (crowd20 < 1.8) {
+        f2 -= 1;
+        risks.push('拥挤度偏高（' + crowd20.toFixed(2) + '），筹码交换频繁，需警惕多杀多');
+        crowdLevel = '高';
+      } else {
+        f2 -= 3;
+        risks.push('严重拥挤（' + crowd20.toFixed(2) + '），高位换手率极高，短期回调风险大');
+        crowdLevel = '严重';
+      }
+      s._crowd20 = crowd20;
+      s._crowdLevel = crowdLevel;
+    }
+
+    // ===== v4.4-P16: 量能突破因子（+3/-1分） =====
+    // 当日成交额 > 5日均额 × 1.2 倍 = 放量突破
+    let amtRatio = 1;
+    if (n >= 6) {
+      const todayAmt = vols[n - 1] * last;
+      let sumAmt5 = 0;
+      for (let ai = n - 6; ai < n - 1; ai++) {
+        sumAmt5 += vols[ai] * closes[ai];
+      }
+      const avgAmt5 = sumAmt5 / 5;
+      if (avgAmt5 > 0) amtRatio = todayAmt / avgAmt5;
+    }
+    const isYang = kLast.close >= kLast.open;
+    const f3Ma20_v2 = Utils.calcMASeries(closes, 20);
+    const f3v20 = f3Ma20_v2[n - 1];
+    const aboveMa20 = f3v20 && last > f3v20;
+    if (amtRatio >= 1.2) {
+      if (isYang && aboveMa20) {
+        f2 += 3;
+        factors.push('放量突破（量比' + amtRatio.toFixed(2) + '倍），右侧资金进场信号明确');
+      } else if (isYang) {
+        f2 += 2;
+      }
+      // 放量+收阴 不加分（0分）
+    } else if (amtRatio < 0.8 && isYang) {
+      f2 -= 1;
+      risks.push('缩量上涨（量比' + amtRatio.toFixed(2) + '倍），量价背离，持续性存疑');
+    }
+    s._amtRatio5 = amtRatio;
+    s._aboveMa20_v2 = aboveMa20;
+
+    f2 = Math.max(-8, Math.min(32, f2));  // v4.4-P16: 维度2上限26+拥挤度3+量能3=32
     score += f2;
 
     // ===== 维度3：趋势技术（20分）=====
@@ -6320,6 +6400,40 @@ const NextDayPrediction = {
       }
     }
     f3 = Math.max(-4, Math.min(26, f3));  // 维度3上限24+2RSI黄金区=26
+
+    // ===== v4.4-P16: 20日生命线趋势确认（+2/-2分，刚突破额外+1） =====
+    // 收盘价 > 20日均线 且 5日均线 > 20日均线 → +2
+    // 刚站上20日线（昨日在下方今日站上）→ 额外+1
+    // 跌破20日线 → -2
+    const ma5_v3 = Utils.calcMASeries(closes, 5);
+    const ma20_v3 = Utils.calcMASeries(closes, 20);
+    const v5_v3 = ma5_v3[n - 1];
+    const v20_v3 = ma20_v3[n - 1];
+    const prevV20 = n >= 2 ? ma20_v3[n - 2] : null;
+    const prevClose = n >= 2 ? closes[n - 2] : null;
+    if (v20_v3 > 0) {
+      const bias20 = (last - v20_v3) / v20_v3 * 100;
+      s._ma20Bias = bias20;
+      s._ma20Status = last > v20_v3 ? '站上' : '跌破';
+      if (last > v20_v3 && v5_v3 > v20_v3) {
+        f3 += 2;
+        factors.push('站稳20日生命线，短期趋势多头');
+      }
+      // 刚突破：昨日还在20日线下方，今日站上
+      if (prevClose != null && prevV20 != null && prevClose <= prevV20 && last > v20_v3) {
+        f3 += 1;
+        factors.push('刚突破20日线，趋势转强拐点');
+        s._ma20Breakout = true;
+      }
+      // 刚跌破：昨日还在上方，今日跌破
+      if (prevClose != null && prevV20 != null && prevClose > prevV20 && last <= v20_v3) {
+        f3 -= 2;
+        risks.push('跌破20日生命线，短期趋势转弱');
+        s._ma20Breakdown = true;
+      }
+    }
+
+    f3 = Math.max(-6, Math.min(29, f3));  // v4.4-P16: 维度3上限26+2生命线+1突破=29
     score += f3;
 
     // ===== 维度4：位置与动量（18分）=====
@@ -6500,7 +6614,61 @@ const NextDayPrediction = {
       }
     }
 
-    f5 = Math.max(-2, Math.min(22, f5)); // v4.4 P15: 维度5上限22（基础12+持续2+赚钱效应3+概念共振3+龙头2=22）
+    // ===== v4.4-P16: 科技成长属性 + 研发加成（+2分） =====
+    // 判断是否属于科技赛道：行业名称包含科技相关关键词
+    const techKeywords = ['半导体', '芯片', '电子', '软件', '计算机', '通信', 'AI', '人工智能', '算力', '信创', '新能源', '光伏', '锂电', '军工', '医药', '生物', '创新药', '机器人', '高端制造', '航空航天', '信息技术', '互联网', '数字经济', '集成电路', '元器件', '消费电子'];
+    const f5Industry = s.industry || '';
+    const f5Name = s.name || '';
+    let isTechStock = false;
+    let matchedTechTag = '';
+    for (let ki = 0; ki < techKeywords.length; ki++) {
+      if (f5Industry.indexOf(techKeywords[ki]) >= 0) {
+        isTechStock = true;
+        matchedTechTag = techKeywords[ki];
+        break;
+      }
+    }
+    // 也用名称中关键词判断（补漏）
+    if (!isTechStock) {
+      for (let kn = 0; kn < techKeywords.length; kn++) {
+        if (f5Name.indexOf(techKeywords[kn]) >= 0) {
+          isTechStock = true;
+          matchedTechTag = techKeywords[kn];
+          break;
+        }
+      }
+    }
+    s._isTechStock = isTechStock;
+    if (isTechStock) {
+      // 高毛利率近似高研发壁垒：毛利率 > 30% 视为有研发属性
+      // 纯前端无研发收入比数据，降级为行业属性 + 毛利率判断
+      const f5Quote = s._quote || {};
+      let highMargin = false;
+      let marginVal = 0;
+      // 尝试从financials或quote获取毛利率
+      if (f5Quote.grossProfitMargin != null) {
+        marginVal = f5Quote.grossProfitMargin;
+        highMargin = marginVal > 30;
+      } else if (s._financials && s._financials.grossMargin) {
+        marginVal = s._financials.grossMargin;
+        highMargin = marginVal > 30;
+      } else if (f5Quote.pe && f5Quote.pb && f5Quote.pe > 0) {
+        // ROE = PB/PE 估算，ROE>10%近似优质成长
+        const roeEst = f5Quote.pb / f5Quote.pe * 100;
+        highMargin = roeEst > 10;
+      }
+      if (highMargin) {
+        f5 += 2;
+        factors.push('科技成长赛道+高研发属性，成长弹性大');
+        s._techTag = '高研发壁垒';
+      } else {
+        f5 += 1;
+        factors.push('科技成长赛道，具备行业Beta弹性');
+        s._techTag = '科技属性';
+      }
+    }
+
+    f5 = Math.max(-2, Math.min(24, f5)); // v4.4-P16: 维度5上限22+科技成长2=24
     score += f5;
 
     // ===== 维度6：事件催化（8分）=====
@@ -6707,7 +6875,7 @@ const NextDayPrediction = {
     });
     html += '</div>';
     html += '<div style="margin:10px 0 4px;display:flex;gap:8px"><button onclick="NextDayPrediction.showLedger()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">📊 历史验证台账（胜率统计 · 因子IC · 单股回溯）</button></div>';
-    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P15：资金分层25（含撬动效率+高控盘识别） · 量价筹码26（含换手健康度） · 趋势技术26（含BOLL/CCI/DMI/RSI黄金区） · 位置动量22（含5日振幅过滤+均值回归校准） · 板块共振22（资金/情绪/趋势三维评分+赚钱效应+概念共振+龙头识别） · 龙虎榜催化12，大盘情绪全局±10。前置量化筛选：剔除ST/涨跌停/妖股/情绪过热/低市值。因子权重基于20+只A股近40交易日IC研究校准，强化筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
+    html += '<div style="font-size:11px;color:var(--text-muted);line-height:1.6">六维模型v4.4 P16：资金分层25（含撬动效率+高控盘识别） · 量价筹码32（含拥挤度风控+量能突破+换手健康度） · 趋势技术29（含20日生命线+BOLL/CCI/DMI/RSI黄金区） · 位置动量22（含5日振幅过滤+均值回归校准） · 板块共振24（科技成长加成+三维评分+赚钱效应+概念共振+龙头识别） · 龙虎榜催化12，大盘情绪全局±10。前置量化筛选：剔除ST/涨跌停/妖股/情绪过热/低市值。因子权重基于20+只A股近40交易日IC研究校准，强化科技成长因子/筹码集中度/资金结构纯度/反转效应。点击个股进入详细分析。排名仅为基于公开数据的短线概率统计，不构成投资建议；不预测具体涨幅。历史快照保存在本机，最多留存30个交易日。</div>';
     body.innerHTML = html;
   },
 
@@ -9861,7 +10029,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard', 'techGrowthCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -9941,6 +10109,9 @@ const App = {
 
       // v4.4 P15: 板块热度详情（异步，不阻塞主流程）
       this._renderSectorHeatDetail(quote, code).catch(e => console.warn('[分析] 板块热度详情异常:', e));
+
+      // v4.4 P16: 科技成长因子诊断（仅科技股显示）
+      try { this._renderTechGrowthCard(quote, klines, capitalFlow, financials); } catch(e) { console.warn('[分析] 科技成长卡片异常:', e); }
 
     } catch (e) {
       console.error('Analysis error:', e);
@@ -10826,6 +10997,143 @@ const App = {
     } catch (e) {
       console.warn('[股东] renderShareholder异常:', e);
     }
+  },
+
+  /** v4.4 P16: 渲染科技成长因子诊断卡片（仅科技股显示） */
+  _renderTechGrowthCard(quote, klines, capitalFlow, financials) {
+    const card = document.getElementById('techGrowthCard');
+    if (!card) return;
+    const industry = quote.industry || '';
+    const name = quote.name || '';
+    const techKeywords = ['半导体', '芯片', '电子', '软件', '计算机', '通信', 'AI', '人工智能', '算力', '信创', '新能源', '光伏', '锂电', '军工', '医药', '生物', '创新药', '机器人', '高端制造', '航空航天', '信息技术', '互联网', '数字经济', '集成电路', '元器件', '消费电子'];
+    let isTech = false;
+    let techTag = '';
+    for (let i = 0; i < techKeywords.length; i++) {
+      if (industry.indexOf(techKeywords[i]) >= 0) { isTech = true; techTag = techKeywords[i]; break; }
+    }
+    if (!isTech) {
+      for (let j = 0; j < techKeywords.length; j++) {
+        if (name.indexOf(techKeywords[j]) >= 0) { isTech = true; techTag = techKeywords[j]; break; }
+      }
+    }
+    if (!isTech) return;
+    this.showSection('techGrowthCard', true);
+    const container = document.getElementById('techGrowthContent');
+    if (!container || !klines || klines.length < 20) return;
+    const n = klines.length;
+    const last = klines[n - 1].close;
+    const closes = klines.map(k => k.close);
+    const vols = klines.map(k => k.volume);
+    // 1) 拥挤度
+    let crowd20 = 0;
+    let crowdLevel = '';
+    let crowdColor = '';
+    const circMktCap = quote.circulatingMarketCap || (quote.totalMarketCap ? quote.totalMarketCap * 0.7 : 0);
+    if (circMktCap > 0) {
+      let amt20 = 0;
+      for (let ci = n - 20; ci < n; ci++) { amt20 += klines[ci].volume * klines[ci].close; }
+      crowd20 = amt20 / circMktCap;
+    } else {
+      const vol20 = vols.slice(-20).reduce((a, b) => a + b, 0);
+      const todayAmt = vols[n - 1] * last;
+      const turnover = quote.turnover || quote.turnoverRate || 0;
+      const circShares = turnover > 0 ? todayAmt / (last * turnover / 100) : 0;
+      if (circShares > 0) crowd20 = vol20 / circShares;
+    }
+    if (crowd20 < 0.3) { crowdLevel = '低'; crowdColor = '#00c853'; }
+    else if (crowd20 < 0.8) { crowdLevel = '中'; crowdColor = '#ffc107'; }
+    else if (crowd20 < 1.8) { crowdLevel = '高'; crowdColor = '#ff9800'; }
+    else { crowdLevel = '严重'; crowdColor = '#ff5252'; }
+
+    // 2) 量能：5日量比
+    let amtRatio = 1;
+    let amtStatus = '';
+    let amtColor = '';
+    if (n >= 6) {
+      const todayAmt = vols[n - 1] * last;
+      let sumAmt5 = 0;
+      for (let ai = n - 6; ai < n - 1; ai++) { sumAmt5 += vols[ai] * closes[ai]; }
+      const avgAmt5 = sumAmt5 / 5;
+      if (avgAmt5 > 0) amtRatio = todayAmt / avgAmt5;
+    }
+    if (amtRatio >= 1.2) { amtStatus = '放量'; amtColor = 'var(--accent-red)'; }
+    else if (amtRatio < 0.8) { amtStatus = '缩量'; amtColor = 'var(--accent-green)'; }
+    else { amtStatus = '均衡'; amtColor = 'var(--text-secondary)'; }
+
+    // 3) 20日生命线
+    const ma20Arr = Utils.calcMASeries(closes, 20);
+    const ma20 = ma20Arr[n - 1];
+    let ma20Status = '';
+    let ma20Color = '';
+    let bias20 = 0;
+    if (ma20 > 0) {
+      bias20 = (last - ma20) / ma20 * 100;
+      if (last > ma20) { ma20Status = '站上'; ma20Color = 'var(--accent-red)'; }
+      else { ma20Status = '跌破'; ma20Color = 'var(--accent-green)'; }
+    }
+
+    // 4) 科技属性标签
+    let attrLabel = '科技属性';
+    // 用毛利率近似研发壁垒
+    if (financials && financials.grossMargin > 30) attrLabel = '高研发壁垒';
+    else if (quote.grossProfitMargin > 30) attrLabel = '高研发壁垒';
+
+    // 5) 一句话结论
+    let conclusion = '';
+    let conclusionCls = '';
+    const posSignals = [];
+    const negSignals = [];
+    if (crowd20 > 0 && crowd20 < 0.8) posSignals.push('低拥挤度');
+    if (crowd20 >= 1.2) negSignals.push('拥挤度偏高');
+    if (amtRatio >= 1.2 && klines[n - 1].close >= klines[n - 1].open) posSignals.push('放量突破');
+    if (amtRatio < 0.8 && klines[n - 1].close >= klines[n - 1].open) negSignals.push('缩量上涨');
+    if (ma20Status === '站上') posSignals.push('站稳生命线');
+    if (ma20Status === '跌破') negSignals.push('跌破生命线');
+    if (posSignals.length >= 3) {
+      conclusion = posSignals.join('+') + '，科技成长属性明确，右侧信号强';
+      conclusionCls = 'tech-conclusion-strong';
+    } else if (posSignals.length >= 2) {
+      conclusion = posSignals.join('+') + '，科技成长属性较好，可逢低关注';
+      conclusionCls = 'tech-conclusion-good';
+    } else if (negSignals.length >= 2) {
+      conclusion = negSignals.join('+') + '，短期风险偏多，需等待企稳信号';
+      conclusionCls = 'tech-conclusion-weak';
+    } else {
+      conclusion = '科技成长属性明确，但技术信号中性，建议观望等待右侧确认';
+      conclusionCls = 'tech-conclusion-neutral';
+    }
+
+    const crowdDisplay = crowd20 > 0 ? crowd20.toFixed(2) : '未获取';
+    const amtDisplay = amtRatio.toFixed(2);
+    const biasDisplay = ma20 > 0 ? bias20.toFixed(2) + '%' : '--';
+
+    container.innerHTML = `
+      <div class="tech-grid">
+        <div class="tech-item">
+          <div class="tech-item-label">🧪 拥挤度</div>
+          <div class="tech-item-val" style="color:${crowdColor}">${crowdDisplay} <span class="tech-item-sub">（${crowdLevel}）</span></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-item-label">📊 量能</div>
+          <div class="tech-item-val" style="color:${amtColor}">量比 ${amtDisplay}倍 <span class="tech-item-sub">（${amtStatus}）</span></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-item-label">💡 20日生命线</div>
+          <div class="tech-item-val" style="color:${ma20Color}">${ma20Status} <span class="tech-item-sub">（乖离率 ${biasDisplay}）</span></div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-item-label">🏷️ 科技成长属性</div>
+          <div class="tech-item-val"><span class="tech-tag">${techTag}</span> <span class="tech-tag tech-tag-attr">${attrLabel}</span></div>
+        </div>
+      </div>
+      <div class="tech-conclusion ${conclusionCls}">
+        <span class="tech-conclusion-icon">💡</span>
+        <span class="tech-conclusion-text">${conclusion}</span>
+      </div>
+      <div class="tech-disclaimer">
+        ⚠️ 科技股波动较大，受估值、政策、产业周期、研发失败等影响；拥挤度与量能信号仅为短线技术面参考，不构成投资建议。
+      </div>
+    `;
   },
 
   /** v4.4 P15: 渲染板块热度详情（分析页） */
