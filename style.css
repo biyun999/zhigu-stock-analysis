@@ -4682,3 +4682,419 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ===== v4.4 P17: 价值投资模块 ===== */
+
+/* 主Tab三列调整 */
+.main-tabs-3 .main-tab {
+  flex: 1;
+  font-size: 13px;
+  padding: 10px 6px;
+}
+
+/* 价值投资日期 */
+.value-date {
+  text-align: right;
+  padding: 0 4px;
+}
+
+/* 扫描进度条 */
+.value-progress-wrap {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  background: rgba(0, 212, 255, 0.05);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+}
+.value-progress-track {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.value-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #00d4ff, #7c4dff);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+.value-progress-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* 价值榜单列表 */
+.value-top-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.value-stock-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.value-stock-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(0, 212, 255, 0.3);
+}
+.vsc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.vsc-rank-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.vsc-rank {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(0, 212, 255, 0.15);
+  color: #00d4ff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.vsc-rank.top1 { background: linear-gradient(135deg, #ffd700, #ff9800); color: #fff; }
+.vsc-rank.top2 { background: linear-gradient(135deg, #c0c0c0, #9e9e9e); color: #fff; }
+.vsc-rank.top3 { background: linear-gradient(135deg, #cd7f32, #a0522d); color: #fff; }
+.vsc-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.vsc-industry {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.vsc-score-block {
+  text-align: right;
+}
+.vsc-score {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+.vsc-level {
+  font-size: 10px;
+  margin-top: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  display: inline-block;
+  font-weight: 500;
+}
+.vsc-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  font-size: 11px;
+}
+.vsc-metric {
+  text-align: center;
+}
+.vsc-metric-label {
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.vsc-metric-value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* 等级颜色 */
+.level-excellent { color: #ffd700; }
+.level-excellent .vsc-level { background: rgba(255, 215, 0, 0.15); color: #ffd700; border: 1px solid rgba(255, 215, 0, 0.3); }
+.level-great { color: #00e676; }
+.level-great .vsc-level { background: rgba(0, 230, 118, 0.15); color: #00e676; border: 1px solid rgba(0, 230, 118, 0.3); }
+.level-good { color: #00d4ff; }
+.level-good .vsc-level { background: rgba(0, 212, 255, 0.15); color: #00d4ff; border: 1px solid rgba(0, 212, 255, 0.3); }
+.level-average { color: #ff9800; }
+.level-average .vsc-level { background: rgba(255, 152, 0, 0.15); color: #ff9800; border: 1px solid rgba(255, 152, 0, 0.3); }
+.level-avoid { color: #ff5252; }
+.level-avoid .vsc-level { background: rgba(255, 82, 82, 0.15); color: #ff5252; border: 1px solid rgba(255, 82, 82, 0.3); }
+
+/* 巴菲特价值评分卡片（分析页） */
+.bv-score-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 10px 0;
+}
+.bv-score-big {
+  font-size: 42px;
+  font-weight: 700;
+  line-height: 1;
+  background: linear-gradient(135deg, #ffd700, #ff9800);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.bv-level-badge {
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  background: rgba(255, 215, 0, 0.1);
+  color: #ffd700;
+  border: 1px solid rgba(255, 215, 0, 0.3);
+}
+.bv-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+.bv-dims {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bv-dim-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+}
+.bv-dim-name {
+  width: 70px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.bv-dim-bar {
+  flex: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.bv-dim-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+.bv-dim-score {
+  width: 50px;
+  text-align: right;
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.bv-fin-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.bv-fin-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.bv-fin-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.bv-fin-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.bv-risk-tip {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 82, 82, 0.08);
+  border: 1px solid rgba(255, 82, 82, 0.2);
+  border-radius: var(--radius-md);
+  color: #ff8a80;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 长期持有池模态 */
+.lt-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.lt-modal {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lt-modal-header {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.lt-modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.lt-modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+}
+.lt-summary-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 193, 7, 0.08);
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  border-radius: var(--radius-md);
+}
+.lt-summary-item {
+  flex: 1;
+  text-align: center;
+}
+.lt-summary-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.lt-summary-val {
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffc107;
+}
+.lt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lt-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+}
+.lt-item-row1 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+.lt-item-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.lt-item-score {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffd700;
+}
+.lt-item-row2 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  font-size: 11px;
+}
+.lt-item-metric {
+  text-align: center;
+}
+.lt-item-metric-label {
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.lt-item-metric-val {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+.lt-item-metric-val.up { color: #ff5252; }
+.lt-item-metric-val.down { color: #00e676; }
+.lt-item-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.lt-btn {
+  flex: 1;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.lt-btn-danger {
+  background: rgba(255, 82, 82, 0.1);
+  border-color: rgba(255, 82, 82, 0.3);
+  color: #ff5252;
+}
+.lt-add-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+.lt-add-input {
+  flex: 1;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+.lt-add-btn {
+  padding: 8px 14px;
+  background: rgba(255, 193, 7, 0.15);
+  border: 1px solid rgba(255, 193, 7, 0.4);
+  color: #ffc107;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+  .vsc-metrics { grid-template-columns: repeat(4, 1fr); font-size: 10px; }
+  .bv-fin-grid { grid-template-columns: repeat(3, 1fr); }
+  .bv-score-big { font-size: 36px; }
+  .main-tabs-3 .main-tab { font-size: 12px; padding: 10px 2px; }
+}

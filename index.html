@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="智股分析 - A股七维度智能分析系统，零Token纯前端算法">
-  <title>智股分析 v4.4-p16</title>
+  <title>智股分析 v4.4-p17</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%230a0e17'/><text x='50' y='42' text-anchor='middle' font-size='30' fill='%2300d4ff'>智</text><text x='50' y='75' text-anchor='middle' font-size='22' fill='%2300e676'>股</text></svg>">
   <link rel="stylesheet" href="style.css">
@@ -146,11 +146,12 @@
         <div id="homeSearchResults" class="search-results"></div>
       </section>
 
-      <!-- v4.4 P11: 主Tab - 明日预测 / 历史台账 -->
+      <!-- v4.4 P11: 主Tab - 明日预测 / 历史台账 / 价值投资（v4.4 P17） -->
       <section class="card">
-        <div class="main-tabs">
+        <div class="main-tabs main-tabs-3">
           <button id="mainTabPredict" class="main-tab active" onclick="App.switchMainTab('predict')">🔮 明日预测</button>
           <button id="mainTabLedger" class="main-tab" onclick="App.switchMainTab('ledger')">📊 历史台账</button>
+          <button id="mainTabValue" class="main-tab" onclick="App.switchMainTab('value')">🏦 价值投资</button>
         </div>
 
         <!-- 明日预测 pane -->
@@ -194,6 +195,23 @@
         <div id="mainPaneLedger" style="display:none">
           <div id="homeLedgerBody">
             <div class="empty-tip">暂无历史台账数据</div>
+          </div>
+        </div>
+
+        <!-- 价值投资 pane (v4.4 P17) -->
+        <div id="mainPaneValue" style="display:none">
+          <div class="score-intro">巴菲特式六维价值评分（ROE·毛利率·成长·安全·现金流·估值），全市场扫描挖掘长期优质资产，仅供长线参考</div>
+          <div id="valueInvestDate" class="value-date" style="font-size:11px;color:var(--text-muted);margin:6px 0 10px">数据基准日：--</div>
+          <div id="valueProgressBar" class="value-progress-wrap" style="display:none">
+            <div class="value-progress-track"><div class="value-progress-fill" id="valueProgressFill" style="width:0%"></div></div>
+            <div class="value-progress-text" id="valueProgressText">扫描中 0/80</div>
+          </div>
+          <div id="valueTopList" class="value-top-list">
+            <div class="empty-tip">正在加载价值投资榜单...</div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button onclick="ValueScreener.scan()" class="btn-primary" style="flex:1">🔍 重新扫描</button>
+            <button onclick="LongTermPortfolio.showManager()" class="btn-primary" style="flex:1;background:rgba(255,193,7,0.12);border:1px solid rgba(255,193,7,0.4);color:#ffc107">⭐ 长期持有池</button>
           </div>
         </div>
       </section>
@@ -347,6 +365,23 @@
           <div class="card-title">🚨 潜在下跌风险汇总清单</div>
           <div class="mod-body" id="riskSummaryContent"></div>
         </div>
+      </section>
+
+      <!-- 巴菲特价值评分（v4.4 P17） -->
+      <section class="card" id="buffettValueCard" style="display:none">
+        <div class="card-title">📊 巴菲特价值评分</div>
+        <div class="disclaimer">⚠️ 基于巴菲特价值投资理念，长线参考，不构成投资建议</div>
+        <div class="bv-score-row">
+          <div class="bv-score-big" id="bvScoreBig">--</div>
+          <div class="bv-level-badge" id="bvLevelBadge">--</div>
+        </div>
+        <div class="bv-summary" id="bvSummary" style="font-size:12px;color:var(--text-secondary);margin:6px 0 12px"></div>
+        <div class="bv-dims" id="bvDims"></div>
+        <div style="margin-top:12px">
+          <div class="sh-section-title">📋 关键财务指标</div>
+          <div class="bv-fin-grid" id="bvFinGrid"></div>
+        </div>
+        <div id="bvRiskTip" class="bv-risk-tip" style="display:none"></div>
       </section>
 
       <!-- 股东结构分析（v4.4 P12） -->

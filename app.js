@@ -1,5 +1,6 @@
 /**
- * 智股分析 v4.4 - P11 每日自动核实+台账置前+批量导出股票
+ * 智股分析 v4.4 - P17 价值投资模块（巴菲特式六维评分+全市场扫描+长期持有池）
+ * v4.4-P17: 巴菲特价值评分系统 + 全市场价值扫描TOP20 + 长期持有股票池 + 24小时自动刷新
  * v4.4-P11: 每日自动核实（打开APP静默补核实昨日及更早数据）+ 首页台账Tab前置 + 批量导出股票代码/名称
  * v4.4-P9: 跨设备授权管理系统（设备指纹+加密迁移+多设备管理）
  * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
@@ -8701,6 +8702,12 @@ const App = {
       try { AutoVerify.silentVerify(); } catch(e) { console.warn('[AutoVerify] init error:', e); }
     }, 3000);
 
+    // v4.4 P17: 价值投资模块——静默刷新价值榜单 + 长期持仓价格（异常隔离）
+    setTimeout(() => {
+      try { ValueScreener.autoRefreshIfNeeded(); } catch(e) { console.warn('[ValueScreener] init error:', e); }
+      try { LongTermPortfolio.refreshPrices(); } catch(e) { console.warn('[LongTerm] init error:', e); }
+    }, 5000);
+
     // 定时刷新（5分钟）
     setInterval(() => {
       if (Navigation.currentPage === 'home') {
@@ -8748,24 +8755,30 @@ const App = {
     }
   },
 
-  /** v4.4 P11: 首页主Tab切换（明日预测 / 历史台账） */
+  /** v4.4 P11: 首页主Tab切换（明日预测 / 历史台账 / 价值投资 v4.4 P17） */
   switchMainTab(tab) {
     const tabPredict = document.getElementById('mainTabPredict');
     const tabLedger = document.getElementById('mainTabLedger');
+    const tabValue = document.getElementById('mainTabValue');
     const panePredict = document.getElementById('mainPanePredict');
     const paneLedger = document.getElementById('mainPaneLedger');
+    const paneValue = document.getElementById('mainPaneValue');
     if (!tabPredict || !tabLedger) return;
+
+    // 重置所有
+    [tabPredict, tabLedger, tabValue].forEach(t => t && t.classList.remove('active'));
+    [panePredict, paneLedger, paneValue].forEach(p => p && (p.style.display = 'none'));
+
     if (tab === 'ledger') {
-      tabPredict.classList.remove('active');
       tabLedger.classList.add('active');
-      panePredict.style.display = 'none';
       paneLedger.style.display = '';
-      // 渲染台账
       HomeLedger.render();
+    } else if (tab === 'value') {
+      if (tabValue) tabValue.classList.add('active');
+      if (paneValue) paneValue.style.display = '';
+      try { ValueScreener.renderLatest(); } catch(e) { console.warn('[ValueScreener] render error:', e); }
     } else {
-      tabLedger.classList.remove('active');
       tabPredict.classList.add('active');
-      paneLedger.style.display = 'none';
       panePredict.style.display = '';
     }
   },
@@ -10113,6 +10126,9 @@ const App = {
       // v4.4 P16: 科技成长因子诊断（仅科技股显示）
       try { this._renderTechGrowthCard(quote, klines, capitalFlow, financials); } catch(e) { console.warn('[分析] 科技成长卡片异常:', e); }
 
+      // v4.4 P17: 巴菲特价值评分（有财务数据才显示）
+      try { this._renderBuffettValueCard(quote, financials); } catch(e) { console.warn('[分析] 巴菲特价值评分异常:', e); }
+
     } catch (e) {
       console.error('Analysis error:', e);
       Utils.toast('分析过程出错，请重试');
@@ -11134,6 +11150,128 @@ const App = {
         ⚠️ 科技股波动较大，受估值、政策、产业周期、研发失败等影响；拥挤度与量能信号仅为短线技术面参考，不构成投资建议。
       </div>
     `;
+  },
+
+  /** v4.4 P17: 渲染巴菲特价值评分卡片 */
+  _renderBuffettValueCard(quote, financials) {
+    const card = document.getElementById('buffettValueCard');
+    if (!card) return;
+    // 无财务数据（港股/美股/北交所）不显示
+    if (!financials || financials.roe === null || financials.roe === undefined) {
+      card.style.display = 'none';
+      return;
+    }
+    const result = ValueInvestor.calcBuffettScore(quote, financials);
+    const dims = result.dims;
+
+    // 显示卡片
+    this.showSection('buffettValueCard', true);
+
+    // 总分和等级
+    const scoreEl = document.getElementById('bvScoreBig');
+    const levelEl = document.getElementById('bvLevelBadge');
+    if (scoreEl) {
+      scoreEl.textContent = result.totalScore;
+      scoreEl.style.background = this._getLevelGradient(result.level);
+      scoreEl.style.webkitBackgroundClip = 'text';
+      scoreEl.style.webkitTextFillColor = 'transparent';
+    }
+    if (levelEl) {
+      levelEl.textContent = result.levelText;
+      const colors = {
+        excellent: { bg: 'rgba(255,215,0,0.1)', color: '#ffd700', border: 'rgba(255,215,0,0.3)' },
+        great: { bg: 'rgba(0,230,118,0.1)', color: '#00e676', border: 'rgba(0,230,118,0.3)' },
+        good: { bg: 'rgba(0,212,255,0.1)', color: '#00d4ff', border: 'rgba(0,212,255,0.3)' },
+        average: { bg: 'rgba(255,152,0,0.1)', color: '#ff9800', border: 'rgba(255,152,0,0.3)' },
+        avoid: { bg: 'rgba(255,82,82,0.1)', color: '#ff5252', border: 'rgba(255,82,82,0.3)' }
+      };
+      const c = colors[result.level] || colors.good;
+      levelEl.style.background = c.bg;
+      levelEl.style.color = c.color;
+      levelEl.style.border = '1px solid ' + c.border;
+    }
+
+    // 总结
+    const sumEl = document.getElementById('bvSummary');
+    if (sumEl) sumEl.textContent = result.summary;
+
+    // 六维进度条
+    const dimsEl = document.getElementById('bvDims');
+    if (dimsEl) {
+      const dimNames = ValueInvestor.DIM_NAMES;
+      const dimWeights = ValueInvestor.DIM_WEIGHTS;
+      let html = '';
+      const dimKeys = ['roe', 'margin', 'growth', 'safety', 'cashflow', 'valuation'];
+      dimKeys.forEach(key => {
+        const score = dims[key] || 0;
+        const max = dimWeights[key];
+        const pct = Math.max(0, Math.min(100, (score / max) * 100));
+        html += '<div class="bv-dim-row">';
+        html += '<div class="bv-dim-name">' + dimNames[key] + '</div>';
+        html += '<div class="bv-dim-bar"><div class="bv-dim-fill" style="width:' + pct + '%;background:' + this._getDimBarColor(score, max) + '"></div></div>';
+        html += '<div class="bv-dim-score">' + score + '/' + max + '</div>';
+        html += '</div>';
+      });
+      dimsEl.innerHTML = html;
+    }
+
+    // 关键财务指标
+    const gridEl = document.getElementById('bvFinGrid');
+    if (gridEl) {
+      const items = [
+        { label: 'ROE', val: this._fmtPct(financials.roe) },
+        { label: '毛利率', val: this._fmtPct(financials.grossMargin) },
+        { label: '净利率', val: this._fmtPct(financials.netMargin) },
+        { label: '营收增长', val: this._fmtPct(financials.revGrowth) },
+        { label: '利润增长', val: this._fmtPct(financials.profitGrowth) },
+        { label: '负债率', val: this._fmtPct(financials.debtRatio) },
+        { label: '现金流/营收', val: this._fmtPct(financials.cashToRevenue) },
+        { label: 'PE', val: quote.pe && quote.pe > 0 ? quote.pe.toFixed(1) : (quote.pe < 0 ? '亏损' : '--') },
+        { label: 'PB', val: quote.pb && quote.pb > 0 ? quote.pb.toFixed(2) : '--' }
+      ];
+      let html = '';
+      items.forEach(it => {
+        html += '<div class="bv-fin-item"><div class="bv-fin-label">' + it.label + '</div><div class="bv-fin-val">' + it.val + '</div></div>';
+      });
+      gridEl.innerHTML = html;
+    }
+
+    // 风险提示
+    const riskEl = document.getElementById('bvRiskTip');
+    if (riskEl) {
+      const tips = ValueInvestor.getRiskTips(dims, financials);
+      if (tips.length > 0 && result.totalScore < 55) {
+        riskEl.style.display = '';
+        riskEl.innerHTML = '⚠️ <b>风险提示：</b>' + tips.join('；') + '。价值投资需谨慎，以上仅供长线参考。';
+      } else {
+        riskEl.style.display = 'none';
+      }
+    }
+  },
+
+  _getLevelGradient(level) {
+    const map = {
+      excellent: 'linear-gradient(135deg, #ffd700, #ff9800)',
+      great: 'linear-gradient(135deg, #00e676, #00c853)',
+      good: 'linear-gradient(135deg, #00d4ff, #2196f3)',
+      average: 'linear-gradient(135deg, #ff9800, #ff5722)',
+      avoid: 'linear-gradient(135deg, #ff5252, #d32f2f)'
+    };
+    return map[level] || map.good;
+  },
+
+  _getDimBarColor(score, max) {
+    const ratio = score / max;
+    if (ratio >= 0.8) return 'linear-gradient(90deg, #00e676, #00c853)';
+    if (ratio >= 0.6) return 'linear-gradient(90deg, #00d4ff, #2196f3)';
+    if (ratio >= 0.4) return 'linear-gradient(90deg, #ffc107, #ff9800)';
+    if (ratio >= 0) return 'linear-gradient(90deg, #ff9800, #ff5252)';
+    return 'linear-gradient(90deg, #ff5252, #d32f2f)';
+  },
+
+  _fmtPct(v) {
+    if (v === null || v === undefined || isNaN(v)) return '--';
+    return v.toFixed(1) + '%';
   },
 
   /** v4.4 P15: 渲染板块热度详情（分析页） */
@@ -13167,3 +13305,786 @@ document.addEventListener('DOMContentLoaded', () => {
     App.init();
   }
 });
+// ============================================================
+// v4.4 P17: 价值投资模块 - 巴菲特式六维评分 + 全市场扫描 + 长期持有池
+// ============================================================
+
+// ===== 1. ValueInvestor - 巴菲特价值评分算法 =====
+const ValueInvestor = {
+  // 维度满分配置
+  DIM_WEIGHTS: {
+    roe: 25,
+    margin: 15,
+    growth: 15,
+    safety: 15,
+    cashflow: 15,
+    valuation: 15
+  },
+  DIM_NAMES: {
+    roe: '盈利能力',
+    margin: '毛利率护城河',
+    growth: '成长能力',
+    safety: '财务安全',
+    cashflow: '现金流质量',
+    valuation: '估值安全边际'
+  },
+
+  /**
+   * 计算巴菲特式价值评分
+   * @param {Object} quote - 行情数据（含pe、pb）
+   * @param {Object} financials - 财务数据
+   * @returns {Object} 评分结果
+   */
+  calcBuffettScore(quote, financials) {
+    if (!financials) {
+      return { totalScore: 0, dims: {}, level: 'avoid', summary: '暂无财务数据' };
+    }
+
+    const dims = {};
+
+    // ① 盈利能力 ROE（满分25）
+    const roe = financials.roe;
+    if (roe !== null && roe !== undefined) {
+      if (roe >= 20) dims.roe = 25;
+      else if (roe >= 15) dims.roe = 20;
+      else if (roe >= 10) dims.roe = 12;
+      else if (roe >= 5) dims.roe = 6;
+      else if (roe >= 0) dims.roe = 2;
+      else dims.roe = 0;
+    } else {
+      dims.roe = 0;
+    }
+
+    // ② 毛利率护城河（满分15）
+    const gm = financials.grossMargin;
+    if (gm !== null && gm !== undefined) {
+      if (gm >= 50) dims.margin = 15;
+      else if (gm >= 30) dims.margin = 12;
+      else if (gm >= 20) dims.margin = 8;
+      else if (gm >= 10) dims.margin = 4;
+      else dims.margin = 0;
+    } else {
+      // 金融行业无毛利率，给中性分
+      dims.margin = financials.debtRatio > 70 ? 8 : 0;
+    }
+
+    // ③ 成长能力（满分15）— 营收+利润双增长
+    const revG = financials.revGrowth;
+    const profG = financials.profitGrowth;
+    const hasRev = revG !== null && revG !== undefined;
+    const hasProf = profG !== null && profG !== undefined;
+    if (hasRev && hasProf) {
+      const revUp = revG > 0;
+      const profUp = profG > 0;
+      if (revG > 20 && profG > 20) dims.growth = 15;
+      else if (revG > 10 && profG > 10) dims.growth = 12;
+      else if ((revUp && profUp) || (revG > 5 && profG > 5)) dims.growth = 8;
+      else if (revUp !== profUp) dims.growth = 4;
+      else if (!revUp && !profUp) dims.growth = 0;
+      else dims.growth = 4;
+    } else if (hasRev || hasProf) {
+      const single = hasRev ? revG : profG;
+      if (single > 20) dims.growth = 10;
+      else if (single > 10) dims.growth = 8;
+      else if (single > 0) dims.growth = 5;
+      else dims.growth = 0;
+    } else {
+      dims.growth = 0;
+    }
+
+    // ④ 财务安全（资产负债率，满分15）
+    const debt = financials.debtRatio;
+    if (debt !== null && debt !== undefined) {
+      // 金融行业豁免（天生高负债）
+      const isFinancial = (gm === null || gm === undefined) && debt > 70;
+      if (isFinancial) {
+        if (debt < 92) dims.safety = 12;
+        else if (debt < 95) dims.safety = 8;
+        else dims.safety = 4;
+      } else {
+        if (debt < 30) dims.safety = 15;
+        else if (debt < 50) dims.safety = 12;
+        else if (debt < 65) dims.safety = 8;
+        else if (debt < 80) dims.safety = 4;
+        else dims.safety = 0;
+      }
+    } else {
+      dims.safety = 5;
+    }
+
+    // ⑤ 现金流质量（经营现金流/营收，满分15）
+    const c2r = financials.cashToRevenue;
+    if (c2r !== null && c2r !== undefined) {
+      if (c2r >= 30) dims.cashflow = 15;
+      else if (c2r >= 20) dims.cashflow = 12;
+      else if (c2r >= 10) dims.cashflow = 8;
+      else if (c2r >= 0) dims.cashflow = 4;
+      else dims.cashflow = 0;
+    } else {
+      // 备选：用每股经营现金流/每股收益
+      if (financials.ocfps !== null && financials.eps !== null && financials.eps > 0.01) {
+        const ratio = financials.ocfps / financials.eps;
+        if (ratio >= 1.2) dims.cashflow = 15;
+        else if (ratio >= 0.8) dims.cashflow = 12;
+        else if (ratio >= 0.5) dims.cashflow = 8;
+        else if (ratio >= 0) dims.cashflow = 4;
+        else dims.cashflow = 0;
+      } else {
+        dims.cashflow = 5;
+      }
+    }
+
+    // ⑥ 估值安全边际（PE/PB，满分15）
+    const pe = quote && quote.pe ? quote.pe : (financials && financials.pe ? financials.pe : null);
+    const pb = quote && quote.pb ? quote.pb : (financials && financials.bps && quote && quote.price && financials.bps > 0 ? quote.price / financials.bps : null);
+    let valScore = 0;
+    if (pe !== null && pe !== undefined && pb !== null && pb !== undefined && pe > 0 && pb > 0) {
+      if (pe < 10 && pb < 1.5) valScore = 15;      // 深度价值
+      else if (pe < 15 && pb < 2) valScore = 12;   // 明显低估
+      else if (pe < 25 && pb < 3) valScore = 8;    // 合理偏低
+      else if (pe < 40 && pb < 4) valScore = 4;    // 合理偏高
+      else if (pe > 50 || pb > 5) valScore = 0;    // 高估
+      else valScore = 2;
+    } else if (pe !== null && pe !== undefined && pe < 0) {
+      // 亏损
+      valScore = -5;
+    } else {
+      valScore = 5;
+    }
+    dims.valuation = Math.max(-5, Math.min(15, valScore));
+
+    // 总分
+    const totalScore = Math.round(
+      dims.roe + dims.margin + dims.growth + dims.safety + dims.cashflow + dims.valuation
+    );
+
+    // 等级
+    let level, levelText;
+    if (totalScore >= 85) { level = 'excellent'; levelText = '卓越级'; }
+    else if (totalScore >= 70) { level = 'great'; levelText = '优秀级'; }
+    else if (totalScore >= 55) { level = 'good'; levelText = '良好级'; }
+    else if (totalScore >= 40) { level = 'average'; levelText = '一般级'; }
+    else { level = 'avoid'; levelText = '规避级'; }
+
+    // 总结
+    const summary = this._generateSummary(dims, level, levelText, financials);
+
+    return { totalScore, dims, level, levelText, summary };
+  },
+
+  _generateSummary(dims, level, levelText, f) {
+    const points = [];
+    if (dims.roe >= 20) points.push('高ROE');
+    if (dims.margin >= 12) points.push('宽护城河');
+    if (dims.growth >= 12) points.push('高成长');
+    if (dims.safety >= 12) points.push('财务稳健');
+    if (dims.cashflow >= 12) points.push('现金流充沛');
+    if (dims.valuation >= 12) points.push('估值安全');
+
+    const weak = [];
+    if (dims.roe <= 6) weak.push('盈利能力偏弱');
+    if (dims.margin <= 4) weak.push('护城河不深');
+    if (dims.growth <= 4) weak.push('成长动力不足');
+    if (dims.safety <= 4) weak.push('财务风险偏高');
+    if (dims.cashflow <= 4) weak.push('现金流质量一般');
+    if (dims.valuation <= 0) weak.push('估值偏高');
+
+    let text = `巴菲特价值评级：${levelText}（${dims.roe + dims.margin + dims.growth + dims.safety + dims.cashflow + dims.valuation}分）。`;
+    if (points.length >= 3) {
+      text += points.slice(0, 3).join('+') + '，符合价值投资长期持有标准。';
+    } else if (points.length > 0) {
+      text += '具备' + points.join('、') + '等优势，';
+      if (weak.length > 0) text += '但' + weak.slice(0, 2).join('、') + '，需关注改善空间。';
+      else text += '整体质地良好。';
+    } else if (weak.length > 0) {
+      text += weak.slice(0, 3).join('、') + '，不符合巴菲特选股标准。';
+    } else {
+      text += '各项指标均衡，质地中等。';
+    }
+    return text;
+  },
+
+  /** 生成风险提示 */
+  getRiskTips(dims, financials) {
+    const tips = [];
+    if (dims.roe <= 6) tips.push('ROE偏低，盈利能力不足');
+    if (dims.safety <= 4) tips.push('资产负债率较高，财务风险偏大');
+    if (dims.cashflow <= 0) tips.push('经营现金流为负，利润质量存疑');
+    if (dims.growth <= 0) tips.push('营收或利润负增长，成长动能不足');
+    if (dims.valuation <= 0) tips.push('估值偏高，安全边际不足');
+    return tips;
+  }
+};
+
+// ===== 2. ValueScreener - 价值投资扫描引擎 =====
+const ValueScreener = {
+  STORAGE_KEY: 'zhigu_value_screener',
+  SNAPSHOT_KEY: 'zhigu_value_snapshots',
+  MAX_SNAPSHOTS: 30,
+  CACHE_TTL: 24 * 60 * 60 * 1000, // 24小时
+  _scanning: false,
+
+  /** 获取缓存数据 */
+  getCache() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      if (!data) return null;
+      const parsed = JSON.parse(data);
+      if (!parsed.scanTime || Date.now() - parsed.scanTime > this.CACHE_TTL) return null;
+      return parsed;
+    } catch(e) { return null; }
+  },
+
+  /** 保存缓存 */
+  _saveCache(data) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data)); } catch(e) {}
+  },
+
+  /** 获取快照列表 */
+  _getSnapshots() {
+    try {
+      const data = localStorage.getItem(this.SNAPSHOT_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch(e) { return []; }
+  },
+
+  /** 保存快照 */
+  _saveSnapshot(snapshot) {
+    try {
+      const list = this._getSnapshots();
+      list.unshift(snapshot);
+      if (list.length > this.MAX_SNAPSHOTS) list.length = this.MAX_SNAPSHOTS;
+      localStorage.setItem(this.SNAPSHOT_KEY, JSON.stringify(list));
+    } catch(e) {}
+  },
+
+  /** 是否需要刷新 */
+  needsRefresh() {
+    const cache = this.getCache();
+    return !cache;
+  },
+
+  /**
+   * 扫描全市场价值股
+   * @param {boolean} silent - 是否静默模式（不弹窗提示）
+   */
+  async scan(silent = false) {
+    if (this._scanning) {
+      if (!silent) Utils.toast('正在扫描中，请稍候...');
+      return null;
+    }
+    this._scanning = true;
+
+    try {
+      if (!silent) {
+        this._showProgress(true);
+        this._updateProgress(0, 80);
+      }
+
+      // 第一步：获取全市场成交额前300
+      const topStocks = await DataAPI.fetchTopMarketStocks(300);
+      if (!topStocks || topStocks.length === 0) {
+        throw new Error('获取市场数据失败');
+      }
+
+      // 第二步：硬过滤 + PE/PB粗筛
+      const candidates = this._filterAndPreRank(topStocks);
+      if (!silent) this._updateProgress(0, candidates.length);
+
+      // 第三步：分批请求详细财务数据并评分
+      const scored = [];
+      const batchSize = 10;
+      for (let i = 0; i < candidates.length; i += batchSize) {
+        const batch = candidates.slice(i, i + batchSize);
+        const results = await Promise.all(
+          batch.map(s => this._scoreOne(s).catch(() => null))
+        );
+        results.forEach(r => { if (r) scored.push(r); });
+
+        if (!silent) {
+          this._updateProgress(Math.min(i + batchSize, candidates.length), candidates.length);
+        }
+      }
+
+      // 第四步：排序取TOP20
+      scored.sort((a, b) => b.score - a.score);
+      const top20 = scored.slice(0, 20);
+
+      // 构建结果
+      const today = new Date();
+      const dateStr = today.getFullYear() + '-' +
+        String(today.getMonth() + 1).padStart(2, '0') + '-' +
+        String(today.getDate()).padStart(2, '0');
+
+      const result = {
+        date: dateStr,
+        scanTime: Date.now(),
+        totalScanned: topStocks.length,
+        filteredCount: candidates.length,
+        scoredCount: scored.length,
+        stocks: top20.map(s => ({
+          code: s.code,
+          name: s.name,
+          industry: s.industry,
+          score: s.score,
+          level: s.level,
+          levelText: s.levelText,
+          roe: s.roe,
+          grossMargin: s.grossMargin,
+          netMargin: s.netMargin,
+          revGrowth: s.revGrowth,
+          profitGrowth: s.profitGrowth,
+          debtRatio: s.debtRatio,
+          pe: s.pe,
+          pb: s.pb,
+          cashToRevenue: s.cashToRevenue,
+          dims: s.dims
+        }))
+      };
+
+      // 保存缓存和快照
+      this._saveCache(result);
+      this._saveSnapshot(result);
+
+      // 渲染
+      this.renderLatest();
+
+      if (!silent) {
+        this._showProgress(false);
+        Utils.toast(`扫描完成，共评估${scored.length}只股票，TOP20已更新`);
+      }
+
+      return result;
+    } catch (e) {
+      console.error('[ValueScreener] scan error:', e);
+      if (!silent) {
+        this._showProgress(false);
+        Utils.toast('扫描失败：' + (e.message || '未知错误'));
+      }
+      return null;
+    } finally {
+      this._scanning = false;
+    }
+  },
+
+  /** 硬过滤 + PE/PB粗筛，选出80只估值相对合理的 */
+  _filterAndPreRank(stocks) {
+    // 硬过滤
+    const filtered = stocks.filter(s => {
+      // 排除北交所
+      if (s.code.startsWith('bj')) return false;
+      // 排除ST
+      if (s.name.indexOf('ST') >= 0) return false;
+      // 有价格
+      if (!s.price || s.price <= 0) return false;
+      // 成交额 > 5000万（amount单位元）
+      if (!s.amount || s.amount < 50000000) return false;
+      return true;
+    });
+
+    // PE/PB粗筛评分，选出前80只估值相对合理的
+    const scored = filtered.map(s => {
+      let valScore = 0;
+      const pe = s.pe || 0;
+      const pb = s.pb || 0;
+      if (pe > 0 && pb > 0) {
+        if (pe < 10 && pb < 1.5) valScore = 15;
+        else if (pe < 15 && pb < 2) valScore = 12;
+        else if (pe < 25 && pb < 3) valScore = 8;
+        else if (pe < 40 && pb < 4) valScore = 4;
+        else if (pe > 50 || pb > 5) valScore = -5;
+        else valScore = 2;
+      } else if (pe < 0) {
+        valScore = -10;
+      }
+      // 加上行业分散度简单加权
+      return { ...s, _valScore: valScore };
+    });
+
+    // 按估值分降序（高分在前）
+    scored.sort((a, b) => b._valScore - a._valScore);
+    return scored.slice(0, 80);
+  },
+
+  /** 单只股票评分 */
+  async _scoreOne(stock) {
+    try {
+      const financials = await DataAPI.fetchFinancials(stock.code);
+      if (!financials) return null;
+      // ROE或毛利率为空且不是金融行业的，跳过
+      if (financials.roe === null || financials.roe === undefined) return null;
+
+      const result = ValueInvestor.calcBuffettScore(stock, financials);
+      return {
+        code: stock.code,
+        name: stock.name,
+        industry: stock.industry || '',
+        price: stock.price,
+        pe: stock.pe,
+        pb: stock.pb,
+        roe: financials.roe,
+        grossMargin: financials.grossMargin,
+        netMargin: financials.netMargin,
+        revGrowth: financials.revGrowth,
+        profitGrowth: financials.profitGrowth,
+        debtRatio: financials.debtRatio,
+        cashToRevenue: financials.cashToRevenue,
+        score: result.totalScore,
+        level: result.level,
+        levelText: result.levelText,
+        dims: result.dims
+      };
+    } catch (e) {
+      return null;
+    }
+  },
+
+  _showProgress(show) {
+    const bar = document.getElementById('valueProgressBar');
+    if (bar) bar.style.display = show ? '' : 'none';
+  },
+
+  _updateProgress(done, total) {
+    const fill = document.getElementById('valueProgressFill');
+    const text = document.getElementById('valueProgressText');
+    const pct = total > 0 ? Math.round(done / total * 100) : 0;
+    if (fill) fill.style.width = pct + '%';
+    if (text) text.textContent = `扫描中 ${done}/${total}`;
+  },
+
+  /** 渲染最新榜单 */
+  renderLatest() {
+    const container = document.getElementById('valueTopList');
+    const dateEl = document.getElementById('valueInvestDate');
+    if (!container) return;
+
+    const data = this.getCache();
+    if (!data || !data.stocks || data.stocks.length === 0) {
+      container.innerHTML = '<div class="empty-tip">暂无价值投资数据<br><span style="font-size:11px;color:var(--text-muted)">点击下方「重新扫描」生成巴菲特价值TOP20榜单</span></div>';
+      return;
+    }
+
+    if (dateEl) {
+      dateEl.textContent = `数据基准日：${data.date} · 共评估${data.scoredCount || '?'}只`;
+    }
+
+    let html = '';
+    data.stocks.forEach((s, i) => {
+      const rank = i + 1;
+      const rankClass = rank <= 3 ? ' top' + rank : '';
+      const levelClass = 'level-' + s.level;
+      const roeStr = s.roe !== null && s.roe !== undefined ? s.roe.toFixed(1) + '%' : '--';
+      const gmStr = s.grossMargin !== null && s.grossMargin !== undefined ? s.grossMargin.toFixed(1) + '%' : '--';
+      const peStr = s.pe && s.pe > 0 ? s.pe.toFixed(1) : (s.pe < 0 ? '亏损' : '--');
+      const pbStr = s.pb && s.pb > 0 ? s.pb.toFixed(2) : '--';
+
+      html += '<div class="value-stock-card ' + levelClass + '" onclick="App.analyzeStock(\'' + s.code + '\')">';
+      html += '<div class="vsc-header">';
+      html += '<div class="vsc-rank-name">';
+      html += '<div class="vsc-rank' + rankClass + '">' + rank + '</div>';
+      html += '<div>';
+      html += '<div class="vsc-name">' + s.name + '</div>';
+      html += '<div class="vsc-industry">' + (s.industry || '--') + '</div>';
+      html += '</div></div>';
+      html += '<div class="vsc-score-block">';
+      html += '<div class="vsc-score">' + s.score + '</div>';
+      html += '<div class="vsc-level">' + s.levelText + '</div>';
+      html += '</div></div>';
+      html += '<div class="vsc-metrics">';
+      html += '<div class="vsc-metric"><div class="vsc-metric-label">ROE</div><div class="vsc-metric-value">' + roeStr + '</div></div>';
+      html += '<div class="vsc-metric"><div class="vsc-metric-label">毛利率</div><div class="vsc-metric-value">' + gmStr + '</div></div>';
+      html += '<div class="vsc-metric"><div class="vsc-metric-label">PE</div><div class="vsc-metric-value">' + peStr + '</div></div>';
+      html += '<div class="vsc-metric"><div class="vsc-metric-label">PB</div><div class="vsc-metric-value">' + pbStr + '</div></div>';
+      html += '</div></div>';
+    });
+
+    container.innerHTML = html;
+  },
+
+  /** 静默自动刷新（APP启动时调用） */
+  async autoRefreshIfNeeded() {
+    if (!this.needsRefresh()) return;
+    try {
+      await this.scan(true);
+    } catch (e) {
+      console.warn('[ValueScreener] 自动刷新失败:', e);
+    }
+  }
+};
+
+// ===== 3. LongTermPortfolio - 长期持有股票池 =====
+const LongTermPortfolio = {
+  STORAGE_KEY: 'zhigu_longterm_portfolio',
+
+  /** 获取持仓列表 */
+  getPortfolio() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      return data ? JSON.parse(data) : [];
+    } catch(e) { return []; }
+  },
+
+  /** 保存持仓 */
+  _save(list) {
+    try { localStorage.setItem(this.STORAGE_KEY, JSON.stringify(list)); } catch(e) {}
+  },
+
+  /** 添加股票 */
+  addStock(code, name, buyPrice) {
+    const list = this.getPortfolio();
+    if (list.find(s => s.code === code)) {
+      Utils.toast('该股票已在持有池中');
+      return false;
+    }
+    list.push({
+      code,
+      name: name || code,
+      buyPrice: buyPrice || 0,
+      addedAt: Date.now()
+    });
+    this._save(list);
+    Utils.toast('已加入长期持有池');
+    return true;
+  },
+
+  /** 删除股票 */
+  removeStock(code) {
+    const list = this.getPortfolio().filter(s => s.code !== code);
+    this._save(list);
+    Utils.toast('已从持有池移除');
+  },
+
+  /** 更新买入价 */
+  updateBuyPrice(code, price) {
+    const list = this.getPortfolio();
+    const item = list.find(s => s.code === code);
+    if (item) {
+      item.buyPrice = parseFloat(price) || 0;
+      this._save(list);
+    }
+  },
+
+  /** 是否在持有池中 */
+  contains(code) {
+    return this.getPortfolio().some(s => s.code === code);
+  },
+
+  /** 静默更新持仓价格（APP启动时调用） */
+  async refreshPrices() {
+    const list = this.getPortfolio();
+    if (list.length === 0) return;
+    try {
+      const codes = list.map(s => s.code);
+      const quotes = await DataAPI.fetchQuotes(codes).catch(() => []);
+      if (!quotes || quotes.length === 0) return;
+      const priceMap = {};
+      quotes.forEach(q => { if (q && q.code) priceMap[q.code] = q.price; });
+      let changed = false;
+      list.forEach(s => {
+        if (priceMap[s.code]) {
+          s.currentPrice = priceMap[s.code];
+          changed = true;
+        }
+      });
+      if (changed) this._save(list);
+    } catch (e) {
+      console.warn('[LongTerm] 价格刷新失败:', e);
+    }
+  },
+
+  /** 计算总盈亏率（等权平均） */
+  getTotalReturn() {
+    const list = this.getPortfolio();
+    const valid = list.filter(s => s.buyPrice > 0 && s.currentPrice > 0);
+    if (valid.length === 0) return 0;
+    const total = valid.reduce((sum, s) => sum + (s.currentPrice - s.buyPrice) / s.buyPrice * 100, 0);
+    return total / valid.length;
+  },
+
+  /** 显示管理弹窗 */
+  showManager() {
+    const overlay = document.createElement('div');
+    overlay.className = 'lt-modal-overlay';
+    overlay.id = 'ltModalOverlay';
+    overlay.onclick = (e) => { if (e.target === overlay) this._closeManager(); };
+
+    const portfolio = this.getPortfolio();
+    const totalReturn = this.getTotalReturn();
+    const returnColor = totalReturn >= 0 ? '#ff5252' : '#00e676';
+
+    let html = '<div class="lt-modal">';
+    html += '<div class="lt-modal-header">';
+    html += '<div class="lt-modal-title">⭐ 长期持有池</div>';
+    html += '<button class="modal-close" onclick="LongTermPortfolio._closeManager()">✕</button>';
+    html += '</div>';
+    html += '<div class="lt-modal-body">';
+
+    // 汇总
+    html += '<div class="lt-summary-row">';
+    html += '<div class="lt-summary-item"><div class="lt-summary-label">持仓数量</div><div class="lt-summary-val">' + portfolio.length + '</div></div>';
+    html += '<div class="lt-summary-item"><div class="lt-summary-label">总盈亏率</div><div class="lt-summary-val" style="color:' + returnColor + '">' + (totalReturn >= 0 ? '+' : '') + totalReturn.toFixed(2) + '%</div></div>';
+    html += '</div>';
+
+    // 持仓列表
+    html += '<div class="lt-list" id="ltListBody">';
+    if (portfolio.length === 0) {
+      html += '<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-size:12px">暂无持仓，快去添加看好的价值股吧</div>';
+    } else {
+      portfolio.forEach(s => {
+        const curP = s.currentPrice || 0;
+        const buyP = s.buyPrice || 0;
+        let pnlStr = '--';
+        let pnlClass = '';
+        if (buyP > 0 && curP > 0) {
+          const pnl = (curP - buyP) / buyP * 100;
+          pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
+          pnlClass = pnl >= 0 ? 'up' : 'down';
+        }
+        html += '<div class="lt-item">';
+        html += '<div class="lt-item-row1">';
+        html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + '</div>';
+        html += '<div class="lt-item-score">' + (s.score || '--') + '分</div>';
+        html += '</div>';
+        html += '<div class="lt-item-row2">';
+        html += '<div class="lt-item-metric"><div class="lt-item-metric-label">买入价</div><div class="lt-item-metric-val">' + (buyP > 0 ? buyP.toFixed(2) : '未设置') + '</div></div>';
+        html += '<div class="lt-item-metric"><div class="lt-item-metric-label">当前价</div><div class="lt-item-metric-val">' + (curP > 0 ? curP.toFixed(2) : '--') + '</div></div>';
+        html += '<div class="lt-item-metric"><div class="lt-item-metric-label">盈亏</div><div class="lt-item-metric-val ' + pnlClass + '">' + pnlStr + '</div></div>';
+        html += '</div>';
+        html += '<div class="lt-item-actions">';
+        html += '<button class="lt-btn" onclick="LongTermPortfolio._editBuyPrice(\'' + s.code + '\')">修改买入价</button>';
+        html += '<button class="lt-btn lt-btn-danger" onclick="LongTermPortfolio._removeItem(\'' + s.code + '\')">移除</button>';
+        html += '</div>';
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+
+    // 添加股票
+    html += '<div class="lt-add-row">';
+    html += '<input id="ltAddCode" type="text" class="lt-add-input" placeholder="输入股票代码，如 sh600519">';
+    html += '<input id="ltAddPrice" type="number" class="lt-add-input" placeholder="买入价" style="max-width:90px">';
+    html += '<button class="lt-add-btn" onclick="LongTermPortfolio._addFromInput()">添加</button>';
+    html += '</div>';
+
+    html += '</div></div>';
+
+    overlay.innerHTML = html;
+    document.body.appendChild(overlay);
+
+    // 刷新价格
+    this.refreshPrices().then(() => this._refreshListDisplay());
+  },
+
+  _closeManager() {
+    const overlay = document.getElementById('ltModalOverlay');
+    if (overlay) overlay.remove();
+  },
+
+  _addFromInput() {
+    const codeInput = document.getElementById('ltAddCode');
+    const priceInput = document.getElementById('ltAddPrice');
+    let code = (codeInput?.value || '').trim();
+    const price = parseFloat(priceInput?.value || 0);
+    if (!code) { Utils.toast('请输入股票代码'); return; }
+
+    // 规范化代码
+    code = this._normalizeCode(code);
+    if (!code) { Utils.toast('股票代码格式不正确'); return; }
+
+    // 查询名称
+    DataAPI.fetchQuote(code).then(q => {
+      const name = q ? q.name : code;
+      const success = this.addStock(code, name, price);
+      if (success) {
+        if (codeInput) codeInput.value = '';
+        if (priceInput) priceInput.value = '';
+        this._refreshListDisplay();
+      }
+    }).catch(() => {
+      this.addStock(code, code, price);
+      this._refreshListDisplay();
+    });
+  },
+
+  _normalizeCode(code) {
+    code = code.toLowerCase().replace(/\s/g, '');
+    if (/^(sh|sz|bj)\d{6}$/.test(code)) return code;
+    if (/^\d{6}$/.test(code)) {
+      if (code.startsWith('6')) return 'sh' + code;
+      if (code.startsWith('0') || code.startsWith('3')) return 'sz' + code;
+      if (code.startsWith('8') || code.startsWith('4')) return 'bj' + code;
+      return 'sh' + code;
+    }
+    return null;
+  },
+
+  _removeItem(code) {
+    if (!confirm('确定要从持有池移除这只股票吗？')) return;
+    this.removeStock(code);
+    this._refreshListDisplay();
+  },
+
+  _editBuyPrice(code) {
+    const list = this.getPortfolio();
+    const item = list.find(s => s.code === code);
+    if (!item) return;
+    const newPrice = prompt('请输入买入价：', item.buyPrice || '');
+    if (newPrice === null) return;
+    const p = parseFloat(newPrice);
+    if (isNaN(p) || p <= 0) { Utils.toast('价格无效'); return; }
+    this.updateBuyPrice(code, p);
+    this._refreshListDisplay();
+  },
+
+  _refreshListDisplay() {
+    // 重新渲染列表
+    const list = this.getPortfolio();
+    const body = document.getElementById('ltListBody');
+    if (!body) return;
+
+    const totalReturn = this.getTotalReturn();
+    const returnColor = totalReturn >= 0 ? '#ff5252' : '#00e676';
+
+    // 更新汇总
+    const parent = body.parentElement;
+    const sumRow = parent.querySelector('.lt-summary-row');
+    if (sumRow) {
+      sumRow.innerHTML = '<div class="lt-summary-item"><div class="lt-summary-label">持仓数量</div><div class="lt-summary-val">' + list.length + '</div></div>' +
+        '<div class="lt-summary-item"><div class="lt-summary-label">总盈亏率</div><div class="lt-summary-val" style="color:' + returnColor + '">' + (totalReturn >= 0 ? '+' : '') + totalReturn.toFixed(2) + '%</div></div>';
+    }
+
+    if (list.length === 0) {
+      body.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:20px 0;font-size:12px">暂无持仓，快去添加看好的价值股吧</div>';
+      return;
+    }
+
+    let html = '';
+    list.forEach(s => {
+      const curP = s.currentPrice || 0;
+      const buyP = s.buyPrice || 0;
+      let pnlStr = '--';
+      let pnlClass = '';
+      if (buyP > 0 && curP > 0) {
+        const pnl = (curP - buyP) / buyP * 100;
+        pnlStr = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
+        pnlClass = pnl >= 0 ? 'up' : 'down';
+      }
+      html += '<div class="lt-item">';
+      html += '<div class="lt-item-row1">';
+      html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + '</div>';
+      html += '<div class="lt-item-score">' + (s.score || '--') + '分</div>';
+      html += '</div>';
+      html += '<div class="lt-item-row2">';
+      html += '<div class="lt-item-metric"><div class="lt-item-metric-label">买入价</div><div class="lt-item-metric-val">' + (buyP > 0 ? buyP.toFixed(2) : '未设置') + '</div></div>';
+      html += '<div class="lt-item-metric"><div class="lt-item-metric-label">当前价</div><div class="lt-item-metric-val">' + (curP > 0 ? curP.toFixed(2) : '--') + '</div></div>';
+      html += '<div class="lt-item-metric"><div class="lt-item-metric-label">盈亏</div><div class="lt-item-metric-val ' + pnlClass + '">' + pnlStr + '</div></div>';
+      html += '</div>';
+      html += '<div class="lt-item-actions">';
+      html += '<button class="lt-btn" onclick="LongTermPortfolio._editBuyPrice(\'' + s.code + '\')">修改买入价</button>';
+      html += '<button class="lt-btn lt-btn-danger" onclick="LongTermPortfolio._removeItem(\'' + s.code + '\')">移除</button>';
+      html += '</div>';
+      html += '</div>';
+    });
+    body.innerHTML = html;
+  }
+};
