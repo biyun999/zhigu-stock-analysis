@@ -2038,15 +2038,18 @@ const DataAPI = {
   },
 
   /** v4.0 获取F10财务主要指标（东方财富ZYZB，近9期）。A股专用，港股/北交所返回null */
+  /** v4.4 P19: JSONP跨域修复 — 优先fetch，失败自动降级为JSONP（东财datacenter-web接口） */
   async fetchFinancials(code) {
     if (code.startsWith('hk') || code.startsWith('us')) return null;
     const cacheKey = 'financials_' + code;
     const cached = this._cacheGet(cacheKey, 'financials');
     if (cached) return cached;
+    // 北交所(8/4开头)F10接口暂不支持，直接返回null
+    const num = code.substring(2);
+    if (/^(8|4|92)/.test(num)) return null;
+
+    // 方案一：原始 fetch 方式（直连 emweb F10 接口）
     try {
-      const num = code.substring(2);
-      // 北交所(8/4开头)F10接口暂不支持，直接跳过走旧逻辑
-      if (/^(8|4|92)/.test(num)) return null;
       const prefix = code.startsWith('sh') ? 'SH' : 'SZ';
       const url = 'https://emweb.securities.eastmoney.com/PC_HSF10/NewFinanceAnalysis/ZYZBAjaxNew?type=0&code=' + prefix + num;
       const ctrl = new AbortController();
@@ -2056,47 +2059,213 @@ const DataAPI = {
         headers: { 'Referer': 'https://emweb.securities.eastmoney.com/' }
       });
       clearTimeout(timer);
-      if (!resp.ok) return null;
-      const data = await resp.json();
-      if (!data || !data.data || data.data.length === 0) return null;
-      // 最新一期 + 去年同期（用于验证增长方向）
-      const r = data.data[0];
-      const rYoy = data.data.find(x => x.REPORT_DATE_NAME && x.REPORT_DATE_NAME.indexOf(r.REPORT_DATE_NAME.replace(/^[0-9]+/, String(parseInt(r.REPORT_DATE_NAME) - 1))) === 0) || null;
-      const numOrNull = v => {
-          if (v === null || v === undefined || v === '') return null;
-          const n = parseFloat(v);
-          return isNaN(n) ? null : n;
-        };
-      const result = {
-        period: r.REPORT_DATE_NAME,
-        roe: numOrNull(r.ROEJQ),                  // 加权ROE %
-        grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
-        netMargin: numOrNull(r.XSJLL),            // 销售净利率 %
-        revGrowth: numOrNull(r.TOTALOPERATEREVETZ),   // 营收同比 %
-        profitGrowth: numOrNull(r.PARENTNETPROFITTZ), // 归母净利同比 %
-        deductedGrowth: numOrNull(r.KCFJCXSYJLRTZ),   // 扣非净利同比 %
-        debtRatio: numOrNull(r.ZCFZL),            // 资产负债率 %
-        eps: numOrNull(r.EPSJB),                  // 每股收益
-        bps: numOrNull(r.BPS),                    // 每股净资产
-        ocfps: numOrNull(r.MGJYXJJE),             // 每股经营现金流
-        currentRatio: numOrNull(r.LD),            // 流动比率
-        invTurnover: numOrNull(r.CHZZL),          // 存货周转率
-        arTurnover: numOrNull(r.YSZKZZL),         // 应收账款周转率
-        assetTurnover: numOrNull(r.TOAZZL),       // 总资产周转率
-        cashToRevenue: numOrNull(r.JYXJLYYSR),    // 经营现金流/营收 %（盈利含金量）
-        // 去年同期增速，用于判断改善方向
-        prevRevGrowth: rYoy ? numOrNull(rYoy.TOTALOPERATEREVETZ) : null,
-        prevProfitGrowth: rYoy ? numOrNull(rYoy.PARENTNETPROFITTZ) : null
-      };
-      this._cacheSet(cacheKey, 'financials', result);
-      return result;
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.data && data.data.length > 0) {
+          const result = this._parseFinancialsZYZB(data);
+          if (result) {
+            result._source = 'fetch_zyzb';
+            this._cacheSet(cacheKey, 'financials', result);
+            return result;
+          }
+        }
+      }
     } catch (e) {
-      console.warn('[财报] 获取失败:', code, e && e.message);
-      return null;
+      console.warn('[财报] fetch失败，降级JSONP:', code, e && e.message);
     }
+
+    // 方案二：JSONP 降级（东财 datacenter-web 接口，支持跨域）
+    try {
+      const result = await this._fetchFinancialsJSONP(code);
+      if (result) {
+        result._source = 'jsonp_datacenter';
+        this._cacheSet(cacheKey, 'financials', result);
+        return result;
+      }
+    } catch (e) {
+      console.warn('[财报] JSONP也失败:', code, e && e.message);
+    }
+
+    return null;
   },
 
-  /** v4.0 获取龙虎榜历史（近90天上榜记录，含机构席位与上榜后表现）。A股专用 */
+  /** v4.4 P19: 解析原始ZYZB接口返回（保持与旧版一致） */
+  _parseFinancialsZYZB(data) {
+    if (!data || !data.data || data.data.length === 0) return null;
+    const r = data.data[0];
+    const rYoy = data.data.find(x => x.REPORT_DATE_NAME && x.REPORT_DATE_NAME.indexOf(r.REPORT_DATE_NAME.replace(/^[0-9]+/, String(parseInt(r.REPORT_DATE_NAME) - 1))) === 0) || null;
+    const numOrNull = v => {
+        if (v === null || v === undefined || v === '') return null;
+        const n = parseFloat(v);
+        return isNaN(n) ? null : n;
+      };
+    return {
+      period: r.REPORT_DATE_NAME,
+      roe: numOrNull(r.ROEJQ),                  // 加权ROE %
+      grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
+      netMargin: numOrNull(r.XSJLL),            // 销售净利率 %
+      revGrowth: numOrNull(r.TOTALOPERATEREVETZ),   // 营收同比 %
+      profitGrowth: numOrNull(r.PARENTNETPROFITTZ), // 归母净利同比 %
+      deductedGrowth: numOrNull(r.KCFJCXSYJLRTZ),   // 扣非净利同比 %
+      debtRatio: numOrNull(r.ZCFZL),            // 资产负债率 %
+      eps: numOrNull(r.EPSJB),                  // 每股收益
+      bps: numOrNull(r.BPS),                    // 每股净资产
+      ocfps: numOrNull(r.MGJYXJJE),             // 每股经营现金流
+      currentRatio: numOrNull(r.LD),            // 流动比率
+      invTurnover: numOrNull(r.CHZZL),          // 存货周转率
+      arTurnover: numOrNull(r.YSZKZZL),         // 应收账款周转率
+      assetTurnover: numOrNull(r.TOAZZL),       // 总资产周转率
+      cashToRevenue: numOrNull(r.JYXJLYYSR),    // 经营现金流/营收 %（盈利含金量）
+      prevRevGrowth: rYoy ? numOrNull(rYoy.TOTALOPERATEREVETZ) : null,
+      prevProfitGrowth: rYoy ? numOrNull(rYoy.PARENTNETPROFITTZ) : null
+    };
+  },
+
+  /** v4.4 P19: JSONP方式获取财务数据（东财datacenter-web，支持跨域）
+   *  合并 RPT_LICO_FN_CPD（主要指标）+ RPT_DMSK_FN_BALANCE（资产负债表）
+   */
+  _fetchFinancialsJSONP(code) {
+    const num = code.substring(2);
+    const encodedCode = encodeURIComponent('"' + num + '"');
+    // 接口1：主要财务指标（ROE、EPS、BPS、营收增速、净利增速、毛利率、每股现金流）
+    const urlMain = 'https://datacenter-web.eastmoney.com/api/data/v1/get?' +
+      'reportName=RPT_LICO_FN_CPD' +
+      '&columns=ALL' +
+      '&filter=(SECURITY_CODE%3D' + encodedCode + ')' +
+      '&pageSize=10&pageNumber=1' +
+      '&sortColumns=REPORTDATE&sortTypes=-1' +
+      '&source=WEB&client=WEB';
+
+    return new Promise((resolve) => {
+      const cbName = '__zg_fin_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      let timer = null;
+      let script = null;
+      let done = false;
+
+      const cleanup = () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (script && script.parentNode) {
+          script.parentNode.removeChild(script);
+          script = null;
+        }
+        try { delete window[cbName]; } catch (e) { window[cbName] = null; }
+      };
+
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        cleanup();
+        resolve(result);
+      };
+
+      window[cbName] = (resp) => {
+        try {
+          if (!resp || !resp.result || !resp.result.data || resp.result.data.length === 0) {
+            finish(null);
+            return;
+          }
+          const list = resp.result.data;
+          // 取最新一期 + 去年同期
+          const r = list[0];
+          // 找去年同期（同报告期类型）
+          const currentDate = r.REPORTDATE || '';
+          const currentYear = parseInt(currentDate.substring(0, 4));
+          const rYoy = list.find(x => {
+            const d = x.REPORTDATE || '';
+            return d.substring(0, 4) === String(currentYear - 1) &&
+                   d.substring(4) === currentDate.substring(4) &&
+                   x.QDATE && r.QDATE && x.QDATE.substring(4) === r.QDATE.substring(4);
+          }) || null;
+
+          const numOrNull = v => {
+            if (v === null || v === undefined || v === '') return null;
+            const n = parseFloat(v);
+            return isNaN(n) ? null : n;
+          };
+
+          const result = {
+            period: r.DATATYPE || r.REPORTDATE ? (r.DATATYPE || r.REPORTDATE.substring(0, 10)) : '',
+            roe: numOrNull(r.WEIGHTAVG_ROE),          // 加权ROE %
+            grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
+            netMargin: null,                           // 该接口没有净利率
+            revGrowth: numOrNull(r.YSTZ),              // 营收同比 %
+            profitGrowth: numOrNull(r.SJLTZ),          // 归母净利同比 %
+            deductedGrowth: null,                      // 该接口没有扣非增速
+            debtRatio: null,                           // 后面从资产负债表接口补
+            eps: numOrNull(r.BASIC_EPS),               // 基本每股收益
+            bps: numOrNull(r.BPS),                     // 每股净资产
+            ocfps: numOrNull(r.MGJYXJJE),              // 每股经营现金流
+            currentRatio: null,                        // 后面从资产负债表接口补
+            invTurnover: null,
+            arTurnover: null,
+            assetTurnover: null,
+            cashToRevenue: null,
+            prevRevGrowth: rYoy ? numOrNull(rYoy.YSTZ) : null,
+            prevProfitGrowth: rYoy ? numOrNull(rYoy.SJLTZ) : null
+          };
+
+          // 继续用 JSONP 获取资产负债表数据（补全 debtRatio、currentRatio）
+          const urlBalance = 'https://datacenter-web.eastmoney.com/api/data/v1/get?' +
+            'reportName=RPT_DMSK_FN_BALANCE' +
+            '&columns=SECURITY_CODE,REPORT_DATE,DEBT_ASSET_RATIO,CURRENT_RATIO,TOTAL_ASSETS,TOTAL_LIABILITIES,TOTAL_EQUITY' +
+            '&filter=(SECURITY_CODE%3D' + encodedCode + ')' +
+            '&pageSize=2&pageNumber=1' +
+            '&sortColumns=REPORT_DATE&sortTypes=-1' +
+            '&source=WEB&client=WEB';
+
+          const cbName2 = '__zg_bal_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+          let timer2 = null;
+          let script2 = null;
+          let done2 = false;
+
+          const cleanup2 = () => {
+            if (timer2) { clearTimeout(timer2); timer2 = null; }
+            if (script2 && script2.parentNode) {
+              script2.parentNode.removeChild(script2);
+              script2 = null;
+            }
+            try { delete window[cbName2]; } catch (e) { window[cbName2] = null; }
+          };
+
+          const finish2 = () => {
+            if (done2) return;
+            done2 = true;
+            cleanup2();
+            finish(result);
+          };
+
+          window[cbName2] = (resp2) => {
+            try {
+              if (resp2 && resp2.result && resp2.result.data && resp2.result.data.length > 0) {
+                const bal = resp2.result.data[0];
+                result.debtRatio = numOrNull(bal.DEBT_ASSET_RATIO);
+                result.currentRatio = numOrNull(bal.CURRENT_RATIO);
+              }
+            } catch (e2) { /* ignore */ }
+            finish2();
+          };
+
+          script2 = document.createElement('script');
+          script2.src = urlBalance + '&callback=' + cbName2;
+          script2.onerror = () => finish2();
+          timer2 = setTimeout(() => finish2(), 6000);
+          document.head.appendChild(script2);
+
+        } catch (e) {
+          console.warn('[财报] JSONP解析失败:', code, e && e.message);
+          finish(null);
+        }
+      };
+
+      script = document.createElement('script');
+      script.src = urlMain + '&callback=' + cbName;
+      script.onerror = () => finish(null);
+      timer = setTimeout(() => finish(null), 8000);
+      document.head.appendChild(script);
+    });
+  },
+
+/** v4.0 获取龙虎榜历史（近90天上榜记录，含机构席位与上榜后表现）。A股专用 */
   async fetchDragonTiger(code) {
     if (code.startsWith('hk') || code.startsWith('us')) return null;
     const cacheKey = 'dragonTiger_' + code;
