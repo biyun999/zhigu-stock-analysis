@@ -1,5 +1,6 @@
 /**
- * 智股分析 v4.4 - P17 价值投资模块（巴菲特式六维评分+全市场扫描+长期持有池）
+ * 智股分析 v4.4 - P18 价值投资修复+全页面返回按钮+次日预测休市自动核实优化
+ * v4.4-P18: 价值投资扫描修复（数据类型+降级方案+失败提示）+ 关于页返回按钮 + 次日预测休市智能核实+状态持久化
  * v4.4-P17: 巴菲特价值评分系统 + 全市场价值扫描TOP20 + 长期持有股票池 + 24小时自动刷新
  * v4.4-P11: 每日自动核实（打开APP静默补核实昨日及更早数据）+ 首页台账Tab前置 + 批量导出股票代码/名称
  * v4.4-P9: 跨设备授权管理系统（设备指纹+加密迁移+多设备管理）
@@ -2061,7 +2062,11 @@ const DataAPI = {
       // 最新一期 + 去年同期（用于验证增长方向）
       const r = data.data[0];
       const rYoy = data.data.find(x => x.REPORT_DATE_NAME && x.REPORT_DATE_NAME.indexOf(r.REPORT_DATE_NAME.replace(/^[0-9]+/, String(parseInt(r.REPORT_DATE_NAME) - 1))) === 0) || null;
-      const numOrNull = v => (v === null || v === undefined || isNaN(v)) ? null : v;
+      const numOrNull = v => {
+          if (v === null || v === undefined || v === '') return null;
+          const n = parseFloat(v);
+          return isNaN(n) ? null : n;
+        };
       const result = {
         period: r.REPORT_DATE_NAME,
         roe: numOrNull(r.ROEJQ),                  // 加权ROE %
@@ -8176,46 +8181,147 @@ const ShortTermLedger = {
 // ============================================================
 const AutoVerify = {
   _done: false,
-  _lastVerifyResult: null,  // 最近一次自动核实结果：{ date, totalHit, totalResolved, winRate, newDays }
+  _lastVerifyResult: null,  // 最近一次自动核实结果
+  _persistKey: 'zhigu_autoverify_last',
 
-  /** APP初始化后静默核实所有未核实的昨日及更早数据 */
+  /** 判断当前是否为交易日（简化：非周末） */
+  _isTradingDay(date = new Date()) {
+    const day = date.getDay();
+    return day !== 0 && day !== 6;
+  },
+
+  /** 判断当前是否在交易时段（9:30-11:30, 13:00-15:00） */
+  _isTradingHours(date = new Date()) {
+    const h = date.getHours();
+    const m = date.getMinutes();
+    const t = h * 60 + m;
+    if (t >= 9 * 60 + 30 && t <= 11 * 60 + 30) return true;  // 上午
+    if (t >= 13 * 60 && t <= 15 * 60) return true;            // 下午
+    return false;
+  },
+
+  /** 是否应当核实（休市时有昨日数据未核实则核实） */
+  _shouldVerifyNow() {
+    const now = new Date();
+    if (!this._isTradingDay(now)) return false;  // 周末不核实
+    // 交易日：只要不在早盘前（<9:25）就可能有数据核实
+    const h = now.getHours(), m = now.getMinutes();
+    if (h < 9 || (h === 9 && m < 25)) return false;  // 太早没数据
+    return true;
+  },
+
+  /** 加载持久化的最近核实结果 */
+  _loadLastResult() {
+    try {
+      const s = localStorage.getItem(this._persistKey);
+      return s ? JSON.parse(s) : null;
+    } catch (e) { return null; }
+  },
+
+  /** 保存持久化 */
+  _saveLastResult(r) {
+    try { localStorage.setItem(this._persistKey, JSON.stringify(r)); } catch (e) {}
+  },
+
+  /** 判断今天是否已经核实过（基于日期） */
+  _alreadyVerifiedToday() {
+    const last = this._loadLastResult();
+    if (!last) return false;
+    const today = new Date().toISOString().slice(0, 10);
+    return last.verifyDate === today;
+  },
+
+  /** APP初始化后静默核实所有未核实的昨日及更早数据（v4.4 P18：休市智能判断+进度+持久化） */
   async silentVerify() {
     if (this._done) return;
     this._done = true;
+
+    // 交易日判断：非交易日直接跳过
+    if (!this._shouldVerifyNow()) {
+      console.log('[AutoVerify] 非交易时段，跳过自动核实');
+      return;
+    }
+
+    // 如果今天已经核实过，直接显示结果
+    if (this._alreadyVerifiedToday()) {
+      const last = this._loadLastResult();
+      this._lastVerifyResult = last;
+      this._showHomeVerifyResult(last, true);
+      return;
+    }
+
     try {
+      // 显示核实中状态条
+      this._showVerifyingBanner();
+
       const ndBefore = NextDayPrediction._loadSnapshots().filter(s => s.verified === true).length;
       const stBefore = ShortTermLedger._loadSnapshots().filter(s => s.verified === true).length;
 
       await this._verifyNextDay();
       await this._verifyShortTerm();
 
-      // 计算本次新核实了多少，供首页提示用
       const ndAfter = NextDayPrediction._loadSnapshots().filter(s => s.verified === true).length;
       const stAfter = ShortTermLedger._loadSnapshots().filter(s => s.verified === true).length;
       const newDays = (ndAfter - ndBefore) + (stAfter - stBefore);
 
+      const stats = this.getStats();
+      const today = NextDayPrediction._todayStr();
+      this._lastVerifyResult = {
+        date: today,
+        verifyDate: today,
+        totalHit: stats.totalHit,
+        totalResolved: stats.totalResolved,
+        winRate: stats.totalWinRate,
+        newDays: newDays
+      };
+      this._saveLastResult(this._lastVerifyResult);
+
+      // 显示结果到首页
       if (newDays > 0) {
-        const stats = this.getStats();
-        this._lastVerifyResult = {
-          date: NextDayPrediction._todayStr(),
-          totalHit: stats.totalHit,
-          totalResolved: stats.totalResolved,
-          winRate: stats.totalWinRate,
-          newDays: newDays
-        };
-        // 顶部轻量提示条
-        this._showVerifyBanner();
+        this._showHomeVerifyResult(this._lastVerifyResult, false);
+      } else {
+        // 无新数据，隐藏进度条
+        this._hideVerifyingBanner();
       }
     } catch (e) {
       console.warn('自动核实异常，下次打开重试', e);
+      this._hideVerifyingBanner();
     }
   },
 
-  /** 显示核实完成顶部提示条 */
+  /** 显示核实中状态条（首页顶部） */
+  _showVerifyingBanner() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    bar.innerHTML = '📊 正在自动核实昨日预测准确率...';
+    bar.className = 'verify-status-bar verifying';
+    bar.style.display = '';
+  },
+
+  _hideVerifyingBanner() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    bar.style.display = 'none';
+  },
+
+  /** 显示核实完成结果到首页状态条 */
+  _showHomeVerifyResult(r, fromCache) {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' +
+      (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实');
+    bar.className = 'verify-status-bar success';
+    bar.style.display = '';
+    // 3秒后淡出，但保留（点击可重新查看 / 留作信息）
+    setTimeout(() => {
+      bar.style.opacity = '0.6';
+    }, 3000);
+  },
+
+  /** 显示核实完成顶部提示条（保留旧版兼容） */
   _showVerifyBanner() {
     const r = this._lastVerifyResult;
     if (!r) return;
-    // 创建提示条（一次性，不影响现有 toast）
     let banner = document.getElementById('verifyResultBanner');
     if (!banner) {
       banner = document.createElement('div');
@@ -13593,18 +13699,36 @@ const ValueScreener = {
 
       // 第三步：分批请求详细财务数据并评分
       const scored = [];
+      let failedCount = 0;
       const batchSize = 10;
+      let useFallback = false;
       for (let i = 0; i < candidates.length; i += batchSize) {
         const batch = candidates.slice(i, i + batchSize);
         const results = await Promise.all(
-          batch.map(s => this._scoreOne(s).catch(() => null))
+          batch.map(s => this._scoreOne(s, useFallback).catch(() => ({ _failed: true, code: s.code })))
         );
-        results.forEach(r => { if (r) scored.push(r); });
+        results.forEach(r => {
+          if (r && r._failed) { failedCount++; return; }
+          if (r) scored.push(r);
+        });
+
+        // 首批失败率超 80%，触发降级模式（剩余批次只用 PE/PB 简易评分）
+        if (!useFallback && i + batchSize >= 20) {
+          const processed = Math.min(i + batchSize, candidates.length);
+          if (processed > 0 && failedCount / processed > 0.8) {
+            console.warn('[ValueScreener] 财务接口失败率过高，触发降级模式');
+            useFallback = true;
+          }
+        }
 
         if (!silent) {
           this._updateProgress(Math.min(i + batchSize, candidates.length), candidates.length);
         }
       }
+
+      const successCount = scored.length;
+      const failRate = candidates.length > 0 ? (failedCount / candidates.length) : 0;
+      console.log('[ValueScreener] 扫描统计：成功', successCount, '失败', failedCount, '失败率', (failRate*100).toFixed(1)+'%');
 
       // 第四步：排序取TOP20
       scored.sort((a, b) => b.score - a.score);
@@ -13622,6 +13746,9 @@ const ValueScreener = {
         totalScanned: topStocks.length,
         filteredCount: candidates.length,
         scoredCount: scored.length,
+        failedCount: failedCount,
+        failRate: failRate,
+        fallbackMode: useFallback,
         stocks: top20.map(s => ({
           code: s.code,
           name: s.name,
@@ -13651,7 +13778,13 @@ const ValueScreener = {
 
       if (!silent) {
         this._showProgress(false);
-        Utils.toast(`扫描完成，共评估${scored.length}只股票，TOP20已更新`);
+        if (useFallback) {
+          Utils.toast(`财务接口受限，已降级为PE/PB估值评分（${scored.length}只）`);
+        } else if (failedCount > 0) {
+          Utils.toast(`扫描完成，评估${scored.length}只，${failedCount}只获取财务数据失败`);
+        } else {
+          Utils.toast(`扫描完成，共评估${scored.length}只股票，TOP20已更新`);
+        }
       }
 
       return result;
@@ -13677,8 +13810,8 @@ const ValueScreener = {
       if (s.name.indexOf('ST') >= 0) return false;
       // 有价格
       if (!s.price || s.price <= 0) return false;
-      // 成交额 > 5000万（amount单位手，需×price×100换算为元）
-      const amtYuan = (s.amount || 0) * (s.price || 0) * 100;
+      // 成交额 > 5000万（amount 单位为元，来自东方财富 f6 成交额字段）
+      const amtYuan = s.amount || 0;
       if (amtYuan < 50000000) return false;
       return true;
     });
@@ -13708,13 +13841,37 @@ const ValueScreener = {
   },
 
   /** 单只股票评分 */
-  async _scoreOne(stock) {
+  async _scoreOne(stock, fallbackMode = false) {
     try {
       const financials = await DataAPI.fetchFinancials(stock.code);
-      if (!financials) return null;
-      // ROE或毛利率为空且不是金融行业的，跳过
-      if (financials.roe === null || financials.roe === undefined) return null;
+      // 完全失败且不在降级模式：返回null交由调用方统计失败率
+      if (!financials && !fallbackMode) return { _failed: true, code: stock.code };
+      if (!financials && fallbackMode) {
+        // 降级模式：只用 quote 中的 PE/PB 做简易评分，ROE 置 0
+        const simpleResult = ValueInvestor.calcBuffettScore(stock, { roe: null, grossMargin: null, debtRatio: null, revGrowth: null, profitGrowth: null, cashToRevenue: null, pe: stock.pe, bps: null });
+        return {
+          code: stock.code,
+          name: stock.name,
+          industry: stock.industry || '',
+          price: stock.price,
+          pe: stock.pe,
+          pb: stock.pb,
+          roe: null,
+          grossMargin: null,
+          netMargin: null,
+          revGrowth: null,
+          profitGrowth: null,
+          debtRatio: null,
+          cashToRevenue: null,
+          score: simpleResult.totalScore,
+          level: simpleResult.level,
+          levelText: simpleResult.levelText,
+          dims: simpleResult.dims,
+          _simple: true
+        };
+      }
 
+      // 注意：ROE 为 null 时仍然评分（按 0 分处理），只有完全无数据才跳过
       const result = ValueInvestor.calcBuffettScore(stock, financials);
       return {
         code: stock.code,
@@ -13736,7 +13893,7 @@ const ValueScreener = {
         dims: result.dims
       };
     } catch (e) {
-      return null;
+      return { _failed: true, code: stock.code };
     }
   },
 
@@ -13761,7 +13918,11 @@ const ValueScreener = {
 
     const data = this.getCache();
     if (!data || !data.stocks || data.stocks.length === 0) {
-      container.innerHTML = '<div class="empty-tip">暂无价值投资数据<br><span style="font-size:11px;color:var(--text-muted)">点击下方「重新扫描」生成巴菲特价值TOP20榜单</span></div>';
+      let hint = '暂无价值投资数据<br><span style="font-size:11px;color:var(--text-muted)">点击下方「重新扫描」生成巴菲特价值TOP20榜单</span>';
+      if (data && data.failedCount && data.failRate > 0.5) {
+        hint = '价值扫描无结果<br><span style="font-size:11px;color:var(--text-muted)">可能原因：财务接口跨域受限<br>请尝试：1) 切换网络环境 2) 稍后重试<br>接口降级后将自动使用PE/PB估值评分</span>';
+      }
+      container.innerHTML = '<div class="empty-tip">' + hint + '</div>';
       return;
     }
 

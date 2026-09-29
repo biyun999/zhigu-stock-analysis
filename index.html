@@ -136,6 +136,9 @@
   <main id="app-content">
     <!-- ===== 首页 ===== -->
     <div id="page-home" class="page active">
+      <!-- v4.4 P18: 自动核实状态条 -->
+      <div id="homeVerifyStatusBar" class="verify-status-bar" style="display:none"></div>
+
       <!-- 快速搜索 -->
       <section class="card search-card">
         <div class="card-title">🔍 股票搜索</div>
@@ -566,10 +569,13 @@
 
     <!-- ===== 关于页 ===== -->
     <div id="page-about" class="page">
+      <div class="page-back-bar">
+        <button class="btn-back" onclick="App.goBack()">← 返回</button>
+      </div>
       <section class="card about-card">
         <div class="about-logo">
           <div class="about-icon">智股</div>
-          <h2>智股分析 v4.4-p12</h2>
+          <h2>智股分析 v4.4-p18</h2>
           <p class="about-sub">A股七维度智能分析系统</p>
         </div>
         <div class="about-features">

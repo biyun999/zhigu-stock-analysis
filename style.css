@@ -3654,6 +3654,36 @@ body {
   top: 0;
 }
 
+/* v4.4 P18: 首页核实状态条 */
+.verify-status-bar {
+  background: linear-gradient(90deg, rgba(0, 212, 255, 0.12), rgba(0, 150, 255, 0.08));
+  border: 1px solid rgba(0, 212, 255, 0.25);
+  color: var(--text-primary);
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  margin: 8px 12px 0;
+  text-align: center;
+  transition: all 0.3s ease;
+  backdrop-filter: blur(8px);
+}
+
+.verify-status-bar.verifying {
+  animation: verifyPulse 1.5s ease-in-out infinite;
+  border-color: rgba(255, 193, 7, 0.4);
+  background: linear-gradient(90deg, rgba(255, 193, 7, 0.1), rgba(255, 152, 0, 0.06));
+}
+
+.verify-status-bar.success {
+  border-color: rgba(0, 230, 118, 0.3);
+  background: linear-gradient(90deg, rgba(0, 230, 118, 0.12), rgba(0, 200, 100, 0.06));
+}
+
+@keyframes verifyPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
 /* ========== v4.4 P14: 六维分数档位胜率表格 ========== */
 .score-bucket-table {
   width: 100%;
