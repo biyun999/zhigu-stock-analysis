@@ -13677,8 +13677,9 @@ const ValueScreener = {
       if (s.name.indexOf('ST') >= 0) return false;
       // 有价格
       if (!s.price || s.price <= 0) return false;
-      // 成交额 > 5000万（amount单位元）
-      if (!s.amount || s.amount < 50000000) return false;
+      // 成交额 > 5000万（amount单位手，需×price×100换算为元）
+      const amtYuan = (s.amount || 0) * (s.price || 0) * 100;
+      if (amtYuan < 50000000) return false;
       return true;
     });
 
