@@ -1,6 +1,6 @@
 /**
- * 智股分析 v4.4 - P18 价值投资修复+全页面返回按钮+次日预测休市自动核实优化
- * v4.4-P18: 价值投资扫描修复（数据类型+降级方案+失败提示）+ 关于页返回按钮 + 次日预测休市智能核实+状态持久化
+ * 智股分析 v4.4 - P20 每日自动扫描榜单+自动核实联动+个股长期趋势研判
+ * v4.4-P20: 每日打开APP自动扫描次日预测榜单+自动核实联动调度+设置页开关+个股长期趋势研判（均线系统+长期评分+关键价位）
  * v4.4-P17: 巴菲特价值评分系统 + 全市场价值扫描TOP20 + 长期持有股票池 + 24小时自动刷新
  * v4.4-P11: 每日自动核实（打开APP静默补核实昨日及更早数据）+ 首页台账Tab前置 + 批量导出股票代码/名称
  * v4.4-P9: 跨设备授权管理系统（设备指纹+加密迁移+多设备管理）
@@ -5663,11 +5663,14 @@ const NextDayPrediction = {
   },
 
   // ---------- 入口：扫描 ----------
-  async scan() {
+  async scan(silent = false) {
     if (this.scanning) return;
     this.scanning = true;
     const body = document.getElementById('nextDayBody');
-    const setStatus = (t) => { body.innerHTML = '<div class="loading-pulse">' + t + '</div>'; };
+    const setStatus = (t) => {
+      if (silent) { console.log('[NextDay]', t); return; }
+      if (body) body.innerHTML = '<div class="loading-pulse">' + t + '</div>';
+    };
 
     try {
       setStatus('第1步/5：拉取全市场成交额前200只活跃股...');
@@ -5677,7 +5680,7 @@ const NextDayPrediction = {
         DataAPI.fetchDragonTigerBatch(3).catch(() => {})
       ]);
       if (!stocks || stocks.length === 0) {
-        body.innerHTML = '<div class="empty-tip">全市场数据获取失败（网络问题或数据源暂时不可用），请稍后重试。</div>';
+        if (!silent && body) body.innerHTML = '<div class="empty-tip">全市场数据获取失败（网络问题或数据源暂时不可用），请稍后重试。</div>';
         return;
       }
       const dragonMap = dtMap || {};
@@ -5703,7 +5706,7 @@ const NextDayPrediction = {
       // 极端弱势：提示系统性风险，不出榜
       const idxAvg = breadth ? breadth.avgChange : 0;
       if (breadth && idxAvg <= -1.5 && upRatio < 0.25) {
-        body.innerHTML = '<div class="empty-tip">📉 今日大盘系统性走弱：三大指数平均' + idxAvg.toFixed(2)
+        if (!silent && body) body.innerHTML = '<div class="empty-tip">📉 今日大盘系统性走弱：三大指数平均' + idxAvg.toFixed(2)
           + '%，活跃股仅' + Math.round(upRatio * 100) + '%上涨。<br><br>覆巢之下无完卵，次日个股上涨概率整体偏低，'
           + '建议空仓观望或等待企稳，本模型今日不出具排名。</div>';
         return;
@@ -5897,10 +5900,10 @@ const NextDayPrediction = {
       this._saveSnapshots(snaps);
 
       this._renderList(snapshot);
-      Utils.toast ? Utils.toast('已保存 ' + this._todayStr() + ' 排名，次日可点「核实昨日排名」验证') : null;
+      if (!silent) { Utils.toast ? Utils.toast('已保存 ' + this._todayStr() + ' 排名，次日可点「核实昨日排名」验证') : null; }
     } catch (e) {
       console.error('NextDayPrediction.scan error:', e);
-      body.innerHTML = '<div class="empty-tip">扫描失败：' + (e.message || e) + '，请稍后重试。</div>';
+      if (!silent && body) body.innerHTML = '<div class="empty-tip">扫描失败：' + (e.message || e) + '，请稍后重试。</div>';
     } finally {
       this.scanning = false;
     }
@@ -8405,9 +8408,13 @@ const AutoVerify = {
     if (this._done) return;
     this._done = true;
 
-    // 交易日判断：非交易日直接跳过
+    // 交易日判断：非交易时段不核实，但仍可扫描
     if (!this._shouldVerifyNow()) {
       console.log('[AutoVerify] 非交易时段，跳过自动核实');
+      // v4.4 P20: 非交易时段但为交易日时，仍启动自动扫描
+      if (this._isTradingDay()) {
+        this._triggerAutoScan();
+      }
       return;
     }
 
@@ -8416,6 +8423,8 @@ const AutoVerify = {
       const last = this._loadLastResult();
       this._lastVerifyResult = last;
       this._showHomeVerifyResult(last, true);
+      // v4.4 P20: 核实已完成，立即启动自动扫描
+      this._triggerAutoScan();
       return;
     }
 
@@ -8452,9 +8461,13 @@ const AutoVerify = {
         // 无新数据，隐藏进度条
         this._hideVerifyingBanner();
       }
+      // v4.4 P20: 核实完成后启动自动扫描
+      this._triggerAutoScan();
     } catch (e) {
       console.warn('自动核实异常，下次打开重试', e);
       this._hideVerifyingBanner();
+      // v4.4 P20: 核实失败不影响自动扫描
+      this._triggerAutoScan();
     }
   },
 
@@ -8500,6 +8513,14 @@ const AutoVerify = {
     banner.innerHTML = '✅ 已自动核实昨日TOP10，胜率 <b style="color:#00e676">' + r.winRate + '%</b>';
     banner.classList.add('show');
     setTimeout(() => banner.classList.remove('show'), 3000);
+  },
+
+  /** v4.4 P20: 触发自动扫描（异步，不阻塞） */
+  _triggerAutoScan() {
+    if (typeof AutoScan === 'undefined') return;
+    setTimeout(() => {
+      try { AutoScan.startAfterVerify(); } catch(e) { console.warn('[AutoScan] trigger error:', e); }
+    }, 500);
   },
 
   /** 计算累计/近7日/近30日/最佳单日等准确率统计 */
@@ -8641,6 +8662,129 @@ const AutoVerify = {
     ShortTermLedger._saveSnapshots(snaps);
     console.log('[AutoVerify] 短线榜核实完成，共' + pending.length + '个交易日');
   }
+};
+
+
+// ============================================================
+// 11.9 AutoScan - 每日自动扫描榜单（v4.4 P20）
+// ============================================================
+const AutoScan = {
+  _done: false,
+  _scanning: false,
+  _settingKey: 'zhigu_auto_scan',
+
+  /** 读取开关设置（默认开启） */
+  _isEnabled() {
+    try {
+      const v = localStorage.getItem(this._settingKey);
+      return v === null ? true : v === 'true';
+    } catch (e) { return true; }
+  },
+
+  /** 今日是否已有次日预测榜单 */
+  _hasTodayNextDay() {
+    try {
+      const snaps = NextDayPrediction._loadSnapshots();
+      const today = NextDayPrediction._todayStr();
+      return snaps.length > 0 && snaps[0].date === today;
+    } catch (e) { return false; }
+  },
+
+  /** 判断是否为交易日（与 AutoVerify 一致：非周末） */
+  _isTradingDay(date = new Date()) {
+    const day = date.getDay();
+    return day !== 0 && day !== 6;
+  },
+
+  /** 启动自动扫描（由 AutoVerify 核实完成后回调）
+   *  顺序：先核实昨日 → 再生成今日榜单
+   */
+  async startAfterVerify() {
+    if (this._done) return;
+    this._done = true;
+
+    if (!this._isEnabled()) {
+      console.log('[AutoScan] 用户已关闭自动扫描，跳过');
+      return;
+    }
+
+    if (!this._isTradingDay()) {
+      console.log('[AutoScan] 非交易日，跳过自动扫描');
+      return;
+    }
+
+    // 今天已有榜单，不重复扫描
+    if (this._hasTodayNextDay()) {
+      console.log('[AutoScan] 今日榜单已存在，跳过扫描');
+      return;
+    }
+
+    try {
+      this._scanning = true;
+      this._showScanningBanner();
+
+      console.log('[AutoScan] 开始自动扫描今日预测榜单...');
+      const result = await NextDayPrediction.scan(true); // silent模式
+
+      if (result === false) {
+        // 极端市不出榜的情况
+        this._showScanResultBanner(0, true);
+      } else {
+        const count = this._countTodayStocks();
+        this._showScanResultBanner(count, false);
+      }
+    } catch (e) {
+      console.warn('[AutoScan] 自动扫描失败，不影响使用：', e);
+      this._hideBanner();
+    } finally {
+      this._scanning = false;
+    }
+  },
+
+  _countTodayStocks() {
+    try {
+      const snaps = NextDayPrediction._loadSnapshots();
+      if (snaps.length === 0) return 0;
+      const today = NextDayPrediction._todayStr();
+      if (snaps[0].date !== today) return 0;
+      return (snaps[0].stocks || []).length;
+    } catch (e) { return 0; }
+  },
+
+  _showScanningBanner() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    bar.innerHTML = '🔍 正在生成今日预测榜单...';
+    bar.className = 'verify-status-bar auto-scanning';
+    bar.style.display = '';
+    bar.style.opacity = '1';
+  },
+
+  _showScanResultBanner(count, noRanking) {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    if (noRanking) {
+      bar.innerHTML = '⚠️ 今日大盘偏弱，未出具排名';
+      bar.className = 'verify-status-bar';
+    } else {
+      bar.innerHTML = '✅ 今日预测榜单已生成，共' + count + '只';
+      bar.className = 'verify-status-bar success';
+    }
+    bar.style.display = '';
+    bar.style.opacity = '1';
+    setTimeout(() => {
+      bar.style.opacity = '0.6';
+    }, 3000);
+  },
+
+  _hideBanner() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    // 如果当前显示的是扫描中状态，才隐藏；否则保留核实结果
+    if (bar.classList.contains('auto-scanning')) {
+      bar.style.display = 'none';
+    }
+  },
 };
 
 // ============================================================
@@ -10317,7 +10461,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard', 'techGrowthCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'longTermTrendCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard', 'techGrowthCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -10329,7 +10473,7 @@ const App = {
       // 并行获取数据
       const [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
         DataAPI.fetchQuote(code),
-        DataAPI.fetchKline(code),
+        DataAPI.fetchKline(code, 300),
         DataAPI.fetchCapitalFlow(code),
         DataAPI.fetchNews(code),
         DataAPI.fetchFinancials(code).catch(() => null),
@@ -10379,6 +10523,11 @@ const App = {
       // 渲染技术指标图表
       if (klines && klines.length > 10) {
         try { this.renderTechnicalCharts(klines, quote); } catch(e) { console.warn('[分析] renderTechnicalCharts异常:', e); }
+      }
+
+      // v4.4 P20: 长期趋势研判
+      if (klines && klines.length >= 20) {
+        try { this._renderLongTermTrend(klines); } catch(e) { console.warn('[分析] 长期趋势研判异常:', e); }
       }
 
       // 风险预警检测
@@ -11002,7 +11151,225 @@ const App = {
   },
 
   /** 渲染风险预警 */
-  renderRiskWarning(quote, klines) {
+
+  /** v4.4 P20: 长期趋势研判（基于250日K线） */
+  _calcLongTermTrend(klines) {
+    if (!klines || klines.length < 20) {
+      return null;
+    }
+    const closes = klines.map(k => k.close);
+    const n = closes.length;
+    const current = closes[n - 1];
+
+    // 计算各周期均线（MA20/MA60/MA120/MA250）
+    const calcMA = (period) => {
+      if (n < period) return null;
+      let sum = 0;
+      for (let i = n - period; i < n; i++) sum += closes[i];
+      return sum / period;
+    };
+
+    const ma20 = calcMA(20);
+    const ma60 = calcMA(60);
+    const ma120 = calcMA(120);
+    const ma250 = calcMA(250);
+
+    // 均线排列状态判断
+    let maAlignment = 'unknown';
+    let alignmentText = '数据不足';
+    const mas = [ma20, ma60, ma120, ma250].filter(v => v !== null);
+    if (mas.length >= 4) {
+      if (ma20 > ma60 && ma60 > ma120 && ma120 > ma250) {
+        maAlignment = 'bull';
+        alignmentText = '多头排列';
+      } else if (ma20 < ma60 && ma60 < ma120 && ma120 < ma250) {
+        maAlignment = 'bear';
+        alignmentText = '空头排列';
+      } else {
+        maAlignment = 'mixed';
+        alignmentText = '混合排列（震荡整理）';
+      }
+    } else if (mas.length >= 3) {
+      const a = mas[0], b = mas[1], c = mas[2];
+      if (a > b && b > c) { maAlignment = 'bull-ish'; alignmentText = '偏多头排列'; }
+      else if (a < b && b < c) { maAlignment = 'bear-ish'; alignmentText = '偏空头排列'; }
+      else { maAlignment = 'mixed'; alignmentText = '混合排列（震荡整理）'; }
+    }
+
+    // 乖离率计算
+    const bias = (ma) => ma ? ((current - ma) / ma * 100) : null;
+
+    // ===== 长期趋势评分（0-100分） =====
+    let score = 40; // 基准分
+
+    // 1) 均线多空排列：40分
+    if (maAlignment === 'bull') score += 40;
+    else if (maAlignment === 'bull-ish') score += 30;
+    else if (maAlignment === 'mixed') score += 15;
+    else if (maAlignment === 'bear-ish') score -= 10;
+    else if (maAlignment === 'bear') score -= 20;
+
+    // 2) 价格位置（相对250日线/年线）：20分
+    if (ma250 !== null) {
+      if (current > ma250) score += 20;
+      else score -= 10;
+    } else if (ma120 !== null) {
+      if (current > ma120) score += 15;
+      else score -= 5;
+    }
+
+    // 3) 250日涨跌幅：20分
+    if (n >= 250) {
+      const change250 = (current - closes[n - 250]) / closes[n - 250] * 100;
+      if (change250 > 30) score += 20;
+      else if (change250 > 0) score += 10;
+      else if (change250 > -20) score += 0;
+      else score -= 10;
+    } else if (n >= 120) {
+      const change120 = (current - closes[n - 120]) / closes[n - 120] * 100;
+      if (change120 > 20) score += 15;
+      else if (change120 > 0) score += 8;
+      else score -= 5;
+    }
+
+    // 4) 60日趋势方向（60日均线斜率）：20分
+    if (ma60 !== null && n >= 120) {
+      // 计算60日均线的近期斜率（对比30天前的60日均线）
+      let ma60Prev = 0;
+      for (let i = n - 90; i < n - 30; i++) ma60Prev += closes[i];
+      ma60Prev /= 60;
+      const slopePct = (ma60 - ma60Prev) / ma60Prev * 100;
+      if (slopePct > 2) score += 20;
+      else if (slopePct > 0.5) score += 12;
+      else if (slopePct > -1) score += 4;
+      else score -= 10;
+    }
+
+    score = Math.max(0, Math.min(100, Math.round(score)));
+
+    // 五级评定
+    let level, levelText;
+    if (score >= 85) { level = 'strong-up'; levelText = '强劲上涨'; }
+    else if (score >= 65) { level = 'moderate-up'; levelText = '温和上涨'; }
+    else if (score >= 40) { level = 'sideways'; levelText = '震荡整理'; }
+    else if (score >= 20) { level = 'weak'; levelText = '趋势偏弱'; }
+    else { level = 'down'; levelText = '下跌趋势'; }
+
+    // 一句话总结
+    let summary = '';
+    const aboveYear = ma250 !== null && current > ma250;
+    const aboveHalf = ma120 !== null && current > ma120;
+
+    if (score >= 85) {
+      summary = '股价站上年线，均线多头排列，长期趋势强劲，适合持有或逢低布局。';
+    } else if (score >= 65) {
+      if (ma250 !== null && aboveYear) {
+        summary = '股价在年线上方运行，均线偏多排列，长期趋势向好，可分批建仓持有。';
+      } else {
+        summary = '长期趋势温和向上，但尚未完全站稳年线，关注突破有效性。';
+      }
+    } else if (score >= 40) {
+      if (ma250 !== null) {
+        summary = '股价在年线附近震荡，长期方向不明确，等待趋势明朗后再决策。';
+      } else {
+        summary = '均线交织缠绕，长期处于震荡整理阶段，建议观望等待突破。';
+      }
+    } else if (score >= 20) {
+      summary = '股价跌破半年线，长期趋势转弱，建议以观望为主，避免抄底。';
+    } else {
+      summary = '股价跌破年线且均线空头排列，长期下跌趋势明确，应坚决回避。';
+    }
+
+    return {
+      score,
+      level,
+      levelText,
+      ma20, ma60, ma120, ma250,
+      bias20: bias(ma20),
+      bias60: bias(ma60),
+      bias120: bias(ma120),
+      bias250: bias(ma250),
+      maAlignment,
+      alignmentText,
+      summary,
+      current,
+      dataPoints: n,
+      dataSufficient: n >= 250
+    };
+  },
+
+  /** v4.4 P20: 渲染长期趋势研判卡片 */
+  _renderLongTermTrend(klines) {
+    const trend = this._calcLongTermTrend(klines);
+    if (!trend) {
+      this.showSection('longTermTrendCard', false);
+      return;
+    }
+    this.showSection('longTermTrendCard', true);
+
+    const scoreColor = trend.score >= 65 ? '#00e676' : trend.score >= 40 ? '#ff9800' : '#ff5252';
+    const lvlColor = trend.level === 'strong-up' ? '#00e676' :
+                     trend.level === 'moderate-up' ? '#66ff99' :
+                     trend.level === 'sideways' ? '#ffd54f' :
+                     trend.level === 'weak' ? '#ff9800' : '#ff5252';
+
+    const maRow = (label, value, biasVal) => {
+      if (value === null) return '<div class="lt-ma-row"><span class="lt-ma-label">' + label + '</span><span class="lt-ma-val" style="color:#8a8e9b">数据不足</span></div>';
+      const biasStr = (biasVal >= 0 ? '+' : '') + biasVal.toFixed(2) + '%';
+      return '<div class="lt-ma-row">' +
+        '<span class="lt-ma-label">' + label + '</span>' +
+        '<span class="lt-ma-val">' + value.toFixed(2) + '</span>' +
+        '<span class="lt-ma-bias" style="color:' + (biasVal >= 0 ? '#ff5252' : '#00e676') + '">' + biasStr + '</span>' +
+      '</div>';
+    };
+
+    let html = '<div class="lt-trend-header">';
+    html += '<div class="lt-score-circle" style="border-color:' + scoreColor + '">';
+    html += '<div class="lt-score-num" style="color:' + scoreColor + '">' + trend.score + '</div>';
+    html += '<div class="lt-score-label">长期趋势分</div>';
+    html += '</div>';
+    html += '<div class="lt-trend-info">';
+    html += '<div class="lt-trend-level" style="color:' + lvlColor + '">' + trend.levelText + '</div>';
+    const alignColor = trend.maAlignment === 'bull' || trend.maAlignment === 'bull-ish' ? '#ff5252' :
+                       trend.maAlignment === 'bear' || trend.maAlignment === 'bear-ish' ? '#00e676' : '#ffd54f';
+    html += '<div class="lt-trend-align">均线状态：<span style="color:' + alignColor + '">' + trend.alignmentText + '</span></div>';
+    html += '<div class="lt-trend-summary">' + trend.summary + '</div>';
+    if (!trend.dataSufficient) {
+      html += '<div class="lt-data-tip">⚠️ K线数据不足' + trend.dataPoints + '根，年线分析仅供参考</div>';
+    }
+    html += '</div></div>';
+
+    html += '<div class="lt-section-title">📊 多周期均线系统</div>';
+    html += '<div class="lt-ma-grid">';
+    html += maRow('MA20 月线', trend.ma20, trend.bias20);
+    html += maRow('MA60 生命线', trend.ma60, trend.bias60);
+    html += maRow('MA120 半年线', trend.ma120, trend.bias120);
+    html += maRow('MA250 年线', trend.ma250, trend.bias250);
+    html += '</div>';
+
+    html += '<div class="lt-section-title">🎯 关键价位参考</div>';
+    html += '<div class="lt-key-prices">';
+
+    const kpItem = (label, value, biasVal) => {
+      if (value === null) return '';
+      return '<div class="lt-kp-item">' +
+        '<div class="lt-kp-label">' + label + '</div>' +
+        '<div class="lt-kp-val">' + value.toFixed(2) + '</div>' +
+        '<div class="lt-kp-dist" style="color:' + (biasVal >= 0 ? '#ff5252' : '#00e676') + '">' +
+          (biasVal >= 0 ? '↑ 距上 ' : '↓ 距下 ') + Math.abs(biasVal).toFixed(2) + '%' +
+        '</div></div>';
+    };
+
+    html += kpItem('年线（牛熊分界）', trend.ma250, trend.bias250);
+    html += kpItem('半年线', trend.ma120, trend.bias120);
+    html += kpItem('60日生命线', trend.ma60, trend.bias60);
+    html += '</div>';
+
+    const container = document.getElementById('longTermTrendContent');
+    if (container) container.innerHTML = html;
+  },
+
+    renderRiskWarning(quote, klines) {
     const alerts = [];
     const closes = klines.map(k => k.close);
     const volumes = klines.map(k => k.volume);
@@ -12797,7 +13164,24 @@ const Auth = {
 
     // 刷新设备信息
     if (typeof DeviceManager !== 'undefined') DeviceManager.refreshSettingsInfo();
-  }
+
+    // v4.4 P20: 每日自动扫描榜单开关
+    const autoScanToggle = document.getElementById('autoScanToggle');
+    if (autoScanToggle) {
+      try {
+        const enabled = localStorage.getItem('zhigu_auto_scan') !== 'false';
+        autoScanToggle.checked = enabled;
+      } catch (e) { autoScanToggle.checked = true; }
+    }
+  },
+
+  /** v4.4 P20: 切换每日自动扫描设置 */
+  toggleAutoScan(checked) {
+    try {
+      localStorage.setItem('zhigu_auto_scan', checked ? 'true' : 'false');
+      Utils.toast ? Utils.toast(checked ? '已开启每日自动扫描' : '已关闭每日自动扫描') : null;
+    } catch (e) {}
+  },
 };
 
 // ============================================================
