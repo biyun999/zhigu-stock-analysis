@@ -1501,8 +1501,9 @@ const Utils = {
     if (klines && klines.length >= 10) {
       const closes = klines.map(k => k.close);
       const changes = [];
-      for (let i = closes.length - 10; i < closes.length; i++) {
-        changes.push((closes[i] - closes[i-1]) / closes[i-1] * 100);
+      for (let i = Math.max(1, closes.length - 10); i < closes.length; i++) {
+        const prevClose = closes[i-1];
+        if (prevClose > 0) changes.push((closes[i] - prevClose) / prevClose * 100);
       }
       const avgAbsChange = changes.reduce((a,b) => a + Math.abs(b), 0) / changes.length;
 
@@ -2184,7 +2185,7 @@ const DataAPI = {
           };
 
           const result = {
-            period: r.DATATYPE || r.REPORTDATE ? (r.DATATYPE || r.REPORTDATE.substring(0, 10)) : '',
+            period: r.DATATYPE || (r.REPORTDATE ? r.REPORTDATE.substring(0, 10) : ''),
             roe: numOrNull(r.WEIGHTAVG_ROE),          // 加权ROE %
             grossMargin: numOrNull(r.XSMLL),          // 销售毛利率 %
             netMargin: null,                           // 该接口没有净利率
@@ -3345,6 +3346,7 @@ const Navigation = {
 const Market = {
   async loadGlobalMarket() {
     const container = document.getElementById('globalMarket');
+    if (!container) return;
     try {
       // 腾讯API获取全球指数
       const codes = CONFIG.GLOBAL_INDICES.map(i => i.code);
@@ -6149,7 +6151,8 @@ const NextDayPrediction = {
     // ===== v4.4-P8: 资金流向精细化——超大单/大单分层 & 主力结构纯度 =====
     // 东方财富 fetchCapitalFlowStock 返回的 flows 中已有 superBig/big/mid/small 分层
     if (cf && cf.flows && cf.flows.length >= 1) {
-      const today = fl[fl.length - 1];
+      const _fl = cf.flows;
+      const today = _fl[_fl.length - 1];
       const superBig = today.superBig || 0;  // 超大单净流入
       const big = today.big || 0;            // 大单净流入
       const mid = today.mid || 0;            // 中单净流入
@@ -6187,11 +6190,11 @@ const NextDayPrediction = {
         }
       }
       // v4.4-P8: 近3日超大单趋势（超大单是最真实的机构资金信号）
-      if (fl.length >= 3) {
+      if (_fl.length >= 3) {
         let superBigPositive = 0;
         let superBigSum = 0;
-        for (let fi = fl.length - 3; fi < fl.length; fi++) {
-          const sb = fl[fi].superBig || 0;
+        for (let fi = _fl.length - 3; fi < _fl.length; fi++) {
+          const sb = _fl[fi].superBig || 0;
           if (sb > 0) superBigPositive++;
           superBigSum += sb;
         }
@@ -6635,7 +6638,7 @@ const NextDayPrediction = {
     for (let i = n - 5; i < n; i++) {
       if (i > 0 && closes[i] > closes[i - 1]) upDays++;
     }
-    if (n >= 6) c5 = (closes[n - 1] - closes[n - 6]) / closes[n - 6] * 100;
+    if (n >= 6 && closes[n - 6] > 0) c5 = (closes[n - 1] - closes[n - 6]) / closes[n - 6] * 100;
     if (upDays >= 4 && c5 > 2 && c5 < 12) { f4 += 4; factors.push('5日小阳爬升' + c5.toFixed(1) + '%'); }
     else if (upDays >= 3) f4 += 2;
     // 回踩MA10企稳
@@ -6681,7 +6684,7 @@ const NextDayPrediction = {
     }
     
     // 近10日涨跌幅校准（中期动量 vs 短期反转的平衡）
-    if (n >= 11) {
+    if (n >= 11 && closes[n - 11] > 0) {
       const c10 = (closes[n - 1] - closes[n - 11]) / closes[n - 11] * 100;
       if (c10 > 20) {
         f4 -= 1;
@@ -9773,8 +9776,8 @@ const App = {
     const ma20 = closes.length >= 20 ? closes.slice(-20).reduce((a, b) => a + b, 0) / 20 : null;
 
     // 1) 股价回踩5/10日线企稳（关键）
-    const distMA5 = (current - ma5) / ma5 * 100;
-    const distMA10 = (current - ma10) / ma10 * 100;
+    const distMA5 = ma5 > 0 ? (current - ma5) / ma5 * 100 : 0;
+    const distMA10 = ma10 > 0 ? (current - ma10) / ma10 * 100 : 0;
     // 当前价贴近MA5/MA10（-2%到+3%之间视为企稳）
     if (distMA5 >= -2 && distMA5 <= 3) s += 10;
     if (distMA10 >= -3 && distMA10 <= 4) s += 8;
@@ -9839,8 +9842,8 @@ const App = {
     const prev = closes[closes.length - 2];
 
     // 1) 短期价格动量（近3日涨幅方向+加速度）
-    const chg1 = (current - prev) / prev * 100;
-    const chg3 = closes.length >= 4
+    const chg1 = prev > 0 ? (current - prev) / prev * 100 : 0;
+    const chg3 = closes.length >= 4 && closes[closes.length - 4] > 0
       ? (current - closes[closes.length - 4]) / closes[closes.length - 4] * 100
       : chg1;
     // 温和上涨最佳（每日0.5%-3%），避免暴涨暴跌
@@ -11219,13 +11222,13 @@ const App = {
     }
 
     // 3) 250日涨跌幅：20分
-    if (n >= 250) {
+    if (n >= 250 && closes[n - 250] > 0) {
       const change250 = (current - closes[n - 250]) / closes[n - 250] * 100;
       if (change250 > 30) score += 20;
       else if (change250 > 0) score += 10;
       else if (change250 > -20) score += 0;
       else score -= 10;
-    } else if (n >= 120) {
+    } else if (n >= 120 && closes[n - 120] > 0) {
       const change120 = (current - closes[n - 120]) / closes[n - 120] * 100;
       if (change120 > 20) score += 15;
       else if (change120 > 0) score += 8;
