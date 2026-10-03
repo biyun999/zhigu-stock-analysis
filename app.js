@@ -1,5 +1,6 @@
 /**
- * 智股分析 v4.4 - P20 每日自动扫描榜单+自动核实联动+个股长期趋势研判
+ * 智股分析 v4.4 - P21 全维度风险雷达模块（财务/资金/价格/合规四维评分+自选股风险扫描+榜单风险徽标）
+ * v4.4-P21: 全维度风险雷达——四大维度100分制评估(财务运营/资金交易/价格趋势/合规基本面)+Canvas雷达图+自选股风险扫描+榜单风险徽标
  * v4.4-P20: 每日打开APP自动扫描次日预测榜单+自动核实联动调度+设置页开关+个股长期趋势研判（均线系统+长期评分+关键价位）
  * v4.4-P17: 巴菲特价值评分系统 + 全市场价值扫描TOP20 + 长期持有股票池 + 24小时自动刷新
  * v4.4-P11: 每日自动核实（打开APP静默补核实昨日及更早数据）+ 首页台账Tab前置 + 批量导出股票代码/名称
@@ -5612,6 +5613,96 @@ const Watchlist = {
     this.remove(code);
     this.render();
     if (typeof App !== 'undefined' && Navigation.currentPage === 'watchlist') App.renderBookmarks();
+  },
+
+  /** v4.4 P21: 自选股风险扫描 */
+  async startRiskScan() {
+    const container = document.getElementById('riskScanResult');
+    if (!container) return;
+    const list = this.getList();
+    if (list.length === 0) {
+      Utils.toast('自选股为空，请先添加');
+      return;
+    }
+
+    const btn = document.getElementById('riskScanBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 扫描中...'; }
+    container.style.display = '';
+    container.innerHTML = '<div class="loading-pulse" style="padding:16px;font-size:12px">正在扫描 ' + list.length + ' 只自选股的风险状况...</div>';
+
+    try {
+      const quotes = await DataAPI.fetchQuotes(list);
+      const results = [];
+
+      for (const code of list) {
+        const q = quotes[code];
+        if (!q || q.price <= 0) continue;
+
+        let klines = [], capitalFlow = [], financials = null;
+        try { klines = await DataAPI.fetchKline(code, 60); } catch(e) {}
+        try { capitalFlow = await DataAPI.fetchCapitalFlow(code); } catch(e) {}
+        const cachedFin = DataAPI._cacheGet('financials_' + code, 'financials');
+        if (cachedFin) financials = cachedFin;
+
+        let sectorFlow = null;
+        try { sectorFlow = RiskRadar.getSectorFlowForStock(q); } catch(e) {}
+
+        const result = RiskRadar.calcRiskScore(q, klines, capitalFlow, financials, { sectorFlow });
+        results.push({
+          code,
+          name: q.name || code,
+          price: q.price,
+          changePct: q.changePct || 0,
+          riskScore: result.totalScore,
+          riskLevel: result.level,
+          riskIcon: result.levelInfo.icon,
+          riskLabel: result.levelInfo.label,
+          riskColor: result.levelInfo.color,
+          topRisks: result.topRisks.slice(0, 2)
+        });
+      }
+
+      // 按风险从高到低排序（分数越低风险越高）
+      results.sort((a, b) => a.riskScore - b.riskScore);
+
+      let html = '<div class="rs-header">⚠️ 风险扫描结果（' + results.length + '只）</div>';
+      if (results.length === 0) {
+        html += '<div class="empty-tip">无有效数据</div>';
+      } else {
+        html += '<div class="rs-list">';
+        results.forEach(r => {
+          const chgCls = Utils.colorClass(r.changePct);
+          html += '<div class="rs-item" onclick="App.analyzeStock(\'' + r.code + '\')">';
+          html += '<div class="rs-left">';
+          html += '<span class="rs-badge" style="background:' + r.riskColor + '20;color:' + r.riskColor + ';border:1px solid ' + r.riskColor + '40">' + r.riskIcon + '</span>';
+          html += '<div class="rs-info">';
+          html += '<div class="rs-name">' + r.name + '</div>';
+          html += '<div class="rs-code">' + r.code + '</div>';
+          if (r.topRisks.length > 0) {
+            html += '<div class="rs-risk-tags">';
+            r.topRisks.forEach(tr => {
+              html += '<span class="rs-risk-tag">' + tr.name + '</span>';
+            });
+            html += '</div>';
+          }
+          html += '</div></div>';
+          html += '<div class="rs-right">';
+          html += '<div class="rs-score" style="color:' + r.riskColor + '">' + r.riskScore + '</div>';
+          html += '<div class="rs-label">' + r.riskLabel + '</div>';
+          html += '<div class="' + chgCls + '" style="font-size:11px">' + (r.changePct > 0 ? '+' : '') + r.changePct.toFixed(2) + '%</div>';
+          html += '</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+      html += '<div class="rs-disclaimer">⚠️ 风险扫描结果仅供参考，不构成投资建议</div>';
+      container.innerHTML = html;
+    } catch (e) {
+      console.error('[风险扫描] 异常:', e);
+      container.innerHTML = '<div class="empty-tip">风险扫描失败：' + (e.message || '未知错误') + '</div>';
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = '⚠️ 风险扫描'; }
+    }
   }
 };
 
@@ -7034,10 +7125,12 @@ const NextDayPrediction = {
       const indLine = s.industry
         ? '<span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + '·' + s.industry + ']</span>'
         : '<span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + ']</span>';
+      // v4.4 P21: 风险等级徽标
+      const riskBadge = RiskRadar.quickRiskLevel({ name: s.name, price: s.price || 0, pe: s.pe || 0, pb: s.pb || 0, marketCap: s.marketCap || 0, turnover: s.turnover || 0, changePct: s.changePct || 0 });
       html += '<div class="hot-stock-item st-card" onclick="App.analyzeStock(\'' + s.code + '\')">'
         + '<div class="rank ' + rankCls + '">' + (idx + 1) + '</div>'
         + '<div class="hs-info">'
-        +   '<div class="hs-name">' + s.name + ' ' + indLine + '</div>'
+        +   '<div class="hs-name">' + s.name + ' <span class="risk-badge risk-' + riskBadge.level + '">' + riskBadge.icon + '</span> ' + indLine + '</div>'
         +   '<div class="hs-code">' + s.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
         +   factorLine
         +   verify
@@ -10214,12 +10307,15 @@ const App = {
       const opBg = quantScore >= 80 ? 'rgba(0,200,83,0.15)' : quantScore >= 65 ? 'rgba(0,200,83,0.1)' : quantScore >= 50 ? 'rgba(255,165,0,0.15)' : quantScore >= 35 ? 'rgba(255,120,0,0.15)' : 'rgba(255,71,87,0.15)';
       const opColor = Utils.scoreColor(quantScore);
 
+      // v4.4 P21: 风险等级徽标
+      const riskBadge = RiskRadar.quickRiskLevel({ name: s.name, price: s.price, pe: s.pe || 0, pb: s.pb || 0, marketCap: s.marketCap || 0, turnover: s.turnover || 0, changePct: s.changePct || 0 });
+
       return `
         <div class="hot-stock-item st-card" onclick="App.analyzeStock('${s.code}')">
           <div class="st-head">
             <div class="rank ${rankCls}">${i + 1}</div>
             <div class="hs-info">
-              <div class="hs-name">${s.name} ${catTag}</div>
+              <div class="hs-name">${s.name} ${catTag}<span class="risk-badge risk-${riskBadge.level}" title="风险：${riskBadge.level === 'low' ? '低' : riskBadge.level === 'medium' ? '中' : riskBadge.level === 'high' ? '较高' : '高'}">${riskBadge.icon}</span></div>
               <div class="hs-code">${s.code} · ${s.sectorName}</div>
             </div>
             <div class="hs-price">
@@ -10555,6 +10651,9 @@ const App = {
 
       // v4.4 P17: 巴菲特价值评分（有财务数据才显示）
       try { this._renderBuffettValueCard(quote, financials); } catch(e) { console.warn('[分析] 巴菲特价值评分异常:', e); }
+
+      // v4.4 P21: 全维度风险雷达
+      try { this._renderRiskRadarCard(quote, klines, capitalFlow, financials); } catch(e) { console.warn('[分析] 风险雷达异常:', e); }
 
     } catch (e) {
       console.error('Analysis error:', e);
@@ -11917,6 +12016,193 @@ const App = {
   _fmtPct(v) {
     if (v === null || v === undefined || isNaN(v)) return '--';
     return v.toFixed(1) + '%';
+  },
+
+  /** v4.4 P21: 渲染风险雷达卡片（分析页，巴菲特卡片下方） */
+  _renderRiskRadarCard(quote, klines, capitalFlow, financials) {
+    const card = document.getElementById('riskRadarCard');
+    if (!card) return;
+
+    // 获取板块资金流向
+    let sectorFlow = null;
+    try { sectorFlow = RiskRadar.getSectorFlowForStock(quote); } catch(e) {}
+
+    const result = RiskRadar.calcRiskScore(quote, klines, capitalFlow, financials, { sectorFlow });
+    this.showSection('riskRadarCard', true);
+
+    const lvl = result.levelInfo;
+
+    // 综合评分
+    const scoreEl = document.getElementById('rrScoreBig');
+    if (scoreEl) {
+      scoreEl.textContent = result.totalScore;
+      scoreEl.style.color = lvl.color;
+    }
+    const levelEl = document.getElementById('rrLevelBadge');
+    if (levelEl) {
+      levelEl.textContent = lvl.icon + ' ' + lvl.label;
+      levelEl.style.background = lvl.bg;
+      levelEl.style.color = lvl.color;
+      levelEl.style.border = '1px solid ' + lvl.color + '40';
+    }
+    const sumEl = document.getElementById('rrSummary');
+    if (sumEl) sumEl.textContent = result.summary;
+
+    // 四维雷达图（Canvas）
+    this._drawRadarChart('rrCanvas', result.dims);
+
+    // 四维进度条
+    const dimsEl = document.getElementById('rrDims');
+    if (dimsEl) {
+      let html = '';
+      const dimKeys = ['financial', 'capital', 'price', 'compliance'];
+      dimKeys.forEach(key => {
+        const sc = result.dims[key] || 0;
+        const pct = Math.round(sc / 25 * 100);
+        const color = pct >= 80 ? '#00e676' : pct >= 60 ? '#00d4ff' : pct >= 40 ? '#ff9800' : '#ff5252';
+        html += '<div class="rr-dim-row">';
+        html += '<div class="rr-dim-name">' + RiskRadar.DIM_NAMES[key] + '</div>';
+        html += '<div class="rr-dim-bar"><div class="rr-dim-fill" style="width:' + pct + '%;background:' + color + '"></div></div>';
+        html += '<div class="rr-dim-score" style="color:' + color + '">' + sc + '/25</div>';
+        html += '</div>';
+      });
+      dimsEl.innerHTML = html;
+    }
+
+    // TOP3关键风险点
+    const risksEl = document.getElementById('rrTopRisks');
+    if (risksEl) {
+      if (result.topRisks.length > 0) {
+        let html = '<div class="rr-risks-title">⚠️ 关键风险点</div>';
+        result.topRisks.forEach(r => {
+          const rColor = r.riskLevel === 'critical' ? '#ff5252' : r.riskLevel === 'high' ? '#ff9800' : r.riskLevel === 'medium' ? '#ffc107' : '#00e676';
+          const rIcon = r.riskLevel === 'critical' ? '🔴' : r.riskLevel === 'high' ? '🟠' : r.riskLevel === 'medium' ? '🟡' : '🟢';
+          html += '<div class="rr-risk-item">';
+          html += '<span class="rr-risk-icon">' + rIcon + '</span>';
+          html += '<span class="rr-risk-name">' + r.name + '</span>';
+          html += '<span class="rr-risk-val" style="color:' + rColor + '">' + r.value + '</span>';
+          if (r.desc) html += '<div class="rr-risk-desc">' + r.desc + '</div>';
+          html += '</div>';
+        });
+        risksEl.innerHTML = html;
+        risksEl.style.display = '';
+      } else {
+        risksEl.style.display = 'none';
+      }
+    }
+
+    // 行业提示
+    const policyEl = document.getElementById('rrPolicyTip');
+    if (policyEl) {
+      const tips = [];
+      if (sectorFlow !== null) {
+        if (sectorFlow < -2e8) tips.push('所属板块资金大幅流出，行业承压明显');
+        else if (sectorFlow < 0) tips.push('所属板块资金小幅流出，关注板块轮动');
+        else tips.push('所属板块资金净流入，行业景气度尚可');
+      }
+      if (result.dimDetails && result.dimDetails.compliance && result.dimDetails.compliance.isST) {
+        tips.push('⛔ ST股票存在退市风险，请高度警惕');
+      }
+      if (tips.length > 0) {
+        policyEl.innerHTML = '📋 <b>行业提示：</b>' + tips.join('；');
+        policyEl.style.display = '';
+      } else {
+        policyEl.style.display = 'none';
+      }
+    }
+  },
+
+  /** 绘制四维雷达图（Canvas 2D，不依赖第三方库） */
+  _drawRadarChart(canvasId, dims) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth || 200;
+    const h = canvas.clientHeight || 200;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w / 2, cy = h / 2;
+    const r = Math.min(cx, cy) - 20;
+    const dimKeys = ['financial', 'capital', 'price', 'compliance'];
+    const labels = ['💰', '🔄', '📈', '🛡️'];
+    const dimLabels = ['财务', '资金', '价格', '合规'];
+    const values = dimKeys.map(k => Math.max(0, Math.min(25, dims[k] || 0)) / 25);
+    const n = 4;
+    const angleStep = (Math.PI * 2) / n;
+    const startAngle = -Math.PI / 2; // 从顶部开始
+
+    // 画网格（3层同心四边形）
+    [0.33, 0.66, 1.0].forEach(scale => {
+      ctx.beginPath();
+      for (let i = 0; i <= n; i++) {
+        const angle = startAngle + i * angleStep;
+        const x = cx + r * scale * Math.cos(angle);
+        const y = cy + r * scale * Math.sin(angle);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+
+    // 画轴线
+    for (let i = 0; i < n; i++) {
+      const angle = startAngle + i * angleStep;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.stroke();
+    }
+
+    // 画数据区域
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const idx = i % n;
+      const angle = startAngle + idx * angleStep;
+      const x = cx + r * values[idx] * Math.cos(angle);
+      const y = cy + r * values[idx] * Math.sin(angle);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(0,212,255,0.15)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,212,255,0.8)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 画数据点
+    for (let i = 0; i < n; i++) {
+      const angle = startAngle + i * angleStep;
+      const x = cx + r * values[i] * Math.cos(angle);
+      const y = cy + r * values[i] * Math.sin(angle);
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.fillStyle = values[i] >= 0.6 ? '#00e676' : values[i] >= 0.4 ? '#ff9800' : '#ff5252';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // 画标签
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = '12px sans-serif';
+    for (let i = 0; i < n; i++) {
+      const angle = startAngle + i * angleStep;
+      const lx = cx + (r + 16) * Math.cos(angle);
+      const ly = cy + (r + 16) * Math.sin(angle);
+      ctx.fillStyle = '#8a8e9b';
+      ctx.fillText(labels[i] + dimLabels[i], lx, ly);
+    }
   },
 
   /** v4.4 P15: 渲染板块热度详情（分析页） */
@@ -14804,5 +15090,575 @@ const LongTermPortfolio = {
       html += '</div>';
     });
     body.innerHTML = html;
+  }
+};
+
+// ============================================================
+// 14. RiskRadar - 全维度股票风险雷达（v4.4 P21）
+// 四大维度：财务运营(25) + 资金交易(25) + 价格趋势(25) + 合规基本面(25)
+// 纯前端，零Token，降级友好（任一维度数据缺失时优雅降级）
+// ============================================================
+const RiskRadar = {
+
+  /** 风险等级定义 */
+  LEVELS: {
+    low:      { min: 80, label: '低风险',     icon: '🟢', color: '#00e676', bg: 'rgba(0,230,118,0.1)' },
+    medium:   { min: 60, label: '中风险',     icon: '🟡', color: '#ffc107', bg: 'rgba(255,193,7,0.1)' },
+    high:     { min: 40, label: '较高风险',   icon: '🟠', color: '#ff9800', bg: 'rgba(255,152,0,0.1)' },
+    critical: { min: 0,  label: '高风险',     icon: '🔴', color: '#ff5252', bg: 'rgba(255,82,82,0.1)' }
+  },
+
+  DIM_NAMES: {
+    financial: '💰 财务运营',
+    capital:   '🔄 资金交易',
+    price:     '📈 价格趋势',
+    compliance:'🛡️ 合规基本面'
+  },
+
+  /**
+   * 计算全维度风险评分（100分制）
+   * @param {Object} quote - 行情对象
+   * @param {Array} klines - K线数据 [{date,open,high,low,close,volume}]
+   * @param {Object|Array} capitalFlow - 资金流向（fetchCapitalFlow 返回数组 或 fetchCapitalFlowStock 返回对象）
+   * @param {Object|null} financials - 财务数据（fetchFinancials 返回）
+   * @param {Object} opts - 附加选项 { sectorFlow: 板块资金流入 }
+   * @returns {Object} { totalScore, level, levelInfo, dims, indicators, topRisks, summary }
+   */
+  calcRiskScore(quote, klines, capitalFlow, financials, opts) {
+    opts = opts || {};
+    const result = {
+      totalScore: 50,
+      level: 'medium',
+      levelInfo: this.LEVELS.medium,
+      dims: { financial: 12, capital: 12, price: 12, compliance: 12 },
+      dimDetails: {},
+      indicators: [],
+      topRisks: [],
+      summary: '风险数据不足'
+    };
+
+    if (!quote || quote.price <= 0) return result;
+
+    // 维度1：财务与运营风险（25分）
+    const dim1 = this._calcFinancialRisk(financials);
+    // 维度2：资金与交易风险（25分）
+    const dim2 = this._calcCapitalRisk(capitalFlow, quote, klines);
+    // 维度3：价格与趋势风险（25分）
+    const dim3 = this._calcPriceRisk(klines, quote);
+    // 维度4：合规与基本面风险（25分）
+    const dim4 = this._calcComplianceRisk(quote, opts.sectorFlow);
+
+    const total = dim1.score + dim2.score + dim3.score + dim4.score;
+    result.dims = { financial: dim1.score, capital: dim2.score, price: dim3.score, compliance: dim4.score };
+    result.dimDetails = { financial: dim1, capital: dim2, price: dim3, compliance: dim4 };
+    result.totalScore = Math.round(Math.max(0, Math.min(100, total)));
+
+    // 风险等级
+    if (result.totalScore >= 80) { result.level = 'low'; result.levelInfo = this.LEVELS.low; }
+    else if (result.totalScore >= 60) { result.level = 'medium'; result.levelInfo = this.LEVELS.medium; }
+    else if (result.totalScore >= 40) { result.level = 'high'; result.levelInfo = this.LEVELS.high; }
+    else { result.level = 'critical'; result.levelInfo = this.LEVELS.critical; }
+
+    // 汇总所有指标
+    result.indicators = [].concat(dim1.indicators || [], dim2.indicators || [], dim3.indicators || [], dim4.indicators || []);
+
+    // 提取TOP3风险点（得分最低的3个指标）
+    const sorted = result.indicators
+      .filter(ind => ind.score !== null && ind.maxScore > 0)
+      .sort((a, b) => (a.score / a.maxScore) - (b.score / b.maxScore));
+    result.topRisks = sorted.slice(0, 3).map(ind => ({
+      name: ind.name,
+      score: ind.score,
+      maxScore: ind.maxScore,
+      status: ind.status,
+      desc: ind.desc || '',
+      riskLevel: ind.riskLevel
+    }));
+
+    // 一句话总结
+    result.summary = this._genSummary(result);
+
+    return result;
+  },
+
+  /** 快速风险评估（仅用quote数据，用于榜单徽标） */
+  quickRiskLevel(quote) {
+    if (!quote || quote.price <= 0) return { level: 'medium', icon: '🟡', score: 50 };
+    let score = 50;
+    const name = quote.name || '';
+    // ST一票否决
+    if (/[*Ｓ]*ST/i.test(name)) return { level: 'critical', icon: '🔴', score: 10 };
+    // PE
+    const pe = quote.pe || 0;
+    if (pe > 100 || pe < 0) score -= 8;
+    else if (pe > 50) score -= 4;
+    else if (pe < 15 && pe > 0) score += 5;
+    // PB
+    const pb = quote.pb || 0;
+    if (pb > 8) score -= 4;
+    else if (pb > 4) score -= 2;
+    else if (pb > 0 && pb < 1) score += 5;
+    // 市值
+    const mc = quote.marketCap || 0;
+    if (mc < 30) score -= 5;
+    else if (mc < 50) score -= 3;
+    else if (mc > 500) score += 3;
+    // 换手异常
+    const tr = quote.turnover || 0;
+    if (tr > 15) score -= 3;
+    else if (tr > 8) score -= 1;
+    // 大幅涨跌
+    const chg = Math.abs(quote.changePct || 0);
+    if (chg > 9) score -= 3;
+
+    score = Math.max(0, Math.min(100, score));
+    if (score >= 80) return { level: 'low', icon: '🟢', score };
+    if (score >= 60) return { level: 'medium', icon: '🟡', score };
+    if (score >= 40) return { level: 'high', icon: '🟠', score };
+    return { level: 'critical', icon: '🔴', score };
+  },
+
+  // ===== 维度1：财务与运营风险（25分） =====
+  _calcFinancialRisk(fin) {
+    const indicators = [];
+    let score = 0;
+    const maxTotal = 25;
+    const hasData = fin && (fin.debtRatio !== null || fin.roe !== null || fin.revGrowth !== null || fin.grossMargin !== null);
+
+    if (!hasData) {
+      // 无财务数据时给中间分
+      return { score: 12, indicators: [], maxScore: maxTotal, dataAvailable: false };
+    }
+
+    // 1.1 资产负债率（5分）
+    if (fin.debtRatio !== null && fin.debtRatio !== undefined) {
+      const v = fin.debtRatio;
+      let s, status, risk;
+      if (v < 30) { s = 5; status = '优'; risk = 'low'; }
+      else if (v < 50) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v < 60) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v < 70) { s = 2; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      score += s;
+      indicators.push({ name: '资产负债率', value: v.toFixed(1) + '%', score: s, maxScore: 5, status, riskLevel: risk, desc: v >= 70 ? '负债率超70%，债务压力大' : v >= 60 ? '负债率偏高，需关注偿债能力' : '' });
+    }
+
+    // 1.2 净资产现金含量（5分）= 每股经营现金流 / 每股净资产 或 经营现金流/净利润
+    if (fin.ocfps !== null && fin.ocfps !== undefined && fin.bps !== null && fin.bps !== undefined && fin.bps > 0) {
+      const v = fin.ocfps / fin.bps; // 简化：每股经营现金流/每股净资产
+      let s, status, risk;
+      if (v > 0.15) { s = 5; status = '优'; risk = 'low'; }
+      else if (v > 0.10) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v > 0.05) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v > 0) { s = 1; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      score += s;
+      indicators.push({ name: '现金含量', value: v.toFixed(3), score: s, maxScore: 5, status, riskLevel: risk, desc: v <= 0 ? '盈利未转化为现金，质量堪忧' : '' });
+    } else if (fin.cashToRevenue !== null && fin.cashToRevenue !== undefined) {
+      // 用经营现金流/营收作为替代
+      const v = fin.cashToRevenue;
+      let s, status, risk;
+      if (v > 15) { s = 5; status = '优'; risk = 'low'; }
+      else if (v > 10) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v > 5) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v > 0) { s = 1; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      score += s;
+      indicators.push({ name: '现金流/营收', value: v.toFixed(1) + '%', score: s, maxScore: 5, status, riskLevel: risk, desc: '' });
+    }
+
+    // 1.3 营收同比增速（5分）
+    if (fin.revGrowth !== null && fin.revGrowth !== undefined) {
+      const v = fin.revGrowth;
+      let s, status, risk;
+      if (v > 20) { s = 5; status = '优'; risk = 'low'; }
+      else if (v > 10) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v > 0) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v > -20) { s = 2; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      score += s;
+      indicators.push({ name: '营收增速', value: v.toFixed(1) + '%', score: s, maxScore: 5, status, riskLevel: risk, desc: v < -20 ? '营收大幅下滑，经营恶化' : v < 0 ? '营收同比负增长' : '' });
+    }
+
+    // 1.4 毛利率水平（5分）
+    if (fin.grossMargin !== null && fin.grossMargin !== undefined) {
+      const v = fin.grossMargin;
+      let s, status, risk;
+      if (v > 40) { s = 5; status = '优'; risk = 'low'; }
+      else if (v > 20) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v > 10) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v > 0) { s = 2; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      score += s;
+      indicators.push({ name: '毛利率', value: v.toFixed(1) + '%', score: s, maxScore: 5, status, riskLevel: risk, desc: v < 10 ? '毛利率偏低，护城河弱' : '' });
+    }
+
+    // 1.5 ROE稳定性（5分）
+    if (fin.roe !== null && fin.roe !== undefined) {
+      const v = fin.roe;
+      const prevRoe = fin.prevProfitGrowth; // 用利润增速估算ROE变化方向
+      let s, status, risk;
+      if (v > 15) { s = 5; status = '优'; risk = 'low'; }
+      else if (v > 10) { s = 4; status = '良好'; risk = 'low'; }
+      else if (v > 5) { s = 3; status = '一般'; risk = 'medium'; }
+      else if (v > 0) { s = 2; status = '警示'; risk = 'high'; }
+      else { s = 0; status = '高危'; risk = 'critical'; }
+      // 若ROE大幅下滑额外扣分
+      if (prevRoe !== null && prevRoe !== undefined && prevRoe < -30) {
+        s = Math.max(0, s - 1);
+      }
+      score += s;
+      indicators.push({ name: 'ROE', value: v.toFixed(1) + '%', score: s, maxScore: 5, status, riskLevel: risk, desc: v < 5 ? 'ROE偏低，盈利能力不足' : '' });
+    }
+
+    // 按比例缩放到25分
+    const actualMax = indicators.reduce((sum, ind) => sum + ind.maxScore, 0) || 25;
+    const normalizedScore = actualMax > 0 ? Math.round(score / actualMax * 25) : 12;
+
+    return { score: normalizedScore, indicators, maxScore: maxTotal, dataAvailable: true };
+  },
+
+  // ===== 维度2：资金与交易风险（25分） =====
+  _calcCapitalRisk(capitalFlow, quote, klines) {
+    const indicators = [];
+    let score = 0;
+    const maxTotal = 25;
+
+    // 解析资金流数据
+    let flows = [];
+    if (Array.isArray(capitalFlow)) {
+      flows = capitalFlow;
+    } else if (capitalFlow && capitalFlow.flows) {
+      flows = capitalFlow.flows;
+    }
+
+    const hasFlowData = flows.length > 0;
+
+    if (hasFlowData) {
+      // 2.1 主力资金连续方向（5分）
+      const mainFlows = flows.map(f => f.mainIn || f.main || 0);
+      const recent = mainFlows.slice(-5);
+      let consecOut = 0, consecIn = 0;
+      for (let i = recent.length - 1; i >= 0; i--) {
+        if (recent[i] < 0) { if (consecIn === 0) consecOut++; else break; }
+        else if (recent[i] > 0) { if (consecOut === 0) consecIn++; else break; }
+        else break;
+      }
+      let s;
+      if (consecIn >= 3) s = 5;
+      else if (consecIn >= 1) s = 4;
+      else if (consecOut <= 1 && consecIn === 0) s = 3;
+      else if (consecOut >= 5) s = 0;
+      else if (consecOut >= 3) s = 1;
+      else s = 2;
+      score += s;
+      const flowDesc = consecOut >= 3 ? `主力连续${consecOut}日净流出` : consecIn >= 2 ? `主力连续${consecIn}日净流入` : '主力资金方向不明';
+      indicators.push({ name: '主力资金方向', value: flowDesc, score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 2 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 2 ? 'high' : 'critical', desc: consecOut >= 5 ? '主力持续大额出逃，高度警惕' : consecOut >= 3 ? '主力连续流出，资金面恶化' : '' });
+
+      // 2.2 大单净流出比例（5分）
+      const todayMain = mainFlows[mainFlows.length - 1] || 0;
+      const amount = (quote.amount || 0) * 1e4; // 万元转元
+      const ratio = amount > 0 ? (todayMain / amount * 100) : 0;
+      let s2;
+      if (ratio > 3) s2 = 5;
+      else if (ratio > 0) s2 = 4;
+      else if (ratio > -1) s2 = 3;
+      else if (ratio > -3) s2 = 2;
+      else s2 = 0;
+      score += s2;
+      indicators.push({ name: '主力净流入比', value: ratio.toFixed(1) + '%', score: s2, maxScore: 5, status: s2 >= 4 ? '优' : s2 >= 3 ? '一般' : s2 >= 2 ? '警示' : '高危', riskLevel: s2 >= 4 ? 'low' : s2 >= 3 ? 'medium' : s2 >= 2 ? 'high' : 'critical', desc: ratio < -3 ? '主力大额净流出，抛压沉重' : '' });
+    }
+
+    // 2.3 换手率异常（5分）
+    if (klines && klines.length >= 20 && quote.turnover > 0) {
+      // 从K线估算20日平均成交量作为基准（K线volume单位是手）
+      const recentVols = klines.slice(-20).map(k => k.volume);
+      const avgVol = recentVols.reduce((a, b) => a + b, 0) / 20;
+      const todayVol = klines[klines.length - 1].volume;
+      const volRatio = avgVol > 0 ? todayVol / avgVol : 1;
+      const priceDown = (klines[klines.length - 1].close < klines[klines.length - 2].close);
+
+      let s;
+      if (volRatio >= 0.7 && volRatio <= 1.3) s = 5;
+      else if (volRatio > 1.3 && volRatio <= 1.5) s = 4;
+      else if (volRatio > 1.5 && volRatio <= 2) s = 3;
+      else if (volRatio > 2 && volRatio <= 3) s = 1;
+      else if (volRatio > 3 && priceDown) s = 0;
+      else s = 2;
+      score += s;
+      indicators.push({ name: '换手异常度', value: volRatio.toFixed(1) + '倍', score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 2 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 2 ? 'high' : 'critical', desc: volRatio > 3 && priceDown ? '放量下跌，主力出货迹象' : volRatio > 2 ? '换手异常放大，注意风险' : '' });
+    }
+
+    // 2.4 5日振幅波动（5分）
+    if (klines && klines.length >= 5) {
+      const recent5 = klines.slice(-5);
+      const maxH = Math.max(...recent5.map(k => k.high));
+      const minL = Math.min(...recent5.map(k => k.low));
+      const base = klines[klines.length - 6] ? klines[klines.length - 6].close : recent5[0].open;
+      const amplitude5d = base > 0 ? (maxH - minL) / base * 100 : 0;
+
+      let s;
+      if (amplitude5d < 5) s = 5;
+      else if (amplitude5d < 10) s = 4;
+      else if (amplitude5d < 15) s = 3;
+      else if (amplitude5d < 25) s = 2;
+      else s = 0;
+      score += s;
+      indicators.push({ name: '5日振幅', value: amplitude5d.toFixed(1) + '%', score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 2 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 2 ? 'high' : 'critical', desc: amplitude5d > 25 ? '近期剧烈震荡，风险极高' : '' });
+    }
+
+    // 2.5 量价背离（5分）
+    if (klines && klines.length >= 5) {
+      const last = klines[klines.length - 1];
+      const prev = klines[klines.length - 2];
+      const priceUp = last.close > prev.close;
+      const volUp = last.volume > prev.volume;
+      const priceChg = Math.abs((last.close - prev.close) / prev.close * 100);
+      const volChg = Math.abs((last.volume - prev.volume) / (prev.volume || 1) * 100);
+
+      let s;
+      if ((priceUp && volUp) || (!priceUp && !volUp)) s = 5; // 量价配合
+      else if (priceChg < 2 || volChg < 20) s = 4; // 波动小，轻微背离
+      else if ((priceUp && !volUp && priceChg > 3) || (!priceUp && volUp && volChg > 50)) s = 2; // 明显背离
+      else s = 0; // 严重背离
+      score += s;
+      const vpDesc = (priceUp && !volUp) ? '价涨量缩' : (!priceUp && volUp) ? '价跌量增' : '量价配合';
+      indicators.push({ name: '量价关系', value: vpDesc, score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 2 ? '一般' : '高危', riskLevel: s >= 4 ? 'low' : s >= 2 ? 'medium' : 'critical', desc: s <= 2 ? '量价明显背离，趋势存疑' : '' });
+    }
+
+    // 按比例缩放到25分
+    const actualMax = indicators.reduce((sum, ind) => sum + ind.maxScore, 0) || 25;
+    const normalizedScore = actualMax > 0 ? Math.round(score / actualMax * 25) : 12;
+
+    return { score: normalizedScore, indicators, maxScore: maxTotal, dataAvailable: hasFlowData || (klines && klines.length >= 5) };
+  },
+
+  // ===== 维度3：价格与趋势风险（25分） =====
+  _calcPriceRisk(klines, quote) {
+    const indicators = [];
+    let score = 0;
+    const maxTotal = 25;
+
+    if (!klines || klines.length < 10) {
+      return { score: 12, indicators: [], maxScore: maxTotal, dataAvailable: false };
+    }
+
+    const price = quote.price || (klines.length > 0 ? klines[klines.length - 1].close : 0);
+    const closes = klines.map(k => k.close);
+
+    // 3.1 相对年线位置（5分）— MA250或最长可用MA
+    const maLen = Math.min(250, closes.length);
+    const maLong = closes.slice(-maLen).reduce((a, b) => a + b, 0) / maLen;
+    const deviation = maLong > 0 ? (price / maLong - 1) * 100 : 0;
+
+    let s;
+    if (deviation > 0 && deviation < 30) s = 5;
+    else if (deviation >= 30) s = 4; // 偏离大但也有风险
+    else if (deviation >= -5 && deviation <= 0) s = 3;
+    else if (deviation >= -10 && deviation < -5) s = 2;
+    else s = 0;
+    score += s;
+    indicators.push({ name: '年线位置', value: (deviation >= 0 ? '+' : '') + deviation.toFixed(1) + '%', score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 2 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 2 ? 'high' : 'critical', desc: deviation < -20 ? '股价远低于年线，深度套牢区' : '' });
+
+    // 3.2 均线系统排列（5分）
+    const ma5 = closes.slice(-5).reduce((a, b) => a + b, 0) / Math.min(5, closes.length);
+    const ma10 = closes.slice(-10).reduce((a, b) => a + b, 0) / Math.min(10, closes.length);
+    const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / Math.min(20, closes.length);
+    const ma60 = closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : ma20;
+
+    // 多头排列：MA5>MA10>MA20>MA60
+    let bullCount = 0;
+    if (ma5 > ma10) bullCount++;
+    if (ma10 > ma20) bullCount++;
+    if (ma20 > ma60) bullCount++;
+    if (price > ma5) bullCount++;
+
+    let s2;
+    if (bullCount >= 4) s2 = 5; // 完美多头
+    else if (bullCount === 3) s2 = 4;
+    else if (bullCount === 2) s2 = 3;
+    else if (bullCount === 1) s2 = 2;
+    else s2 = 0; // 空头排列
+    score += s2;
+    const arrDesc = bullCount >= 4 ? '多头排列' : bullCount >= 3 ? '偏多' : bullCount >= 2 ? '混合' : bullCount === 1 ? '偏空' : '空头排列';
+    indicators.push({ name: '均线排列', value: arrDesc, score: s2, maxScore: 5, status: s2 >= 4 ? '优' : s2 >= 3 ? '一般' : s2 >= 2 ? '警示' : '高危', riskLevel: s2 >= 4 ? 'low' : s2 >= 3 ? 'medium' : s2 >= 2 ? 'high' : 'critical', desc: bullCount <= 1 ? '均线空头排列，趋势向下' : '' });
+
+    // 3.3 近30日最大回撤（5分）
+    const recent30 = closes.slice(-Math.min(30, closes.length));
+    let maxDD = 0;
+    let peak = recent30[0];
+    for (let i = 1; i < recent30.length; i++) {
+      if (recent30[i] > peak) peak = recent30[i];
+      const dd = (peak - recent30[i]) / peak * 100;
+      if (dd > maxDD) maxDD = dd;
+    }
+
+    let s3;
+    if (maxDD < 5) s3 = 5;
+    else if (maxDD < 10) s3 = 4;
+    else if (maxDD < 20) s3 = 3;
+    else if (maxDD < 30) s3 = 1;
+    else s3 = 0;
+    score += s3;
+    indicators.push({ name: '30日最大回撤', value: maxDD.toFixed(1) + '%', score: s3, maxScore: 5, status: s3 >= 4 ? '优' : s3 >= 3 ? '一般' : s3 >= 1 ? '警示' : '高危', riskLevel: s3 >= 4 ? 'low' : s3 >= 3 ? 'medium' : s3 >= 1 ? 'high' : 'critical', desc: maxDD > 30 ? '回撤超30%，极端风险' : maxDD > 20 ? '回撤较大，下行风险显著' : '' });
+
+    // 3.4 支撑位距离（5分）— 用MA60近似
+    const supportDist = ma60 > 0 ? (price / ma60 - 1) * 100 : 0;
+    let s4;
+    if (supportDist > 10) s4 = 5;
+    else if (supportDist > 0) s4 = 4;
+    else if (supportDist > -3) s4 = 2;
+    else if (supportDist > -10) s4 = 1;
+    else s4 = 0;
+    score += s4;
+    indicators.push({ name: '支撑距离', value: (supportDist >= 0 ? '+' : '') + supportDist.toFixed(1) + '%', score: s4, maxScore: 5, status: s4 >= 4 ? '优' : s4 >= 2 ? '一般' : s4 >= 1 ? '警示' : '高危', riskLevel: s4 >= 4 ? 'low' : s4 >= 2 ? 'medium' : s4 >= 1 ? 'high' : 'critical', desc: supportDist < -10 ? '已跌破支撑位，技术面破位' : '' });
+
+    // 3.5 波动率（5分）— 20日标准差/均值
+    if (closes.length >= 20) {
+      const recent20 = closes.slice(-20);
+      const mean = recent20.reduce((a, b) => a + b, 0) / 20;
+      const variance = recent20.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / 20;
+      const stdDev = Math.sqrt(variance);
+      const cv = mean > 0 ? (stdDev / mean * 100) : 0;
+
+      let s5;
+      if (cv < 2) s5 = 5;
+      else if (cv < 3) s5 = 4;
+      else if (cv < 5) s5 = 3;
+      else if (cv < 7) s5 = 1;
+      else s5 = 0;
+      score += s5;
+      indicators.push({ name: '波动率', value: cv.toFixed(2) + '%', score: s5, maxScore: 5, status: s5 >= 4 ? '优' : s5 >= 3 ? '一般' : s5 >= 1 ? '警示' : '高危', riskLevel: s5 >= 4 ? 'low' : s5 >= 3 ? 'medium' : s5 >= 1 ? 'high' : 'critical', desc: cv > 7 ? '波动极大，风险极高' : '' });
+    }
+
+    const actualMax = indicators.reduce((sum, ind) => sum + ind.maxScore, 0) || 25;
+    const normalizedScore = actualMax > 0 ? Math.round(score / actualMax * 25) : 12;
+
+    return { score: normalizedScore, indicators, maxScore: maxTotal, dataAvailable: true };
+  },
+
+  // ===== 维度4：合规与基本面风险（25分） =====
+  _calcComplianceRisk(quote, sectorFlow) {
+    const indicators = [];
+    let score = 0;
+    const maxTotal = 25;
+    const name = quote.name || '';
+
+    // 4.1 ST/退市风险（8分，一票否决）
+    const isST = /[*Ｓ]*ST/i.test(name);
+    if (isST) {
+      indicators.push({ name: 'ST风险', value: 'ST股', score: 0, maxScore: 8, status: '高危', riskLevel: 'critical', desc: 'ST/*ST股票，存在退市风险' });
+      // ST一票否决：直接低分
+      return { score: 3, indicators, maxScore: maxTotal, dataAvailable: true, isST: true };
+    } else {
+      score += 8;
+      indicators.push({ name: 'ST风险', value: '正常', score: 8, maxScore: 8, status: '优', riskLevel: 'low', desc: '' });
+    }
+
+    // 4.2 市盈率合理性（5分）
+    const pe = quote.pe || 0;
+    if (pe > 0) {
+      let s;
+      if (pe <= 15) s = 5;
+      else if (pe <= 30) s = 4;
+      else if (pe <= 50) s = 3;
+      else if (pe <= 100) s = 1;
+      else s = 0;
+      score += s;
+      indicators.push({ name: '市盈率PE', value: pe.toFixed(1), score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 1 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 1 ? 'high' : 'critical', desc: pe > 100 ? 'PE超100倍，估值泡沫严重' : pe > 50 ? '估值偏高' : '' });
+    } else if (pe < 0) {
+      // 亏损
+      indicators.push({ name: '市盈率PE', value: '亏损', score: 0, maxScore: 5, status: '高危', riskLevel: 'critical', desc: '公司亏损，基本面恶化' });
+    }
+    // pe=0 不加分
+
+    // 4.3 市净率安全性（5分）
+    const pb = quote.pb || 0;
+    if (pb > 0) {
+      let s;
+      if (pb < 1) s = 5;
+      else if (pb < 2) s = 4;
+      else if (pb < 4) s = 3;
+      else if (pb < 8) s = 1;
+      else s = 0;
+      score += s;
+      indicators.push({ name: '市净率PB', value: pb.toFixed(2), score: s, maxScore: 5, status: s >= 4 ? '优' : s >= 3 ? '一般' : s >= 1 ? '警示' : '高危', riskLevel: s >= 4 ? 'low' : s >= 3 ? 'medium' : s >= 1 ? 'high' : 'critical', desc: pb > 8 ? 'PB极高，资产溢价过大' : '' });
+    }
+
+    // 4.4 市值规模风险（3分）
+    const mc = quote.marketCap || 0;
+    if (mc > 0) {
+      let s;
+      if (mc > 500) s = 3;
+      else if (mc > 100) s = 2.5;
+      else if (mc > 50) s = 2;
+      else if (mc > 30) s = 1;
+      else s = 0;
+      score += s;
+      indicators.push({ name: '市值规模', value: mc.toFixed(0) + '亿', score: s, maxScore: 3, status: s >= 2.5 ? '优' : s >= 2 ? '一般' : s >= 1 ? '警示' : '高危', riskLevel: s >= 2.5 ? 'low' : s >= 2 ? 'medium' : s >= 1 ? 'high' : 'critical', desc: mc < 30 ? '小市值股票，流动性差' : '' });
+    }
+
+    // 4.5 行业风险（4分）— 基于板块资金流向
+    if (sectorFlow !== undefined && sectorFlow !== null) {
+      let s;
+      if (sectorFlow > 0) s = 4;
+      else if (sectorFlow > -0.5e8) s = 3;
+      else if (sectorFlow > -2e8) s = 2;
+      else s = 1;
+      score += s;
+      indicators.push({ name: '板块资金', value: sectorFlow > 0 ? '净流入' : '净流出', score: s, maxScore: 4, status: s >= 3 ? '优' : s >= 2 ? '一般' : '警示', riskLevel: s >= 3 ? 'low' : s >= 2 ? 'medium' : 'high', desc: sectorFlow < -2e8 ? '板块资金大幅流出，行业承压' : '' });
+    }
+
+    const actualMax = indicators.reduce((sum, ind) => sum + ind.maxScore, 0) || 25;
+    const normalizedScore = actualMax > 0 ? Math.round(score / actualMax * 25) : 12;
+
+    return { score: normalizedScore, indicators, maxScore: maxTotal, dataAvailable: true };
+  },
+
+  /** 生成一句话总结 */
+  _genSummary(result) {
+    const s = result.totalScore;
+    const lvl = result.levelInfo;
+    const risks = result.topRisks;
+    let text = `综合风险评分${s}分（${lvl.label}），`;
+
+    if (s >= 80) {
+      text += '整体风险可控，各项指标表现稳健';
+    } else if (s >= 60) {
+      text += '存在一定风险因素，需持续关注';
+    } else if (s >= 40) {
+      text += '风险因素较多，建议谨慎对待';
+    } else {
+      text += '风险信号密集，建议高度警惕';
+    }
+
+    if (risks.length > 0) {
+      text += '。主要风险点：' + risks.map(r => r.name + (r.desc ? '（' + r.desc + '）' : '')).join('、');
+    }
+
+    return text;
+  },
+
+  /** 获取板块资金流向（从缓存的板块排行中查找） */
+  getSectorFlowForStock(quote) {
+    try {
+      const industry = quote.industry || '';
+      const sectorInfo = CONFIG.SECTORS[quote.code];
+      const sectorName = industry || (sectorInfo ? sectorInfo.name : '');
+      if (!sectorName) return null;
+
+      // 从DataAPI缓存中查找板块排行数据
+      const cache = DataAPI._cache || {};
+      for (const key of Object.keys(cache)) {
+        if (key.startsWith('sectorRank_')) {
+          const data = cache[key];
+          if (data && data.value && Array.isArray(data.value)) {
+            const match = data.value.find(s => s.name === sectorName || s.name.includes(sectorName));
+            if (match) return match.mainFlow || 0;
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+    return null;
   }
 };
