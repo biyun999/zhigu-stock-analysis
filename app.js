@@ -770,6 +770,96 @@ const Utils = {
     return { k, d, j };
   },
 
+  /** 计算KDJ指标（使用高低收盘价，更精确） */
+  calcKDJ_HLC(closes, highs, lows, n = 9) {
+    if (closes.length < n + 2) return { k: 50, d: 50, j: 50 };
+    let k = 50, d = 50;
+    for (let i = n - 1; i < closes.length; i++) {
+      let low = Infinity, high = -Infinity;
+      for (let j = i - n + 1; j <= i; j++) {
+        if (lows[j] < low) low = lows[j];
+        if (highs[j] > high) high = highs[j];
+      }
+      const rsv = high === low ? 50 : (closes[i] - low) / (high - low) * 100;
+      k = 2 / 3 * k + 1 / 3 * rsv;
+      d = 2 / 3 * d + 1 / 3 * k;
+    }
+    return { k, d, j: 3 * k - 2 * d };
+  },
+
+  /** 计算BOLL（20,2），返回最新值 */
+  calcBOLL(closes, period = 20, multiplier = 2) {
+    if (closes.length < period) return { mid: 0, upper: 0, lower: 0, width: 0, pctB: 50 };
+    const slice = closes.slice(-period);
+    const mid = slice.reduce((a, b) => a + b, 0) / period;
+    let variance = 0;
+    for (const c of slice) variance += (c - mid) ** 2;
+    const std = Math.sqrt(variance / period);
+    const upper = mid + multiplier * std;
+    const lower = mid - multiplier * std;
+    const current = closes[closes.length - 1];
+    const width = upper > lower ? ((upper - lower) / mid * 100) : 0;
+    const pctB = upper > lower ? ((current - lower) / (upper - lower) * 100) : 50;
+    return { mid: +mid.toFixed(2), upper: +upper.toFixed(2), lower: +lower.toFixed(2), width: +width.toFixed(1), pctB: +pctB.toFixed(1) };
+  },
+
+  /** 计算DMI（14），返回最新值 */
+  calcDMI(highs, lows, closes, period = 14) {
+    const series = this.calcDMISeries(highs, lows, closes, period);
+    const n = closes.length;
+    const last = n - 1;
+    const pdi = series.pdi[last] || 0;
+    const mdi = series.mdi[last] || 0;
+    const adx = series.adx[last] || 0;
+    return { pdi: +pdi.toFixed(1), mdi: +mdi.toFixed(1), adx: +adx.toFixed(1) };
+  },
+
+  /** 计算CCI（14），返回最新值 */
+  calcCCI(highs, lows, closes, period = 14) {
+    const series = this.calcCCISeries(highs, lows, closes, period);
+    const val = series[closes.length - 1];
+    return val !== null && val !== undefined ? +val.toFixed(1) : 0;
+  },
+
+  /** 计算WR（威廉指标，14日） */
+  calcWR(highs, lows, closes, period = 14) {
+    if (closes.length < period) return 50;
+    let high = -Infinity, low = Infinity;
+    for (let i = closes.length - period; i < closes.length; i++) {
+      if (highs[i] > high) high = highs[i];
+      if (lows[i] < low) low = lows[i];
+    }
+    if (high === low) return 50;
+    return +((high - closes[closes.length - 1]) / (high - low) * 100).toFixed(1);
+  },
+
+  /** 计算ATR（14日平均真实波幅） */
+  calcATR(highs, lows, closes, period = 14) {
+    if (closes.length < period + 1) return 0;
+    let sum = 0;
+    for (let i = closes.length - period; i < closes.length; i++) {
+      const tr = Math.max(
+        highs[i] - lows[i],
+        Math.abs(highs[i] - closes[i - 1]),
+        Math.abs(lows[i] - closes[i - 1])
+      );
+      sum += tr;
+    }
+    return +(sum / period).toFixed(3);
+  },
+
+  /** 计算VWAP（成交量加权平均价） */
+  calcVWAP(klines, period) {
+    const slice = klines.slice(-(period || klines.length));
+    let sumPV = 0, sumV = 0;
+    for (const k of slice) {
+      const typ = (k.open + k.high + k.low + k.close) / 4;
+      sumPV += typ * k.volume;
+      sumV += k.volume;
+    }
+    return sumV > 0 ? +(sumPV / sumV).toFixed(2) : 0;
+  },
+
   /** 计算EMA序列（返回与输入等长的数组，前period-1项为null） */
   calcEMASeries(data, period) {
     const result = new Array(data.length).fill(null);
@@ -2004,7 +2094,7 @@ const DataAPI = {
     return null;
   },
 
-  /** 获取资金流向（近5日，三通道容灾） */
+  /** 获取资金流向（近20日，三通道容灾） */
   async fetchCapitalFlow(code) {
     const cacheKey = 'capitalFlow_' + code;
     const cached = this._cacheGet(cacheKey, 'capitalFlow');
@@ -2015,7 +2105,7 @@ const DataAPI = {
       if (code.startsWith('hk')) secid = '116.' + code.substring(2);
       else if (code.startsWith('sh')) secid = '1.' + code.substring(2);
       else secid = '0.' + code.substring(2);
-      const res = await this._fetchEMCapitalKlines(secid, 5);
+      const res = await this._fetchEMCapitalKlines(secid, 20);
       let result = [];
       if (res) {
         result = res.klines.map(line => {
@@ -3912,8 +4002,8 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块3：资金流向数据解读（v4.0 增加龙虎榜席位数据作为主力动向第二来源） */
-  module3_Capital({ capitalFlow, dragonTiger }) {
+  /** 模块3：资金流向数据解读（v4.4-P24 大幅增强：多周期+行业对比+量价验证+控盘度+筹码趋势） */
+  module3_Capital({ capitalFlow, dragonTiger, klines, quote }) {
     let html = '';
     // ===== v4.0 龙虎榜：机构/游资席位动向（独立于资金流向的第二主力来源）=====
     const dt = dragonTiger;
@@ -3960,25 +4050,88 @@ const DiagnosticEngine = {
       return html;
     }
 
+    // ===== v4.4-P24: 多周期资金流向汇总 =====
+    const len = capitalFlow.length;
     const recent5 = capitalFlow.slice(-5);
-    const totalMain = recent5.reduce((s, d) => s + d.mainIn, 0);
-    const totalSuper = recent5.reduce((s, d) => s + d.superIn, 0);
-    const totalBig = recent5.reduce((s, d) => s + d.bigIn, 0);
-    const totalSmall = recent5.reduce((s, d) => s + d.smallIn, 0);
+    const recent10 = capitalFlow.slice(-10);
+    const recent20 = capitalFlow.slice(-20);
 
-    // 结论
-    let conclusion = '';
-    if (totalMain > 5e7) {
-      conclusion = '✅ 近5日主力资金持续净流入，主力做多意愿较强。';
-    } else if (totalMain < -5e7) {
-      conclusion = '⚠️ 近5日主力资金大幅净流出，主力出货迹象明显，需高度警惕。';
+    const sumPeriod = (arr, field) => arr.reduce((s, d) => s + (d[field] || 0), 0);
+    const totalMain5 = sumPeriod(recent5, 'mainIn');
+    const totalMain10 = sumPeriod(recent10, 'mainIn');
+    const totalMain20 = sumPeriod(recent20, 'mainIn');
+    const totalSuper5 = sumPeriod(recent5, 'superIn');
+    const totalBig5 = sumPeriod(recent5, 'bigIn');
+    const totalMed5 = sumPeriod(recent5, 'medIn');
+    const totalSmall5 = sumPeriod(recent5, 'smallIn');
+
+    // ===== 资金动能判断 =====
+    let momentum = '', momentumIcon = '';
+    const avg5 = totalMain5 / 5;
+    const avg10 = totalMain10 / 10;
+    const avg20 = totalMain20 / 20;
+    if (avg5 > avg10 && avg5 > avg20 && avg5 > 0) {
+      momentum = '加速流入'; momentumIcon = '🚀';
+    } else if (avg5 > 0 && avg10 > 0) {
+      momentum = '稳步流入'; momentumIcon = '📈';
+    } else if (avg5 > avg10 && avg5 < 0 && avg10 < 0) {
+      momentum = '加速流出'; momentumIcon = '🔻';
+    } else if (avg5 < 0) {
+      momentum = '转弱流出'; momentumIcon = '⚠️';
+    } else if (avg5 > 0 && avg10 < 0) {
+      momentum = '由流转入'; momentumIcon = '🔄';
     } else {
-      conclusion = '📊 近5日主力资金流向中性，多空博弈较为均衡。';
+      momentum = '中性震荡'; momentumIcon = '📊';
+    }
+
+    // ===== 综合结论 =====
+    let conclusion = '';
+    if (totalMain5 > 5e7 && totalMain10 > 5e7) {
+      conclusion = '✅ 近5日/10日主力资金持续净流入，主力做多意愿较强，资金动能：' + momentum + '。';
+    } else if (totalMain5 < -5e7 && totalMain10 < -5e7) {
+      conclusion = '⚠️ 近5日/10日主力资金大幅净流出，主力出货迹象明显，需高度警惕。';
+    } else if (totalMain20 > 1e8) {
+      conclusion = '📊 近20日主力资金累计净流入' + Utils.formatAmount(totalMain20) + '，中期资金面偏多。';
+    } else if (totalMain20 < -1e8) {
+      conclusion = '⚠️ 近20日主力资金累计净流出' + Utils.formatAmount(Math.abs(totalMain20)) + '，中期资金面偏空。';
+    } else {
+      conclusion = '📊 主力资金流向中性，多空博弈较为均衡，资金动能：' + momentum + '。';
     }
     html += `<div class="conclusion">${conclusion}</div>`;
 
-    // 主力数据
-    html += '<p><strong>【近5日主力资金数据】</strong></p>';
+    // ===== 多周期趋势对比 =====
+    html += '<p><strong>【多周期资金趋势】</strong></p>';
+    const fmtFlow = (v) => {
+      const dir = v >= 0 ? '净流入' : '净流出';
+      const cls = v >= 0 ? 'color-up' : 'color-down';
+      return `<span class="${cls}">${Utils.formatAmount(Math.abs(v))} ${dir}</span>`;
+    };
+    html += `<div class="metric-row"><span class="metric-label">近5日主力</span><span class="metric-val">${fmtFlow(totalMain5)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">近10日主力</span><span class="metric-val">${fmtFlow(totalMain10)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">近20日主力</span><span class="metric-val">${fmtFlow(totalMain20)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">资金动能</span><span class="metric-val">${momentumIcon} ${momentum}</span></div>`;
+
+    // 趋势加速/减速判断
+    if (len >= 10) {
+      const first5 = capitalFlow.slice(-10, -5);
+      const second5 = recent5;
+      const first5Main = sumPeriod(first5, 'mainIn');
+      const second5Main = sumPeriod(second5, 'mainIn');
+      if (first5Main > 0 && second5Main > 0 && second5Main > first5Main) {
+        html += '<p>📈 资金流入呈加速态势（后5日流入量 > 前5日），主力买入力度增强。</p>';
+      } else if (first5Main < 0 && second5Main < 0 && second5Main < first5Main) {
+        html += '<p>🔻 资金流出呈加速态势（后5日流出量 > 前5日），抛压加大。</p>';
+      } else if (first5Main < 0 && second5Main > 0) {
+        html += '<p>🔄 资金流向由流转入，主力可能正在建仓吸筹。</p>';
+      } else if (first5Main > 0 && second5Main < 0) {
+        html += '<p>⚠️ 资金流向由入转出，主力可能正在减仓出货。</p>';
+      } else if (first5Main > 0 && second5Main > 0 && second5Main < first5Main) {
+        html += '<p>📊 资金仍在流入但力度减弱，上涨动能衰减。</p>';
+      }
+    }
+
+    // ===== 近5日逐日明细 =====
+    html += '<p><strong>【近5日逐日明细】</strong></p>';
     recent5.forEach(d => {
       const dir = d.mainIn >= 0 ? '流入' : '流出';
       const cls = d.mainIn >= 0 ? 'color-up' : 'color-down';
@@ -3988,36 +4141,30 @@ const DiagnosticEngine = {
       </div>`;
     });
 
-    // 5日汇总
-    html += '<p><strong>【5日汇总】</strong></p>';
-    const mainDir = totalMain >= 0 ? '净流入' : '净流出';
-    const mainCls = totalMain >= 0 ? 'color-up' : 'color-down';
-    html += `<div class="metric-row">
-      <span class="metric-label">主力净流向</span>
-      <span class="metric-val ${mainCls}">${Utils.formatAmount(Math.abs(totalMain))} ${mainDir}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">超大单净流向</span>
-      <span class="metric-val ${totalSuper >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalSuper))}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">大单净流向</span>
-      <span class="metric-val ${totalBig >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalBig))}</span>
-    </div>`;
+    // ===== 5日分类汇总 =====
+    html += '<p><strong>【5日分层资金汇总】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">超大单净流向</span><span class="metric-val ${totalSuper5 >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalSuper5))} ${totalSuper5 >= 0 ? '净买入' : '净卖出'}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">大单净流向</span><span class="metric-val ${totalBig5 >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalBig5))} ${totalBig5 >= 0 ? '净买入' : '净卖出'}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">中单净流向</span><span class="metric-val ${totalMed5 >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalMed5))}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">小单(散户)净流向</span><span class="metric-val ${totalSmall5 >= 0 ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalSmall5))}</span></div>`;
 
-    // 散户筹码分析
-    html += '<p><strong>【散户筹码状态】</strong></p>';
-    if (totalSmall > 0 && totalMain < 0) {
-      html += '<p>⚠️ 散户净流入、主力净流出，典型的散户接盘格局，筹码从集中转向分散，后市看空。</p>';
-    } else if (totalSmall < 0 && totalMain > 0) {
-      html += '<p>✅ 散户净流出、主力净流入，筹码向主力集中，有利于后市拉升。</p>';
-    } else {
-      html += '<p>散户与主力流向同向，市场方向较为一致，需结合技术面判断。</p>';
-    }
-
-    // 多空意愿
-    html += '<p><strong>【多空意愿判断】</strong></p>';
+    // ===== 多空力量与主力控盘度 =====
+    html += '<p><strong>【多空力量 & 主力控盘度】</strong></p>';
+    const totalForce5 = Math.abs(totalSuper5) + Math.abs(totalBig5) + Math.abs(totalMed5) + Math.abs(totalSmall5);
+    const mainForce = totalSuper5 + totalBig5;
+    const retailForce = totalSmall5 + totalMed5;
     let bullDays = recent5.filter(d => d.mainIn > 0).length;
+    const controlRatio = totalForce5 > 0 ? Math.abs(mainForce) / totalForce5 * 100 : 0;
+    let controlLevel = '';
+    if (controlRatio > 50) controlLevel = '高度控盘';
+    else if (controlRatio > 30) controlLevel = '中度控盘';
+    else if (controlRatio > 15) controlLevel = '低度控盘';
+    else controlLevel = '散户主导';
+
+    html += `<div class="metric-row"><span class="metric-label">主力净流入占比</span><span class="metric-val ${mainForce >= 0 ? 'color-up' : 'color-down'}">${mainForce >= 0 ? '' : '-'}${totalForce5 > 0 ? (Math.abs(mainForce)/totalForce5*100).toFixed(1) : 0}%</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">主力控盘度</span><span class="metric-val">${controlLevel}（${controlRatio.toFixed(0)}%）</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">多方活跃天数</span><span class="metric-val">${bullDays}/5日</span></div>`;
+
     if (bullDays >= 4) {
       html += '<p>近5日有' + bullDays + '日主力净流入，多方力量占优，短期偏多。</p>';
     } else if (bullDays <= 1) {
@@ -4025,6 +4172,104 @@ const DiagnosticEngine = {
     } else {
       html += '<p>多空力量交替，市场处于震荡博弈阶段，方向不明朗。</p>';
     }
+
+    // ===== 散户筹码状态 =====
+    html += '<p><strong>【散户筹码状态】</strong></p>';
+    if (totalSmall5 > 0 && mainForce < 0) {
+      html += '<p>⚠️ 散户净流入、主力净流出，典型的散户接盘格局，筹码从集中转向分散，后市看空。</p>';
+    } else if (totalSmall5 < 0 && mainForce > 0) {
+      html += '<p>✅ 散户净流出、主力净流入，筹码向主力集中，有利于后市拉升。</p>';
+    } else {
+      html += '<p>散户与主力流向同向，市场方向较为一致，需结合技术面判断。</p>';
+    }
+
+    // ===== v4.4-P24: 量价资金三维验证 =====
+    if (klines && klines.length >= 5) {
+      html += '<p><strong>【量价资金三维验证】</strong></p>';
+      const kl5 = klines.slice(-5);
+      const priceChg5 = (kl5[4].close - kl5[0].open) / kl5[0].open * 100;
+      const vol5 = kl5.reduce((s, k) => s + k.volume, 0);
+      const volPrev5 = klines.length >= 10 ? klines.slice(-10, -5).reduce((s, k) => s + k.volume, 0) : vol5;
+      const volRatio = volPrev5 > 0 ? vol5 / volPrev5 : 1;
+      const priceUp = priceChg5 > 0;
+      const volUp = volRatio > 1.1;
+      const mainIn = totalMain5 > 0;
+
+      let vpVerdict = '', vpCls = '';
+      if (priceUp && volUp && mainIn) {
+        vpVerdict = '✅ 价涨量增+资金流入 → 健康上涨行情，趋势可持续';
+        vpCls = 'color-up';
+      } else if (priceUp && !volUp && !mainIn) {
+        vpVerdict = '⚠️ 价涨量缩+资金流出 → 虚涨信号，警惕回调风险';
+        vpCls = 'color-down';
+      } else if (!priceUp && volUp && !mainIn) {
+        vpVerdict = '⚠️ 价跌量增+资金流出 → 出货行情，建议减仓';
+        vpCls = 'color-down';
+      } else if (!priceUp && !volUp && mainIn) {
+        vpVerdict = '📊 价跌量缩+资金流入 → 洗盘吸筹迹象，关注企稳信号';
+        vpCls = '';
+      } else if (priceUp && volUp && !mainIn) {
+        vpVerdict = '📊 价涨量增但资金流出 → 可能是游资拉高出货，需谨慎';
+        vpCls = 'color-down';
+      } else if (priceUp && !volUp && mainIn) {
+        vpVerdict = '📊 价涨量缩但资金流入 → 主力控盘拉升，筹码锁定良好';
+        vpCls = 'color-up';
+      } else if (!priceUp && volUp && mainIn) {
+        vpVerdict = '📊 价跌量增但资金流入 → 可能是恐慌中主力吸筹，关注支撑';
+        vpCls = '';
+      } else {
+        vpVerdict = '📊 量价资金信号混合，建议观望为主';
+        vpCls = '';
+      }
+      html += `<p class="${vpCls}">${vpVerdict}</p>`;
+      html += `<div class="metric-row"><span class="metric-label">5日涨跌幅</span><span class="metric-val ${priceUp ? 'color-up' : 'color-down'}">${priceChg5 >= 0 ? '+' : ''}${priceChg5.toFixed(2)}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">量能比（vs前5日）</span><span class="metric-val">${volRatio.toFixed(2)}（${volUp ? '放量' : '缩量'}）</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">5日主力净流向</span><span class="metric-val ${mainIn ? 'color-up' : 'color-down'}">${Utils.formatAmount(Math.abs(totalMain5))} ${mainIn ? '流入' : '流出'}</span></div>`;
+    }
+
+    // ===== v4.4-P24: 筹码集中度趋势 =====
+    if (klines && klines.length >= 20) {
+      html += '<p><strong>【筹码集中度趋势】</strong></p>';
+      // 用5日/10日/20日窗口分别计算筹码分布
+      const calcConc = (kl) => {
+        if (kl.length < 5) return 99;
+        let totalVol = 0, weightedSum = 0;
+        const prices = kl.map(k => (k.high + k.low + k.close) / 3);
+        const pMin = Math.min(...kl.map(k => k.low));
+        const pMax = Math.max(...kl.map(k => k.high));
+        if (pMax <= pMin) return 99;
+        kl.forEach(k => {
+          const typ = (k.open + k.high + k.low + k.close) / 4;
+          totalVol += k.volume;
+          weightedSum += typ * k.volume;
+        });
+        if (totalVol === 0) return 99;
+        const avgCost = weightedSum / totalVol;
+        // 计算加权标准差作为集中度指标
+        let variance = 0;
+        kl.forEach(k => {
+          const typ = (k.open + k.high + k.low + k.close) / 4;
+          variance += k.volume * (typ - avgCost) ** 2;
+        });
+        const stdDev = Math.sqrt(variance / totalVol);
+        // 集中度 = 标准差 / 均价 * 100（越小越集中）
+        return +(stdDev / avgCost * 100).toFixed(2);
+      };
+      const conc5 = calcConc(klines.slice(-5));
+      const conc10 = calcConc(klines.slice(-10));
+      const conc20 = calcConc(klines.slice(-20));
+      html += `<div class="metric-row"><span class="metric-label">5日集中度</span><span class="metric-val">${conc5}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">10日集中度</span><span class="metric-val">${conc10}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">20日集中度</span><span class="metric-val">${conc20}%</span></div>`;
+      if (conc5 < conc20 * 0.9) {
+        html += '<p>✅ 筹码趋向集中（5日集中度显著低于20日），主力可能在吸筹。</p>';
+      } else if (conc5 > conc20 * 1.1) {
+        html += '<p>⚠️ 筹码趋向分散（5日集中度高于20日），主力可能在派发。</p>';
+      } else {
+        html += '<p>筹码集中度变化不大，维持稳定状态。</p>';
+      }
+    }
+
     // 数据来源标识
     const src = capitalFlow._source || '主通道';
     const badgeCls = src === '主通道' ? 'ds-badge ds-ok' : 'ds-badge ds-backup';
@@ -4034,8 +4279,8 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块4：日线技术盘面解析 */
-  module4_Technical({ quote, klines }) {
+  /** 模块4：日线技术盘面解析（v4.4-P24 大幅增强：KDJ/BOLL/DMI/CCI/WR/ATR + 量能 + 均线全排列 + 筹码 + 综合评分） */
+  module4_Technical({ quote, klines, capitalFlow }) {
     let html = '';
     if (!klines || klines.length < 5) {
       html += '<div class="conclusion">📊 K线数据不足，无法进行技术面分析。</div>';
@@ -4043,49 +4288,232 @@ const DiagnosticEngine = {
     }
 
     const closes = klines.map(k => k.close);
+    const highs = klines.map(k => k.high);
+    const lows = klines.map(k => k.low);
+    const volumes = klines.map(k => k.volume);
     const current = quote.price;
+    const n = closes.length;
+
+    // ===== 计算所有技术指标 =====
     const ma5 = Utils.calcMA(closes, 5);
     const ma10 = Utils.calcMA(closes, 10);
     const ma20 = Utils.calcMA(closes, 20);
     const ma60 = Utils.calcMA(closes, 60);
+    const ma120 = Utils.calcMA(closes, 120);
+    const ma250 = Utils.calcMA(closes, 250);
     const macd = Utils.calcMACD(closes);
-    const rsi = Utils.calcRSI(closes);
+    const rsi6 = Utils.calcRSI(closes, 6);
+    const rsi14 = Utils.calcRSI(closes, 14);
+    const kdj = Utils.calcKDJ_HLC(closes, highs, lows, 9);
+    const boll = Utils.calcBOLL(closes, 20, 2);
     const sr = Utils.calcSupportResistance(klines, current);
+    const chip = Utils.calcChipDistribution(klines, current);
+    const vwap20 = Utils.calcVWAP(klines, 20);
+    const vwap5 = Utils.calcVWAP(klines, 5);
 
-    // 结论
-    let signal = '';
-    if (ma5 > ma10 && ma10 > ma20 && current > ma5) signal = '✅ 技术面偏多，均线多头排列，短期趋势向好。';
-    else if (ma5 < ma10 && ma10 < ma20 && current < ma5) signal = '⚠️ 技术面偏空，均线空头排列，短期趋势向下。';
-    else signal = '📊 技术面信号混合，均线交织，短期方向不明确。';
-    html += `<div class="conclusion">${signal}</div>`;
-
-    // 支撑位与压力位
-    html += '<p><strong>【关键价位】</strong></p>';
-    html += `<div class="metric-row">
-      <span class="metric-label">短期支撑位</span>
-      <span class="metric-val key-price">${sr.support}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">短期压力位</span>
-      <span class="metric-val key-price">${sr.resistance}</span>
-    </div>`;
-    if (ma20) {
-      html += `<div class="metric-row">
-        <span class="metric-label">MA20均线支撑</span>
-        <span class="metric-val">${ma20.toFixed(2)}</span>
-      </div>`;
-    }
-    if (ma60) {
-      html += `<div class="metric-row">
-        <span class="metric-label">MA60生命线</span>
-        <span class="metric-val">${ma60.toFixed(2)}</span>
-      </div>`;
+    // 需要足够数据计算的指标
+    let dmi = { pdi: 0, mdi: 0, adx: 0 };
+    let cci = 0;
+    let wr = 50;
+    let atr = 0;
+    if (n >= 16) {
+      dmi = Utils.calcDMI(highs, lows, closes, 14);
+      cci = Utils.calcCCI(highs, lows, closes, 14);
+      wr = Utils.calcWR(highs, lows, closes, 14);
+      atr = Utils.calcATR(highs, lows, closes, 14);
     }
 
-    // 短期K线逻辑
-    html += '<p><strong>【短期K线逻辑】</strong></p>';
+    // ===== 量能分析 =====
+    const vol5 = n >= 5 ? volumes.slice(-5).reduce((a, b) => a + b, 0) / 5 : 0;
+    const vol20 = n >= 20 ? volumes.slice(-20).reduce((a, b) => a + b, 0) / 20 : vol5;
+    const volRatio = vol20 > 0 ? vol5 / vol20 : 1;
+    const todayVol = volumes[n - 1] || 0;
+    const todayVolVsAvg = vol5 > 0 ? todayVol / vol5 : 1;
+    let volTrend = '', volTrendIcon = '';
+    if (volRatio > 1.3) { volTrend = '明显放量'; volTrendIcon = '🔊'; }
+    else if (volRatio > 1.1) { volTrend = '温和放量'; volTrendIcon = '📢'; }
+    else if (volRatio > 0.9) { volTrend = '量能平稳'; volTrendIcon = '📊'; }
+    else if (volRatio > 0.7) { volTrend = '温和缩量'; volTrendIcon = '🔇'; }
+    else { volTrend = '明显缩量'; volTrendIcon = '🔕'; }
+
+    // 量价配合度
+    const priceChg5 = n >= 5 ? (closes[n - 1] - closes[n - 5]) / closes[n - 5] * 100 : 0;
+    let volPriceMatch = '';
+    if (priceChg5 > 0 && volRatio > 1.05) volPriceMatch = '✅ 价涨量增，上涨有量能支撑';
+    else if (priceChg5 > 0 && volRatio <= 0.95) volPriceMatch = '⚠️ 价涨量缩，上涨动能不足';
+    else if (priceChg5 < 0 && volRatio > 1.05) volPriceMatch = '⚠️ 价跌量增，抛压较重';
+    else if (priceChg5 < 0 && volRatio <= 0.95) volPriceMatch = '📊 价跌量缩，抛压减轻但买盘也弱';
+    else volPriceMatch = '📊 量价关系中性';
+
+    // 量能金叉/死叉
+    let volCross = '';
+    if (n >= 21) {
+      const prevVol5 = volumes.slice(-6, -1).reduce((a, b) => a + b, 0) / 5;
+      const prevVol20 = volumes.slice(-21, -1).reduce((a, b) => a + b, 0) / 20;
+      if (prevVol5 <= prevVol20 && vol5 > vol20) volCross = '量能金叉（5日均量上穿20日均量）';
+      else if (prevVol5 >= prevVol20 && vol5 < vol20) volCross = '量能死叉（5日均量下穿20日均量）';
+    }
+
+    // ===== 均线系统完整分析 =====
+    const maValues = [
+      { label: 'MA5', val: ma5 },
+      { label: 'MA10', val: ma10 },
+      { label: 'MA20', val: ma20 },
+      { label: 'MA60', val: ma60 },
+      { label: 'MA120', val: ma120 },
+      { label: 'MA250', val: ma250 }
+    ].filter(m => m.val !== null);
+
+    let maAlignment = '', maAlignScore = 0; // -100到+100
+    if (maValues.length >= 3) {
+      const vals = maValues.map(m => m.val);
+      let bullPairs = 0, totalPairs = 0;
+      for (let i = 0; i < vals.length - 1; i++) {
+        for (let j = i + 1; j < vals.length; j++) {
+          totalPairs++;
+          if (vals[i] > vals[j]) bullPairs++;
+        }
+      }
+      maAlignScore = totalPairs > 0 ? (bullPairs / totalPairs * 200 - 100) : 0;
+      if (maAlignScore > 60) maAlignment = '完全多头排列';
+      else if (maAlignScore > 20) maAlignment = '偏多头排列';
+      else if (maAlignScore > -20) maAlignment = '均线交织';
+      else if (maAlignScore > -60) maAlignment = '偏空头排列';
+      else maAlignment = '完全空头排列';
+    }
+
+    // 均线粘合度
+    let maConvergence = 0;
+    if (maValues.length >= 3) {
+      const avgMA = maValues.reduce((s, m) => s + m.val, 0) / maValues.length;
+      const deviations = maValues.map(m => Math.abs(m.val - avgMA) / avgMA * 100);
+      const avgDev = deviations.reduce((a, b) => a + b, 0) / deviations.length;
+      maConvergence = avgDev; // 越小越粘合
+    }
+
+    // ===== 趋势与波动率 =====
+    const atrPct = current > 0 && atr > 0 ? (atr / current * 100) : 0;
+    let volLevel = '';
+    if (atrPct > 4) volLevel = '高波动';
+    else if (atrPct > 2) volLevel = '中波动';
+    else volLevel = '低波动';
+
+    let trendStrength = '';
+    if (dmi.adx > 40) trendStrength = '强趋势';
+    else if (dmi.adx > 25) trendStrength = '中等趋势';
+    else if (dmi.adx > 15) trendStrength = '弱趋势';
+    else trendStrength = '震荡无趋势';
+
+    // 20日最大回撤
+    let maxDrawdown = 0;
+    if (n >= 20) {
+      const recent20 = closes.slice(-20);
+      let peak = recent20[0];
+      for (let i = 1; i < recent20.length; i++) {
+        if (recent20[i] > peak) peak = recent20[i];
+        const dd = (peak - recent20[i]) / peak * 100;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+      }
+    }
+
+    // ===== 多层支撑阻力 =====
+    // 第一支撑 = MA20 或 近期低点 取高者
+    // 第二支撑 = MA60 或 20日最低点
+    // 第一阻力 = 近期高点
+    // 第二阻力 = 布林上轨或60日最高
+    const support1 = Math.max(ma20 || 0, sr.support);
+    const support2 = ma60 || sr.support * 0.95;
+    const resistance1 = sr.resistance;
+    const resistance2 = boll.upper > 0 ? Math.max(boll.upper, sr.resistance) : sr.resistance * 1.05;
+
+    // ===== 短期K线逻辑 =====
     const recent5 = klines.slice(-5);
     const upDays = recent5.filter(k => k.close > k.open).length;
+
+    // ===== 综合技术评分（0-100）=====
+    let techScore = 50;
+    // 均线系统（25分）
+    techScore += maAlignScore * 0.15; // -15到+15
+    // 价格vs均线（+10）
+    if (current > ma5 && ma5 > ma20) techScore += 10;
+    else if (current < ma5 && ma5 < ma20) techScore -= 10;
+    else techScore += (current > ma20 ? 5 : -5);
+    // MACD（15分）
+    if (macd.dif > macd.dea) techScore += 8; else techScore -= 8;
+    if (macd.macd > 0 && macd.macd > (Utils.calcMACD(closes.slice(0, -1)).macd || 0)) techScore += 7; // MACD柱放大
+    else if (macd.macd < 0 && macd.macd < (Utils.calcMACD(closes.slice(0, -1)).macd || 0)) techScore -= 7;
+    // KDJ（15分）
+    if (kdj.k > kdj.d && kdj.k < 80) techScore += 10; // 金叉且未超买
+    else if (kdj.k > 80) techScore -= 5; // 超买
+    else if (kdj.k < kdj.d && kdj.k > 20) techScore -= 10; // 死叉且未超卖
+    if (kdj.k < 20) techScore += 8; // 超卖反弹机会
+    // 量能（15分）
+    if (priceChg5 > 0 && volRatio > 1.05) techScore += 15;
+    else if (priceChg5 > 0 && volRatio < 0.9) techScore -= 5;
+    else if (priceChg5 < 0 && volRatio < 0.9) techScore += 5; // 缩量下跌，抛压减轻
+    else if (priceChg5 < 0 && volRatio > 1.2) techScore -= 15;
+    // 趋势强度（15分）
+    if (dmi.adx > 25 && dmi.pdi > dmi.mdi) techScore += 15;
+    else if (dmi.adx > 25 && dmi.pdi < dmi.mdi) techScore -= 15;
+    // 位置（15分）- BOLL %B
+    if (boll.pctB > 30 && boll.pctB < 70) techScore += 10; // 中轨附近，安全区
+    else if (boll.pctB >= 100) techScore -= 10; // 突破上轨，超买
+    else if (boll.pctB <= 0) techScore += 5; // 跌破下轨，超卖可能反弹
+
+    techScore = Math.round(Math.max(0, Math.min(100, techScore)));
+    let techRating = '', techRatingIcon = '';
+    if (techScore >= 75) { techRating = '强势'; techRatingIcon = '🟢'; }
+    else if (techScore >= 60) { techRating = '偏强'; techRatingIcon = '🔵'; }
+    else if (techScore >= 40) { techRating = '偏弱'; techRatingIcon = '🟡'; }
+    else { techRating = '弱势'; techRatingIcon = '🔴'; }
+
+    // ===== 综合结论 =====
+    let signal = '';
+    if (techScore >= 75) signal = `✅ 技术面强势（${techScore}分），${maAlignment}，短期趋势向好。`;
+    else if (techScore >= 60) signal = `📈 技术面偏强（${techScore}分），多数指标看多。`;
+    else if (techScore >= 40) signal = `📊 技术面中性（${techScore}分），${maAlignment}，方向不明确。`;
+    else signal = `⚠️ 技术面偏弱（${techScore}分），${maAlignment}，建议观望或减仓。`;
+    html += `<div class="conclusion">${signal}</div>`;
+
+    // ===== 技术面综合评分 =====
+    html += '<p><strong>【📊 技术面综合评分】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">综合评分</span><span class="metric-val" style="font-size:18px;font-weight:bold">${techRatingIcon} ${techScore}分 · ${techRating}</span></div>`;
+    // 评分条
+    const scoreColor = techScore >= 75 ? '#22c55e' : techScore >= 60 ? '#3b82f6' : techScore >= 40 ? '#eab308' : '#ef4444';
+    html += `<div style="background:rgba(255,255,255,0.1);border-radius:6px;height:8px;margin:6px 0 12px;overflow:hidden"><div style="background:${scoreColor};height:100%;width:${techScore}%;border-radius:6px;transition:width 0.5s"></div></div>`;
+
+    // ===== 均线系统 =====
+    html += '<p><strong>【均线系统】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">排列状态</span><span class="metric-val">${maAlignment}</span></div>`;
+    maValues.forEach(m => {
+      const diff = current > 0 ? ((current - m.val) / m.val * 100).toFixed(2) : '0';
+      const cls = current >= m.val ? 'color-up' : 'color-down';
+      html += `<div class="metric-row"><span class="metric-label">${m.label}</span><span class="metric-val ${cls}">${m.val.toFixed(2)}（${diff >= 0 ? '+' : ''}${diff}%）</span></div>`;
+    });
+    if (maConvergence < 2) {
+      html += `<p>⚡ 均线粘合度高（偏离仅${maConvergence.toFixed(1)}%），变盘临近，关注突破方向。</p>`;
+    } else if (maConvergence > 8) {
+      html += `<p>📊 均线发散度较大（偏离${maConvergence.toFixed(1)}%），趋势较强。</p>`;
+    }
+
+    // ===== 关键价位 =====
+    html += '<p><strong>【关键价位】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">第二支撑</span><span class="metric-val key-price">${support2.toFixed(2)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">第一支撑</span><span class="metric-val key-price">${support1.toFixed(2)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">第一阻力</span><span class="metric-val key-price">${resistance1.toFixed(2)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">第二阻力</span><span class="metric-val key-price">${resistance2.toFixed(2)}</span></div>`;
+
+    // ===== 量能深度分析 =====
+    html += '<p><strong>【量能分析】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">量能状态</span><span class="metric-val">${volTrendIcon} ${volTrend}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">5日/20日量比</span><span class="metric-val">${volRatio.toFixed(2)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">今日量/5日均量</span><span class="metric-val">${todayVolVsAvg.toFixed(2)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">量价配合</span><span class="metric-val">${volPriceMatch.split('，')[0]}</span></div>`;
+    html += `<p>${volPriceMatch}</p>`;
+    if (volCross) html += `<p>📌 ${volCross}</p>`;
+
+    // ===== 短期K线逻辑 =====
+    html += '<p><strong>【短期K线逻辑】</strong></p>';
     if (upDays >= 4) {
       html += '<p>近5日出现' + upDays + '根阳线，短期多头动能较强，但需警惕获利回吐压力。</p>';
     } else if (upDays <= 1) {
@@ -4094,46 +4522,118 @@ const DiagnosticEngine = {
       html += '<p>近5日K线阴阳交替，多空博弈激烈，方向选择临近。</p>';
     }
 
-    // 均线状态
-    html += '<p><strong>【均线状态】</strong></p>';
-    if (ma5 && ma10 && ma20) {
-      if (ma5 > ma10 && ma10 > ma20) {
-        html += '<p>MA5 > MA10 > MA20，均线多头排列，趋势向上。</p>';
-      } else if (ma5 < ma10 && ma10 < ma20) {
-        html += '<p>MA5 < MA10 < MA20，均线空头排列，趋势向下。</p>';
-      } else {
-        html += '<p>均线交织缠绕，短期方向不明，等待突破方向确认。</p>';
-      }
-    }
-
-    // MACD
+    // ===== MACD =====
     html += '<p><strong>【MACD指标】</strong></p>';
-    html += `<div class="metric-row">
-      <span class="metric-label">DIF</span>
-      <span class="metric-val">${macd.dif.toFixed(3)}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">DEA</span>
-      <span class="metric-val">${macd.dea.toFixed(3)}</span>
-    </div>`;
-    html += `<div class="metric-row">
-      <span class="metric-label">MACD柱</span>
-      <span class="metric-val ${macd.macd >= 0 ? 'color-up' : 'color-down'}">${macd.macd.toFixed(3)}</span>
-    </div>`;
+    html += `<div class="metric-row"><span class="metric-label">DIF</span><span class="metric-val">${macd.dif.toFixed(3)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">DEA</span><span class="metric-val">${macd.dea.toFixed(3)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">MACD柱</span><span class="metric-val ${macd.macd >= 0 ? 'color-up' : 'color-down'}">${macd.macd.toFixed(3)}</span></div>`;
     if (macd.dif > macd.dea) {
       html += '<p>DIF位于DEA上方，MACD金叉状态，短期偏多。</p>';
     } else {
       html += '<p>DIF位于DEA下方，MACD死叉状态，短期偏空。</p>';
     }
 
-    // RSI
+    // ===== KDJ =====
+    html += '<p><strong>【KDJ指标】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">K值</span><span class="metric-val">${kdj.k.toFixed(1)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">D值</span><span class="metric-val">${kdj.d.toFixed(1)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">J值</span><span class="metric-val ${kdj.j > 100 || kdj.j < 0 ? 'color-down' : ''}">${kdj.j.toFixed(1)}</span></div>`;
+    let kdjState = '';
+    if (kdj.k > 80 && kdj.d > 80) kdjState = '⚠️ 超买区域，回调概率增大';
+    else if (kdj.k < 20 && kdj.d < 20) kdjState = '📊 超卖区域，存在反弹机会';
+    else if (kdj.k > kdj.d && kdj.k < 80) kdjState = '✅ KDJ金叉，短期偏多';
+    else if (kdj.k < kdj.d && kdj.k > 20) kdjState = '⚠️ KDJ死叉，短期偏空';
+    else kdjState = '📊 KDJ中性区域';
+    html += `<p>${kdjState}</p>`;
+
+    // ===== RSI =====
     html += '<p><strong>【RSI指标】</strong></p>';
-    html += `<p>RSI(14) = ${rsi.toFixed(1)}。`;
-    if (rsi > 80) html += '⚠️ 进入超买区域，短期回调概率较大。</p>';
-    else if (rsi > 60) html += '处于偏强区域，多头仍占优。</p>';
-    else if (rsi > 40) html += '处于中性区域，多空均衡。</p>';
-    else if (rsi > 20) html += '处于偏弱区域，空头占优。</p>';
-    else html += '⚠️ 进入超卖区域，存在技术性反弹机会，但需等待止跌信号。</p>';
+    html += `<div class="metric-row"><span class="metric-label">RSI(6)</span><span class="metric-val">${rsi6.toFixed(1)}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">RSI(14)</span><span class="metric-val">${rsi14.toFixed(1)}</span></div>`;
+    if (rsi14 > 80) html += '<p>⚠️ RSI进入超买区域，短期回调概率较大。</p>';
+    else if (rsi14 > 60) html += '<p>RSI处于偏强区域，多头仍占优。</p>';
+    else if (rsi14 > 40) html += '<p>RSI处于中性区域，多空均衡。</p>';
+    else if (rsi14 > 20) html += '<p>RSI处于偏弱区域，空头占优。</p>';
+    else html += '<p>⚠️ RSI进入超卖区域，存在技术性反弹机会。</p>';
+
+    // ===== BOLL布林带 =====
+    if (boll.upper > 0) {
+      html += '<p><strong>【BOLL布林带】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">上轨</span><span class="metric-val key-price">${boll.upper}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">中轨</span><span class="metric-val">${boll.mid}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">下轨</span><span class="metric-val key-price">${boll.lower}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">带宽</span><span class="metric-val">${boll.width}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">位置%B</span><span class="metric-val">${boll.pctB}%</span></div>`;
+      if (boll.pctB > 100) html += '<p>⚠️ 股价突破布林上轨，短期超买，注意回调风险。</p>';
+      else if (boll.pctB > 80) html += '<p>股价接近上轨，上涨空间有限，注意压力。</p>';
+      else if (boll.pctB < 0) html += '<p>⚠️ 股价跌破布林下轨，短期超卖，关注反弹机会。</p>';
+      else if (boll.pctB < 20) html += '<p>股价接近下轨，可能有支撑反弹。</p>';
+      else html += '<p>股价在布林带中轨附近运行，波动正常。</p>';
+    }
+
+    // ===== DMI =====
+    if (n >= 16 && dmi.adx > 0) {
+      html += '<p><strong>【DMI趋向指标】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">+DI</span><span class="metric-val ${dmi.pdi > dmi.mdi ? 'color-up' : 'color-down'}">${dmi.pdi}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">-DI</span><span class="metric-val ${dmi.mdi > dmi.pdi ? 'color-up' : 'color-down'}">${dmi.mdi}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">ADX</span><span class="metric-val">${dmi.adx}</span></div>`;
+      if (dmi.pdi > dmi.mdi && dmi.adx > 25) html += '<p>✅ +DI > -DI 且ADX>25，上升趋势明确。</p>';
+      else if (dmi.pdi < dmi.mdi && dmi.adx > 25) html += '<p>⚠️ -DI > +DI 且ADX>25，下降趋势明确。</p>';
+      else html += '<p>ADX<25，市场无明显趋势，处于震荡状态。</p>';
+    }
+
+    // ===== CCI =====
+    if (n >= 16) {
+      html += '<p><strong>【CCI顺势指标】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">CCI(14)</span><span class="metric-val ${cci > 100 ? 'color-up' : cci < -100 ? 'color-down' : ''}">${cci}</span></div>`;
+      if (cci > 200) html += '<p>⚠️ CCI严重超买，短期回调压力大。</p>';
+      else if (cci > 100) html += '<p>CCI进入超买区域，上涨动能较强但需警惕。</p>';
+      else if (cci < -200) html += '<p>⚠️ CCI严重超卖，存在超跌反弹机会。</p>';
+      else if (cci < -100) html += '<p>CCI进入超卖区域，可能迎来反弹。</p>';
+      else html += '<p>CCI在正常区间运行。</p>';
+    }
+
+    // ===== WR =====
+    if (n >= 15) {
+      html += '<p><strong>【威廉指标WR】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">WR(14)</span><span class="metric-val ${wr < 20 ? 'color-up' : wr > 80 ? 'color-down' : ''}">${wr}</span></div>`;
+      if (wr < 20) html += '<p>WR进入超买区域，短期注意回调。</p>';
+      else if (wr > 80) html += '<p>WR进入超卖区域，关注反弹机会。</p>';
+      else html += '<p>WR处于中性区间。</p>';
+    }
+
+    // ===== ATR 波动率 =====
+    if (atr > 0) {
+      html += '<p><strong>【波动率ATR】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">ATR(14)</span><span class="metric-val">${atr.toFixed(2)}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">波动率</span><span class="metric-val">${atrPct.toFixed(2)}%（${volLevel}）</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">20日最大回撤</span><span class="metric-val color-down">${maxDrawdown.toFixed(1)}%</span></div>`;
+      if (atrPct > 4) html += '<p>⚠️ 波动率较高，短线风险较大，建议控制仓位。</p>';
+      else if (atrPct < 1.5) html += '<p>波动率较低，可能酝酿突破行情。</p>';
+    }
+
+    // ===== 筹码与成本分析 =====
+    if (chip.avgCost > 0) {
+      html += '<p><strong>【筹码与成本分析】</strong></p>';
+      html += `<div class="metric-row"><span class="metric-label">获利盘比例</span><span class="metric-val ${chip.profitRatio > 70 ? 'color-up' : chip.profitRatio < 30 ? 'color-down' : ''}">${chip.profitRatio}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">筹码均价</span><span class="metric-val">${chip.avgCost}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">VWAP(20日)</span><span class="metric-val">${vwap20}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">VWAP(5日)</span><span class="metric-val">${vwap5}</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">90%集中度</span><span class="metric-val">${chip.concentration90}%</span></div>`;
+      html += `<div class="metric-row"><span class="metric-label">筹码主峰</span><span class="metric-val">${chip.peakPrice}</span></div>`;
+      const costPos = chip.avgCostDeviation > 5 ? '远高于成本' : chip.avgCostDeviation > 0 ? '高于成本' : chip.avgCostDeviation > -5 ? '略低于成本' : '远低于成本';
+      html += `<div class="metric-row"><span class="metric-label">成本位置</span><span class="metric-val">${costPos}（偏离${chip.avgCostDeviation}%）</span></div>`;
+      if (chip.profitRatio > 90) html += '<p>⚠️ 获利盘比例极高，随时可能引发集中抛压。</p>';
+      else if (chip.profitRatio < 10) html += '<p>📊 套牢盘比例很高，上方抛压较重，需放量突破。</p>';
+      if (chip.concentration90 < 8) html += '<p>✅ 筹码高度集中，主力控盘度较高。</p>';
+    }
+
+    // ===== 趋势强度总结 =====
+    html += '<p><strong>【趋势与波动总结】</strong></p>';
+    html += `<div class="metric-row"><span class="metric-label">趋势强度</span><span class="metric-val">${trendStrength}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">波动水平</span><span class="metric-val">${volLevel}</span></div>`;
+    html += `<div class="metric-row"><span class="metric-label">趋势强度ADX</span><span class="metric-val">${dmi.adx || '--'}</span></div>`;
+
     return html;
   },
 
