@@ -10560,7 +10560,7 @@ const App = {
     document.getElementById('stockMeta').innerHTML = '';
 
     // 隐藏之前的分析结果
-    ['sevenDimCard', 'diagnosticResult', 'newsCard', 'conclusionCard', 'techChartCard', 'longTermTrendCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard', 'techGrowthCard'].forEach(id => {
+    ['sevenDimCard', 'diagnosticResult', 'vwapCard', 'newsCard', 'conclusionCard', 'techChartCard', 'longTermTrendCard', 'riskAlertCard', 'klineCard', 'shareholderCard', 'sectorHeatCard', 'techGrowthCard'].forEach(id => {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
@@ -10613,6 +10613,8 @@ const App = {
 
       // ===== 结论前置：先渲染操作建议摘要和主力成本 =====
       try { this.renderConclusionSummary(quote, klines, capitalFlow, scores); } catch(e) { console.warn('[分析] renderConclusionSummary异常:', e); }
+
+      // VWAP已在conclusionSummary中显示，不再单独渲染vwapCard
 
       // 然后渲染七维度评分
       try { this.renderSevenDim(scores); } catch(e) { console.warn('[分析] renderSevenDim异常:', e); }
@@ -10997,8 +10999,6 @@ const App = {
     });
 
     this._bindKlineToolbar();
-    // P23: 渲染价位整合面板
-    this._renderKlinePricePanel(klines, quote);
   },
 
   /** 绑定K线工具栏（周期切换、主图叠加切换） */
@@ -11034,113 +11034,6 @@ const App = {
         if (this._klineData) this.renderKline(this._klineData, this._klineQuote, { count: this._klineCount, overlay });
       });
     }
-  },
-
-  /** v4.4 P23: 渲染K线价位整合面板（主力成本+关键均线+支撑阻力） */
-  _renderKlinePricePanel(klines, quote) {
-    const panel = document.getElementById('klinePricePanel');
-    if (!panel || !klines || klines.length < 10) { if (panel) panel.innerHTML = ''; return; }
-
-    const current = quote.price;
-    const closes = klines.map(k => k.close);
-
-    // ① 主力成本：60日VWAP + 筹码分布
-    const vwap60 = klines.length >= 60
-      ? Utils.calcVWAP(klines.slice(-60).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]))
-      : Utils.calcVWAP(klines.map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
-    const vwapChg = vwap60 > 0 ? ((current - vwap60) / vwap60 * 100) : 0;
-    const chip = Utils.calcChipDistribution(klines, current);
-
-    // ② 关键均线
-    const calcMA = (period) => {
-      if (closes.length < period) return null;
-      const s = Utils.calcMASeries(closes, period);
-      const v = s[s.length - 1];
-      return v != null ? { value: v, bias: ((current - v) / v * 100) } : null;
-    };
-    const ma20 = calcMA(20);
-    const ma60 = calcMA(60);
-    const ma120 = calcMA(120);
-    const ma250 = calcMA(250);
-
-    // ③ 支撑阻力
-    const sr = Utils.calcSupportResistance(klines, current);
-    const chipSupport = chip.supportChip || sr.support;
-    const chipResistance = chip.resistanceChip || sr.resistance;
-    // 第二支撑/阻力（更早期极值）
-    const recent30 = klines.slice(-30);
-    const s2 = Math.min(...recent30.map(k => k.low)) * 1.005;
-    const r2 = Math.max(...recent30.map(k => k.high)) * 0.995;
-    const support1 = Math.max(chipSupport, sr.support);
-    const support2 = Math.min(chipSupport, sr.support, s2);
-    const resistance1 = Math.min(chipResistance, sr.resistance);
-    const resistance2 = Math.max(chipResistance, sr.resistance, r2);
-    const pricePos = (resistance2 - support2) > 0
-      ? ((current - support2) / (resistance2 - support2) * 100) : 50;
-
-    // 渲染辅助函数
-    const fmt = v => v == null ? '--' : v.toFixed(2);
-    const biasColor = v => v >= 0 ? '#ff5252' : '#00e676';
-    const posMark = v => v >= 0 ? '🟢' : '🔴';
-    const maRow = (label, ma) => {
-      if (!ma) return `<div class="kpp-ma-row"><span class="kpp-ma-name">${label}</span><span class="kpp-ma-val" style="color:#5a5e6b">数据不足</span></div>`;
-      return `<div class="kpp-ma-row">` +
-        `<span class="kpp-ma-name">${label}</span>` +
-        `<span class="kpp-ma-val">${fmt(ma.value)}</span>` +
-        `<span class="kpp-ma-bias" style="color:${biasColor(ma.bias)}">${ma.bias >= 0 ? '+' : ''}${ma.bias.toFixed(2)}% ${posMark(ma.bias)}</span>` +
-      `</div>`;
-    };
-
-    // 主力成本判断
-    const costVerdict = current < vwap60
-      ? '<span style="color:#00e676">低于主力成本，有安全边际</span>'
-      : '<span style="color:#ff5252">高于主力成本，注意回调风险</span>';
-
-    let html = '<div class="kline-price-panel">';
-
-    // ① 主力成本区
-    html += '<div class="kpp-section">';
-    html += '<div class="kpp-title">🏦 主力成本</div>';
-    html += '<div class="kpp-cost-main">';
-    html += `<span class="kpp-cost-label">60日VWAP</span>`;
-    html += `<span class="kpp-cost-price">${fmt(vwap60)}</span>`;
-    html += `<span class="kpp-cost-chg" style="color:${biasColor(vwapChg)}">${vwapChg >= 0 ? '+' : ''}${vwapChg.toFixed(2)}%</span>`;
-    html += '</div>';
-    html += `<div class="kpp-cost-detail">获利 <b>${chip.profitRatio}%</b> · 集中度 <b>${chip.concentration70 > 0 ? chip.concentration70.toFixed(1) : '--'}%</b></div>`;
-    html += `<div class="kpp-verdict">${costVerdict}</div>`;
-    html += '</div>';
-
-    // ② 关键均线区
-    html += '<div class="kpp-section">';
-    html += '<div class="kpp-title">📊 关键均线支撑</div>';
-    html += '<div class="kpp-ma-list">';
-    html += maRow('MA20 短期', ma20);
-    html += maRow('MA60 中期', ma60);
-    html += maRow('MA120 半年', ma120);
-    html += maRow('MA250 年线', ma250);
-    html += '</div>';
-    html += '</div>';
-
-    // ③ 支撑阻力区
-    html += '<div class="kpp-section">';
-    html += '<div class="kpp-title">🎯 支撑/阻力位</div>';
-    html += '<div class="kpp-sr-list">';
-    html += `<div class="kpp-sr-row kpp-sr-resist"><span class="kpp-sr-label">阻力2</span><span class="kpp-sr-val">${fmt(resistance2)}</span></div>`;
-    html += `<div class="kpp-sr-row kpp-sr-resist"><span class="kpp-sr-label">阻力1</span><span class="kpp-sr-val">${fmt(resistance1)}</span></div>`;
-    html += `<div class="kpp-sr-row kpp-sr-current"><span class="kpp-sr-label">当前价</span><span class="kpp-sr-val" style="color:#00d4ff;font-weight:700">${current.toFixed(2)}</span></div>`;
-    html += `<div class="kpp-sr-row kpp-sr-support"><span class="kpp-sr-label">支撑1</span><span class="kpp-sr-val">${fmt(support1)}</span></div>`;
-    html += `<div class="kpp-sr-row kpp-sr-support"><span class="kpp-sr-label">支撑2</span><span class="kpp-sr-val">${fmt(support2)}</span></div>`;
-    html += '</div>';
-    // 位置条
-    const barPct = Math.max(5, Math.min(95, pricePos));
-    html += '<div class="kpp-pos-bar">';
-    html += `<div class="kpp-pos-fill" style="width:${barPct}%"></div>`;
-    html += `<span class="kpp-pos-text">当前位置 ${barPct.toFixed(0)}%</span>`;
-    html += '</div>';
-    html += '</div>';
-
-    html += '</div>';
-    panel.innerHTML = html;
   },
 
   /** 渲染技术指标图表（MACD/KDJ/RSI/BOLL/量能） */
@@ -11556,6 +11449,24 @@ const App = {
     html += maRow('MA250 年线', trend.ma250, trend.bias250);
     html += '</div>';
 
+    html += '<div class="lt-section-title">🎯 关键价位参考</div>';
+    html += '<div class="lt-key-prices">';
+
+    const kpItem = (label, value, biasVal) => {
+      if (value === null) return '';
+      return '<div class="lt-kp-item">' +
+        '<div class="lt-kp-label">' + label + '</div>' +
+        '<div class="lt-kp-val">' + value.toFixed(2) + '</div>' +
+        '<div class="lt-kp-dist" style="color:' + (biasVal >= 0 ? '#ff5252' : '#00e676') + '">' +
+          (biasVal >= 0 ? '↑ 距上 ' : '↓ 距下 ') + Math.abs(biasVal).toFixed(2) + '%' +
+        '</div></div>';
+    };
+
+    html += kpItem('年线（牛熊分界）', trend.ma250, trend.bias250);
+    html += kpItem('半年线', trend.ma120, trend.bias120);
+    html += kpItem('60日生命线', trend.ma60, trend.bias60);
+    html += '</div>';
+
     const container = document.getElementById('longTermTrendContent');
     if (container) container.innerHTML = html;
   },
@@ -11680,6 +11591,32 @@ const App = {
     // 风险汇总
     this.showSection('riskSummaryCard', true);
     document.getElementById('riskSummaryContent').innerHTML = report.riskSummary;
+  },
+
+  /** 渲染VWAP主力成本 */
+  renderVWAP(klines, quote) {
+    this.showSection('vwapCard', true);
+    const vwap5 = Utils.calcVWAP(klines.slice(-5).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
+    const vwap10 = Utils.calcVWAP(klines.slice(-10).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
+    const vwap20 = Utils.calcVWAP(klines.slice(-20).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume]));
+    const vwap60 = klines.length >= 60 ? Utils.calcVWAP(klines.slice(-60).map(k => [k.date, k.open, k.high, k.low, k.close, k.volume])) : 0;
+
+    const current = quote.price;
+    const vs5 = current > vwap5 ? '高于' : '低于';
+    const vs20 = current > vwap20 ? '高于' : '低于';
+
+    document.getElementById('vwapContent').innerHTML = `
+      <div class="vwap-grid">
+        <div class="vwap-item"><span class="vw-label">5日VWAP</span><span class="vw-val">${vwap5.toFixed(2)}</span></div>
+        <div class="vwap-item"><span class="vw-label">10日VWAP</span><span class="vw-val">${vwap10.toFixed(2)}</span></div>
+        <div class="vwap-item"><span class="vw-label">20日VWAP</span><span class="vw-val">${vwap20.toFixed(2)}</span></div>
+        <div class="vwap-item"><span class="vw-label">60日VWAP</span><span class="vw-val">${vwap60 > 0 ? vwap60.toFixed(2) : '--'}</span></div>
+      </div>
+      <p style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
+        💡 当前价${vs5}5日VWAP，${vs20}20日VWAP。
+        ${current > vwap20 ? '价格在中期成本线上方，主力整体获利。' : '价格在中期成本线下方，主力可能存在浮亏。'}
+      </p>
+    `;
   },
 
   /** 渲染新闻公告 */
