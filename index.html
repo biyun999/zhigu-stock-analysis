@@ -354,11 +354,7 @@
           <div class="mod-header"><span class="mod-icon">🎯</span><span class="mod-title">模块六：持仓优化处置方案</span></div>
           <div class="mod-body" id="mod6Content"></div>
         </div>
-        <!-- 模块7 -->
-        <div class="diag-module card" id="diagMod7" style="display:none">
-          <div class="mod-header"><span class="mod-icon">🛡️</span><span class="mod-title">模块七：统一标准化风控指标</span></div>
-          <div class="mod-body" id="mod7Content"></div>
-        </div>
+        <!-- 模块7已删除 -->
         <!-- 模块8 -->
         <div class="diag-module card" id="diagMod8" style="display:none">
           <div class="mod-header"><span class="mod-icon">📌</span><span class="mod-title">模块八：分场景实操操作指引</span></div>
@@ -412,9 +408,16 @@
         <!-- 股东人数变化 -->
         <div class="sh-section" id="shHolderNumSection">
           <div class="sh-section-title">📊 股东人数变化</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px">股东人数按季度披露，最新数据仅供参考；下方日度筹码活跃度为实时估算</div>
           <div id="shHolderNumChart" style="width:100%;height:200px"></div>
           <div id="shHolderNumTable" class="sh-table-wrap"></div>
           <div id="shHolderNumSummary" class="sh-summary"></div>
+        </div>
+        <!-- v4.4 P25: 日度筹码活跃度趋势 -->
+        <div class="sh-section" id="shChipActivitySection" style="display:none">
+          <div class="sh-section-title">📈 日度筹码活跃度趋势（近20日实时估算）</div>
+          <div id="shChipActivityChart" style="width:100%;height:180px"></div>
+          <div id="shChipActivitySummary" class="sh-summary"></div>
         </div>
         <!-- 十大股东 -->
         <div class="sh-section" id="shTopHoldersSection">

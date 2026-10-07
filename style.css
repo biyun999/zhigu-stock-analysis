@@ -5770,3 +5770,238 @@ body {
   padding: 8px 0;
   line-height: 1.5;
 }
+
+/* ===== v4.4 P25: 短线卡片量化分+操作分上下排列 ===== */
+.st-quant-op-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 4px 0;
+}
+.st-quant-box-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.st-quant-box-col .st-qb-label {
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
+}
+.st-quant-box-col .st-qb-val {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+.st-op-box-col {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.06);
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.st-op-box-col .st-ob-val {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+/* ===== v4.4 P25: 板块弹窗可读性增强 ===== */
+.sector-heat-popup {
+  width: 90%;
+  max-width: 380px;
+  background: rgba(18,22,34,0.98);
+  border: 1px solid rgba(0,212,255,0.3);
+  border-radius: 14px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.7);
+}
+.shp-header {
+  padding: 14px 16px;
+  background: linear-gradient(135deg, rgba(0,212,255,0.12), rgba(0,230,118,0.08));
+  border-bottom: 1px solid rgba(0,212,255,0.2);
+}
+.shp-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+.shp-close {
+  font-size: 22px;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.1);
+  min-width: 36px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.shp-close:active {
+  background: rgba(255,255,255,0.2);
+}
+.shp-body {
+  max-height: 65vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.shp-stock {
+  display: flex;
+  align-items: center;
+  padding: 12px 10px;
+  border-radius: 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.shp-stock:last-child {
+  border-bottom: none;
+}
+.shp-stock:active {
+  background: rgba(0, 212, 255, 0.12);
+}
+.shp-stock-name {
+  flex: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: #fff;
+}
+.shp-stock-code {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-right: 12px;
+}
+.shp-stock-chg {
+  font-size: 16px;
+  font-weight: 800;
+  min-width: 65px;
+  text-align: right;
+}
+
+/* ===== v4.4 P25: 模块六处置方案网格 ===== */
+.mod6-action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+.mod6-action-item {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  padding: 10px 12px;
+  text-align: center;
+}
+.mod6-action-label {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+}
+.mod6-action-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+}
+
+/* ===== v4.4 P25: 模块二行业增强 ===== */
+.mod2-async-placeholder {
+  margin-top: 12px;
+}
+.mod2-enhance-section {
+  margin-top: 8px;
+}
+.mod2-sub-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-cyan);
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(0,212,255,0.15);
+}
+.mod2-industry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.mod2-ind-item {
+  display: flex;
+  flex-direction: column;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.mod2-ind-label {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.mod2-ind-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-top: 2px;
+}
+.mod2-heat-scores {
+  margin-top: 6px;
+}
+.mod2-heat-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.mod2-heat-label {
+  font-size: 12px;
+  color: #94a3b8;
+  width: 36px;
+  flex-shrink: 0;
+}
+.mod2-heat-track {
+  flex: 1;
+  height: 8px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.mod2-heat-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.5s ease;
+}
+.mod2-heat-val {
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: right;
+}
+.mod2-heat-total {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin-top: 8px;
+  padding: 6px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+}
+.mod2-concept-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mod2-concept-tag {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 14px;
+  border: 1px solid;
+  background: rgba(255,255,255,0.03);
+  white-space: nowrap;
+}

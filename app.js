@@ -3819,7 +3819,6 @@ const DiagnosticEngine = {
       mod4: this.module4_Technical(data),
       mod5: this.module5_Risk(data),
       mod6: this.module6_Optimization(data),
-      mod7: this.module7_RiskControl(data),
       mod8: this.module8_Operation(data),
       riskSummary: this.riskSummary(data)
     };
@@ -3951,7 +3950,7 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块2：行业政策与成长性评估 */
+  /** 模块2：行业政策与成长性评估（v4.4 P25：增加异步行业数据增强） */
   module2_Industry({ quote }) {
     const sector = CONFIG.SECTORS[quote.code] || null;
     let html = '';
@@ -3961,6 +3960,7 @@ const DiagnosticEngine = {
       conclusion = '📊 行业信息不足，建议查阅公司官网和年报确认行业归属。';
       html += `<div class="conclusion">${conclusion}</div>`;
       html += '<p>无法获取准确的行业分类信息，建议结合公司年报中的主营业务构成进行分析。</p>';
+      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"></div>';
       return html;
     }
 
@@ -3999,7 +3999,116 @@ const DiagnosticEngine = {
     } else {
       html += `<p>政策对${sector.name}行业影响中性，行业更多依赖自身经营能力和市场竞争。</p>`;
     }
+
+    // v4.4 P25: 异步数据占位容器
+    html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在加载行业实时数据...</div></div>';
+
     return html;
+  },
+
+  /** v4.4 P25: 异步增强模块二行业数据（板块排名+热度评分+个股行业对比+概念共振） */
+  async _enhanceModule2(quote) {
+    const container = document.getElementById('mod2AsyncData');
+    if (!container) return;
+
+    try {
+      // 并行获取行业板块排名和全市场板块列表
+      const [topSectors, allSectors] = await Promise.all([
+        DataAPI.fetchSectorRank(50).catch(() => []),
+        DataAPI.fetchSectorRank(200).catch(() => [])
+      ]);
+
+      if (!topSectors.length) {
+        container.innerHTML = '';
+        return;
+      }
+
+      // 查找该股所属行业板块
+      const sector = CONFIG.SECTORS[quote.code];
+      const industryName = sector ? sector.name : (quote.industry || '');
+      let matchedSector = null;
+      let sectorRank = -1;
+
+      if (industryName) {
+        for (let i = 0; i < allSectors.length; i++) {
+          if (allSectors[i].name.indexOf(industryName) >= 0 || industryName.indexOf(allSectors[i].name) >= 0) {
+            matchedSector = allSectors[i];
+            sectorRank = i + 1;
+            break;
+          }
+        }
+      }
+      // 若未匹配到，用相似度匹配
+      if (!matchedSector && industryName && allSectors.length > 0) {
+        for (let i = 0; i < allSectors.length; i++) {
+          const sName = allSectors[i].name;
+          if (sName.length >= 2 && industryName.length >= 2) {
+            let common = 0;
+            for (const ch of industryName) { if (sName.indexOf(ch) >= 0) common++; }
+            if (common >= 2) { matchedSector = allSectors[i]; sectorRank = i + 1; break; }
+          }
+        }
+      }
+
+      let html = '<div class="mod2-enhance-section">';
+
+      // 1) 行业基本面数据
+      if (matchedSector) {
+        html += '<div class="mod2-sub-title">📊 行业实时数据</div>';
+        html += '<div class="mod2-industry-grid">';
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">行业涨幅</span><span class="mod2-ind-val" style="color:${matchedSector.changePct >= 0 ? '#00e676' : '#ff5252'}">${matchedSector.changePct >= 0 ? '+' : ''}${matchedSector.changePct.toFixed(2)}%</span></div>`;
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">主力资金</span><span class="mod2-ind-val" style="color:${matchedSector.mainFlow >= 0 ? '#00e676' : '#ff5252'}">${(matchedSector.mainFlow / 1e8).toFixed(2)}亿</span></div>`;
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">换手率</span><span class="mod2-ind-val">${matchedSector.turnoverPct.toFixed(2)}%</span></div>`;
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">涨/跌家数</span><span class="mod2-ind-val">${matchedSector.upCount}↑ / ${matchedSector.downCount}↓</span></div>`;
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">行业排名</span><span class="mod2-ind-val" style="color:#ffd54f">第${sectorRank}/${allSectors.length}名</span></div>`;
+        html += '</div>';
+
+        // 2) 行业热度三维评分
+        const heatResult = DataAPI.calcSectorHeatScore(matchedSector);
+        if (heatResult && heatResult.totalScore > 0) {
+          html += '<div class="mod2-sub-title" style="margin-top:10px">🔥 行业热度三维评分</div>';
+          const totalCls = heatResult.totalScore >= 70 ? '#00e676' : heatResult.totalScore >= 50 ? '#ffc107' : '#ff5252';
+          html += '<div class="mod2-heat-scores">';
+          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">资金</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.fundScore/40*100}%;background:#00d4ff"></div></div><span class="mod2-heat-val">${heatResult.fundScore}/40</span></div>`;
+          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">情绪</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.sentimentScore/30*100}%;background:#00e676"></div></div><span class="mod2-heat-val">${heatResult.sentimentScore}/30</span></div>`;
+          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">趋势</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.trendScore/30*100}%;background:#ffd54f"></div></div><span class="mod2-heat-val">${heatResult.trendScore}/30</span></div>`;
+          html += `<div class="mod2-heat-total">综合热度：<span style="color:${totalCls};font-weight:700">${heatResult.totalScore}/100</span></div>`;
+          html += '</div>';
+        }
+      }
+
+      // 3) 该股在行业中的位置（利用涨幅对比）
+      if (matchedSector && quote.changePct !== undefined) {
+        const stockChg = quote.changePct || 0;
+        const vsSector = stockChg - matchedSector.changePct;
+        let positionLabel = '', positionIcon = '', positionColor = '';
+        if (vsSector > 2) { positionLabel = '龙头领涨（跑赢行业' + vsSector.toFixed(1) + '%）'; positionIcon = '🏆'; positionColor = '#00e676'; }
+        else if (vsSector > 0) { positionLabel = '跟涨（略强于行业）'; positionIcon = '📈'; positionColor = '#00d4ff'; }
+        else if (vsSector > -2) { positionLabel = '跟跌（略弱于行业）'; positionIcon = '📉'; positionColor = '#ffc107'; }
+        else { positionLabel = '弱势（跑输行业' + Math.abs(vsSector).toFixed(1) + '%）'; positionIcon = '⚠️'; positionColor = '#ff5252'; }
+        html += `<div class="mod2-sub-title" style="margin-top:10px">📍 行业内个股位置</div>`;
+        html += `<div style="padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;font-size:13px;color:${positionColor}">${positionIcon} ${positionLabel}</div>`;
+      }
+
+      // 4) 相关概念板块共振（取前5热门概念）
+      if (topSectors.length >= 5) {
+        const hotConcepts = topSectors.slice(0, 5);
+        html += '<div class="mod2-sub-title" style="margin-top:10px">🔗 热门板块共振</div>';
+        html += '<div class="mod2-concept-row">';
+        hotConcepts.forEach(s => {
+          const chgColor = s.changePct >= 0 ? '#00e676' : '#ff5252';
+          html += `<span class="mod2-concept-tag" style="border-color:${chgColor}33;color:${chgColor}">${s.name} ${s.changePct >= 0 ? '+' : ''}${s.changePct.toFixed(2)}%</span>`;
+        });
+        html += '</div>';
+      }
+
+      html += '</div>';
+      container.innerHTML = html;
+
+    } catch (e) {
+      console.warn('[模块2增强] 异步加载失败:', e);
+      container.innerHTML = '';
+    }
   },
 
   /** 模块3：资金流向数据解读（v4.4-P24 大幅增强：多周期+行业对比+量价验证+控盘度+筹码趋势） */
@@ -4717,56 +4826,71 @@ const DiagnosticEngine = {
     return { html, risks };
   },
 
-  /** 模块6：操作处置方案（合并原模块8场景指引） */
+  /** 模块6：持仓优化处置方案（v4.4 P25 精简版：直接给出仓位/时机/止盈止损/周期） */
   module6_Optimization(data) {
     const { quote, klines, scores } = data;
     const totalScore = scores.total;
     const current = quote.price;
     const sr = Utils.calcSupportResistance(klines, current);
+    const stopLoss = Math.min(sr.support, current * 0.92);
+    const takeProfit = sr.resistance;
     let html = '';
 
     // 处置建议
     let action = '', actionCls = '', detail = '';
+    let positionPct = '', holdPeriod = '';
     if (totalScore >= 80) {
       action = '持有/加仓'; actionCls = 'action-hold';
-      detail = '基本面与技术面均表现良好，建议持有或逢低加仓。';
+      detail = '基本面与技术面均表现良好';
+      positionPct = '60%-80%'; holdPeriod = '中长线（2周以上）';
     } else if (totalScore >= 65) {
       action = '逢低建仓'; actionCls = 'action-hold';
-      detail = '量化评分较高，可分批建仓，以20日VWAP为参考成本线。';
+      detail = '量化评分较高，可分批入场';
+      positionPct = '30%-50%'; holdPeriod = '短线波段（3-10个交易日）';
     } else if (totalScore >= 50) {
       action = '观望为主'; actionCls = 'action-reduce';
-      detail = '部分指标出现预警信号，建议等待放量突破或回踩支撑位再决策。';
+      detail = '部分指标偏弱，等待明确信号';
+      positionPct = '≤20%'; holdPeriod = '短线（1-3日）或不入场';
     } else if (totalScore >= 35) {
       action = '谨慎减仓'; actionCls = 'action-reduce';
-      detail = '多项指标偏弱，建议逢高减仓降低风险敞口，空仓者暂勿入场。';
+      detail = '多项指标偏弱，降低风险敞口';
+      positionPct = '≤10%'; holdPeriod = '不建议持有';
     } else {
       action = '回避/止损'; actionCls = 'action-sell';
-      detail = '风险因子较多，建议果断止损离场，不补仓摊低成本。';
+      detail = '风险因子较多，果断离场';
+      positionPct = '0%（空仓）'; holdPeriod = '不适用';
     }
 
     html += `<div class="conclusion">🎯 处置建议：<span class="action-tag ${actionCls}">${action}</span></div>`;
-    html += `<p>${detail}</p>`;
+    html += `<p style="font-size:12px;color:var(--text-secondary);margin:4px 0 10px">${detail}</p>`;
 
-    // 分场景简要操作提示（精简合并，不展开长段落）
-    html += '<p style="margin-top:10px"><strong>【分场景操作提示】</strong></p>';
-    if (totalScore >= 65) {
-      // 适合建仓/持有
-      html += '<p>📌 <b>空仓待入：</b>';
-      if (current <= sr.support * 1.02) {
-        html += `当前接近支撑位，可试探性建仓，首次不超过计划仓位1/3，止损${Math.min(sr.support, current * 0.92).toFixed(2)}。</p>`;
-      } else {
-        html += `等待回调至${(sr.support * 1.01).toFixed(2)}-${(sr.support * 1.05).toFixed(2)}区间再入场，不追高。</p>`;
-      }
-      html += '<p>📌 <b>已持仓：</b>到达压力位附近减仓1/3锁定利润，止损上移至成本价上方保本。</p>';
-    } else if (totalScore >= 35) {
-      // 中性偏弱
-      html += '<p>📌 <b>空仓：</b>评分中等，等待明确突破信号再入场。</p>';
-      html += '<p>📌 <b>已持仓：</b>逢高减仓1/3~1/2，跌破止损价果断离场。</p>';
-    } else {
-      // 高风险
-      html += '<p>📌 <b>空仓：</b>风险较高，暂勿入场。</p>';
-      html += `<p>📌 <b>已持仓：</b>建议尽快止损，止损价${Math.min(sr.support, current * 0.92).toFixed(2)}，不要补仓摊低成本。</p>`;
-    }
+    // 核心操作四要素：简洁表格形式
+    html += '<div class="mod6-action-grid">';
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">📊 仓位建议</div>
+      <div class="mod6-action-val">${positionPct}</div>
+    </div>`;
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">🎯 入场时机</div>
+      <div class="mod6-action-val">${totalScore >= 65 ? (current <= sr.support * 1.02 ? '当前接近支撑位，可入场' : '等待回踩' + (sr.support * 1.01).toFixed(2) + '-' + (sr.support * 1.05).toFixed(2)) : (totalScore >= 50 ? '等待放量突破信号' : '暂勿入场')}</div>
+    </div>`;
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">🛑 止损位</div>
+      <div class="mod6-action-val" style="color:#ff5252">${stopLoss.toFixed(2)}（${((stopLoss/current - 1)*100).toFixed(1)}%）</div>
+    </div>`;
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">✅ 止盈位</div>
+      <div class="mod6-action-val" style="color:#00e676">${takeProfit.toFixed(2)}（+${((takeProfit/current - 1)*100).toFixed(1)}%）</div>
+    </div>`;
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">⏱️ 持有周期</div>
+      <div class="mod6-action-val">${holdPeriod}</div>
+    </div>`;
+    html += `<div class="mod6-action-item">
+      <div class="mod6-action-label">📈 量化评分</div>
+      <div class="mod6-action-val" style="color:${totalScore >= 70 ? '#00e676' : totalScore >= 50 ? '#ffc107' : '#ff5252'}">${totalScore}分</div>
+    </div>`;
+    html += '</div>';
 
     return html;
   },
@@ -9477,8 +9601,7 @@ const HomeLedger = {
 
     let html = '';
 
-    // ===== v4.4 P14: 准确率总览卡片（仪表盘风格） =====
-    html += this._renderAccuracyCard();
+    // v4.4 P25: 准确率总览卡片已从首页移除（保留台账页面详细统计）
 
     // 筛选Tab
     html += '<div class="toplist-tabs" style="margin-bottom:10px">';
@@ -10823,14 +10946,13 @@ const App = {
               <div class="hs-change-val ${cls}">${changeStr}</div>
             </div>
           </div>
-          <div class="st-quant-op-row">
-            <div class="st-quant-box">
+          <div class="st-quant-op-col">
+            <div class="st-quant-box-col">
               <div class="st-qb-label">量化分</div>
               <div class="st-qb-val" style="color:${quantColor}">${quantScore}<span class="st-qb-stars">${quantStars}</span></div>
             </div>
-            <div class="st-op-box" style="background:${opBg};color:${opColor}">
-              <div class="st-ob-label">操作分</div>
-              <div class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</div>
+            <div class="st-op-box-col" style="background:${opBg};color:${opColor}">
+              <span class="st-ob-val">${opAdvice.icon} ${opAdvice.text}</span>
             </div>
           </div>
           ${chipHtml}
@@ -11108,7 +11230,7 @@ const App = {
         report = DiagnosticEngine.generateReport(quote, klines, capitalFlow, news, scores, financials, dragonTiger);
       } catch(e) {
         console.warn('[分析] 诊断报告异常:', e);
-        report = { mod1: '', mod2: '', mod3: '', mod4: '', mod5: { html: '', risks: [] }, mod6: '', mod7: '', mod8: '', riskSummary: '' };
+        report = { mod1: '', mod2: '', mod3: '', mod4: '', mod5: { html: '', risks: [] }, mod6: '', mod8: '', riskSummary: '' };
       }
 
       // ===== 结论前置：先渲染操作建议摘要和主力成本 =====
@@ -11133,13 +11255,16 @@ const App = {
       // 持仓诊断详细模块
       try { this.renderDiagnostic(report); } catch(e) { console.warn('[分析] renderDiagnostic异常:', e); }
 
+      // v4.4 P25: 模块二行业数据异步增强（不阻塞其他模块显示）
+      this._enhanceModule2(quote).catch(e => console.warn('[分析] 模块二增强异常:', e));
+
       // 新闻公告
       if (news && news.length > 0) {
         try { this.renderNews(news); } catch(e) { console.warn('[分析] renderNews异常:', e); }
       }
 
       // v4.4 P12: 股东结构分析（异步，不阻塞主流程）
-      this.renderShareholder(code).catch(e => console.warn('[分析] renderShareholder异常:', e));
+      this.renderShareholder(code, klines).catch(e => console.warn('[分析] renderShareholder异常:', e));
 
       // v4.4 P15: 板块热度详情（异步，不阻塞主流程）
       this._renderSectorHeatDetail(quote, code).catch(e => console.warn('[分析] 板块热度详情异常:', e));
@@ -12166,13 +12291,19 @@ const App = {
   /** 渲染诊断报告 */
   renderDiagnostic(report) {
     this.showSection('diagnosticResult', true);
-    // 模块1-4和6-7是HTML字符串（模块8已合并到模块6，不再单独显示）
-    const htmlModules = { 1: report.mod1, 2: report.mod2, 3: report.mod3, 4: report.mod4, 6: report.mod6, 7: report.mod7 };
+    // 模块1-4和6是HTML字符串（模块7已删除，模块8已合并到模块6，不再单独显示）
+    const htmlModules = { 1: report.mod1, 2: report.mod2, 3: report.mod3, 4: report.mod4, 6: report.mod6 };
     Object.entries(htmlModules).forEach(([num, html]) => {
-      document.getElementById(`diagMod${num}`).style.display = '';
-      document.getElementById(`mod${num}Content`).innerHTML = html;
+      const modEl = document.getElementById(`diagMod${num}`);
+      const contentEl = document.getElementById(`mod${num}Content`);
+      if (modEl && contentEl) {
+        modEl.style.display = '';
+        contentEl.innerHTML = html;
+      }
     });
-    // 隐藏模块8（内容已并入模块6）
+    // 隐藏模块7（已删除）和模块8（内容已并入模块6）
+    const mod7El = document.getElementById('diagMod7');
+    if (mod7El) mod7El.style.display = 'none';
     document.getElementById('diagMod8').style.display = 'none';
     // 模块5特殊处理（返回{html, risks}）
     document.getElementById('diagMod5').style.display = '';
@@ -12193,8 +12324,8 @@ const App = {
     `).join('') || '<div class="empty-tip">暂无公告</div>';
   },
 
-  /** v4.4 P12: 渲染股东结构分析 */
-  async renderShareholder(code) {
+  /** v4.4 P12: 渲染股东结构分析（v4.4 P25: 增加日度筹码活跃度趋势） */
+  async renderShareholder(code, klines) {
     try {
       // 并行获取股东人数和十大股东
       const [holderNumData, latestEndDate] = await (async () => {
@@ -12314,12 +12445,129 @@ const App = {
         document.getElementById('shTopHoldersSummary').innerHTML = thSummary;
       }
 
-      // === 3. 综合分析结论 ===
+      // === 3. v4.4 P25: 日度筹码活跃度趋势（基于近20日换手和量价变化估算） ===
+      if (klines && klines.length >= 20) {
+        this._renderChipActivity(klines);
+      }
+
+      // === 4. 综合分析结论 ===
       this._renderShareholderAnalysis(holderNumData, topHolders);
 
     } catch (e) {
       console.warn('[股东] renderShareholder异常:', e);
     }
+  },
+
+  /** v4.4 P25: 日度筹码活跃度趋势（基于近20日换手和量价关系估算筹码集中/分散） */
+  _renderChipActivity(klines) {
+    const section = document.getElementById('shChipActivitySection');
+    const chartDom = document.getElementById('shChipActivityChart');
+    const summaryDom = document.getElementById('shChipActivitySummary');
+    if (!section || !chartDom || !summaryDom) return;
+
+    const n = klines.length;
+    if (n < 20) return;
+
+    const last20 = klines.slice(-20);
+    const last5 = klines.slice(-5);
+
+    // 计算每日换手率（使用成交量/流通股本估算，若无流通股本则用相对换手）
+    const vols = last20.map(k => k.volume);
+    const closes = last20.map(k => k.close);
+    const changes = last20.map(k => k.changePct || 0);
+
+    // 近5日/近20日平均成交量比
+    const avgVol5 = last5.reduce((s, k) => s + k.volume, 0) / 5;
+    const avgVol20 = vols.reduce((s, v) => s + v, 0) / 20;
+    const volRatio = avgVol20 > 0 ? avgVol5 / avgVol20 : 1;
+
+    // 近5日涨跌方向
+    const last5Change = last5.reduce((s, k) => s + (k.changePct || 0), 0);
+    const priceDirection = last5Change > 0 ? 'up' : last5Change < 0 ? 'down' : 'flat';
+
+    // 量价配合判断每日筹码状态
+    const chipStates = []; // 'concentrate' | 'disperse' | 'active' | 'watch'
+    const chipValues = []; // -1(分散) 到 +1(集中)
+    const dates = [];
+
+    for (let i = 0; i < 20; i++) {
+      const k = last20[i];
+      const chg = k.changePct || 0;
+      // 相对量能：当日成交量 / 20日均量
+      const relVol = avgVol20 > 0 ? k.volume / avgVol20 : 1;
+
+      let state, value;
+      if (relVol < 0.8 && chg > 0) {
+        state = 'concentrate'; value = 0.7; // 缩量上涨 → 筹码集中
+      } else if (relVol > 1.3 && chg < 0) {
+        state = 'disperse'; value = -0.7; // 放量下跌 → 筹码分散
+      } else if (relVol > 1.2 && chg > 0) {
+        state = 'active'; value = 0.2; // 放量上涨 → 换手充分
+      } else if (relVol < 0.8 && chg < 0) {
+        state = 'watch'; value = -0.2; // 缩量下跌 → 观望
+      } else {
+        state = 'neutral'; value = 0;
+      }
+      chipStates.push(state);
+      chipValues.push(value);
+      dates.push(k.date ? k.date.substring(5) : (i + 1));
+    }
+
+    // 显示section
+    section.style.display = '';
+
+    // ECharts柱状图（正值为集中，负值为分散）
+    if (typeof echarts !== 'undefined') {
+      if (this._chipChart) this._chipChart.dispose();
+      this._chipChart = echarts.init(chartDom, 'dark');
+      const colors = chipValues.map(v => v > 0.3 ? 'rgba(0,230,118,0.8)' : v > 0 ? 'rgba(0,212,255,0.6)' : v > -0.3 ? 'rgba(255,193,7,0.6)' : 'rgba(255,82,82,0.8)');
+      this._chipChart.setOption({
+        backgroundColor: 'transparent',
+        grid: { left: '10%', right: '5%', top: '12%', bottom: '18%' },
+        tooltip: {
+          trigger: 'axis',
+          backgroundColor: 'rgba(26,31,46,0.95)',
+          borderColor: '#00d4ff',
+          textStyle: { color: '#fff', fontSize: 11 },
+          formatter: function(params) {
+            const p = params[0];
+            const stateNames = { 0.7: '📈 缩量上涨→筹码集中', 0.2: '📊 放量上涨→换手充分', 0: '⚖️ 量能平稳', '-0.2': '📉 缩量下跌→观望', '-0.7': '⚠️ 放量下跌→筹码分散' };
+            const label = stateNames[String(p.value)] || '中性';
+            return p.name + '<br/>' + label;
+          }
+        },
+        xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 9, color: '#8a8e9b', rotate: 45 }, axisLine: { lineStyle: { color: '#2a2e3e' } } },
+        yAxis: { type: 'value', name: '筹码方向', min: -1, max: 1, splitLine: { lineStyle: { color: 'rgba(42,46,62,0.5)' } }, axisLabel: { fontSize: 9, color: '#8a8e9b' } },
+        series: [{
+          type: 'bar',
+          data: chipValues.map((v, i) => ({ value: v, itemStyle: { color: colors[i] } })),
+          barWidth: '60%'
+        }]
+      });
+    }
+
+    // 综合判断文字
+    let trendSummary = '';
+    const stateCounts = { concentrate: 0, disperse: 0, active: 0, watch: 0, neutral: 0 };
+    chipStates.forEach(s => stateCounts[s]++);
+
+    if (stateCounts.concentrate >= 8) {
+      trendSummary = '📈 <span style="color:#00e676;font-weight:600">近20日筹码明显集中</span>：缩量上涨天数较多，主力资金持续收集筹码，对股价构成较强支撑。';
+    } else if (stateCounts.disperse >= 8) {
+      trendSummary = '⚠️ <span style="color:#ff5252;font-weight:600">近20日筹码明显分散</span>：放量下跌天数较多，主力可能在出货，需警惕下行风险。';
+    } else if (stateCounts.active >= 8) {
+      trendSummary = '📊 <span style="color:#00d4ff;font-weight:600">近20日换手充分</span>：放量上涨较多，多空分歧较大但多方占优，关注后续能否持续。';
+    } else if (stateCounts.watch >= 8) {
+      trendSummary = '📉 <span style="color:#ffc107;font-weight:600">近20日观望情绪浓</span>：缩量下跌为主，市场参与度低，等待方向选择。';
+    } else {
+      trendSummary = '⚖️ <span style="color:#94a3b8;font-weight:600">近20日筹码状态混合</span>：集中与分散交替，多空博弈中，建议等待明确方向。';
+    }
+
+    // 附加量比信息
+    const volRatioText = volRatio > 1.5 ? '近5日量能较20日均量放大' + ((volRatio - 1) * 100).toFixed(0) + '%' : volRatio < 0.7 ? '近5日量能较20日均量萎缩' + ((1 - volRatio) * 100).toFixed(0) + '%' : '近5日量能与20日均量基本持平';
+    trendSummary += `<br>📊 ${volRatioText}；近5日累计涨跌 <span style="color:${last5Change >= 0 ? '#00e676' : '#ff5252'}">${last5Change >= 0 ? '+' : ''}${last5Change.toFixed(2)}%</span>`;
+
+    summaryDom.innerHTML = trendSummary;
   },
 
   /** v4.4 P16: 渲染科技成长因子诊断卡片（仅科技股显示） */
