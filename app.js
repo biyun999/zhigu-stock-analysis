@@ -9437,8 +9437,15 @@ const AutoScan = {
     return day !== 0 && day !== 6;
   },
 
+  /** v4.4 P26b: 判断当前是否已收盘（>=15:00） */
+  _isAfterClose(date = new Date()) {
+    const t = date.getHours() * 60 + date.getMinutes();
+    return t >= 15 * 60;
+  },
+
   /** 启动自动扫描（由 AutoVerify 核实完成后回调）
    *  顺序：先核实昨日 → 再生成今日榜单
+   *  v4.4 P26b: 15:00后生成的是"明日预测"
    */
   async startAfterVerify() {
     if (this._done) return;
@@ -9457,6 +9464,10 @@ const AutoScan = {
     // 今天已有榜单，不重复扫描
     if (this._hasTodayNextDay()) {
       console.log('[AutoScan] 今日榜单已存在，跳过扫描');
+      // v4.4 P26b: 收盘后打开APP，显示已生成的提示
+      if (this._isAfterClose()) {
+        this._showAlreadyGeneratedBanner();
+      }
       return;
     }
 
@@ -9495,7 +9506,11 @@ const AutoScan = {
   _showScanningBanner() {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    bar.innerHTML = '🔍 正在生成今日预测榜单...';
+    // v4.4 P26b: 收盘后提示"明日预测"，盘中提示"今日预测"
+    const afterClose = this._isAfterClose();
+    bar.innerHTML = afterClose
+      ? '📊 收盘啦，正在生成明日预测榜单...'
+      : '🔍 正在生成今日预测榜单...';
     bar.className = 'verify-status-bar auto-scanning';
     bar.style.display = '';
     bar.style.opacity = '1';
@@ -9504,13 +9519,30 @@ const AutoScan = {
   _showScanResultBanner(count, noRanking) {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
+    // v4.4 P26b: 收盘后提示"明日预测"
+    const afterClose = this._isAfterClose();
+    const label = afterClose ? '明日' : '今日';
     if (noRanking) {
-      bar.innerHTML = '⚠️ 今日大盘偏弱，未出具排名';
+      bar.innerHTML = '⚠️ ' + label + '大盘偏弱，未出具排名';
       bar.className = 'verify-status-bar';
     } else {
-      bar.innerHTML = '✅ 今日预测榜单已生成，共' + count + '只';
+      bar.innerHTML = '✅ ' + label + '预测榜单已生成，共TOP' + count;
       bar.className = 'verify-status-bar success';
     }
+    bar.style.display = '';
+    bar.style.opacity = '1';
+    setTimeout(() => {
+      bar.style.opacity = '0.6';
+    }, 3000);
+  },
+
+  /** v4.4 P26b: 收盘后打开APP，榜单已存在时显示提示 */
+  _showAlreadyGeneratedBanner() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    const count = this._countTodayStocks();
+    bar.innerHTML = '💡 收盘后打开，已自动生成明日预测榜单' + (count > 0 ? '，共TOP' + count : '');
+    bar.className = 'verify-status-bar success';
     bar.style.display = '';
     bar.style.opacity = '1';
     setTimeout(() => {
