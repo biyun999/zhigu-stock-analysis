@@ -1705,17 +1705,25 @@ const DataAPI = {
       // 腾讯API获取非北交所股票
       if (otherCodes.length > 0) {
         const url = CONFIG.TENCENT_QUOTE + otherCodes.join(',');
-        const resp = await fetch(url);
-        const buffer = await resp.arrayBuffer();
-        const text = Utils.gbkToUtf8(buffer);
-        const lines = text.split(';').filter(l => l.includes('v_'));
-        lines.forEach(line => {
-          const codeMatch = line.match(/v_([a-z]{2}\d+)=/);
-          if (codeMatch) {
-            const parsed = Utils.parseTencentQuote(line);
-            if (parsed) results[codeMatch[1]] = parsed;
-          }
-        });
+        const quoteCtrl = new AbortController();
+        const quoteTimer = setTimeout(() => quoteCtrl.abort(), 8000);
+        try {
+          const resp = await fetch(url, { signal: quoteCtrl.signal });
+          clearTimeout(quoteTimer);
+          const buffer = await resp.arrayBuffer();
+          const text = Utils.gbkToUtf8(buffer);
+          const lines = text.split(';').filter(l => l.includes('v_'));
+          lines.forEach(line => {
+            const codeMatch = line.match(/v_([a-z]{2}\d+)=/);
+            if (codeMatch) {
+              const parsed = Utils.parseTencentQuote(line);
+              if (parsed) results[codeMatch[1]] = parsed;
+            }
+          });
+        } catch (e) {
+          clearTimeout(quoteTimer);
+          console.warn('[行情] 腾讯API超时或失败:', e && e.message);
+        }
       }
 
       // v3.9: 港股腾讯未返回时，用东方财富备用API兜底（secid=116.xxxxx）
@@ -1846,16 +1854,26 @@ const DataAPI = {
         ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get'
         : CONFIG.TENCENT_KLINE;
       const url = `${klineBase}?param=${code},day,,,${count},qfq`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (data && data.data && data.data[code]) {
-        const node = data.data[code];
-        const kdata = node.day || node.qfqday || node.hkday || [];
-        if (kdata.length > 0) {
-          return kdata.map(k => ({
-            date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
-          }));
+      const klineCtrl = new AbortController();
+      const klineTimer = setTimeout(() => klineCtrl.abort(), 8000);
+      let tencentDone = false;
+      try {
+        const resp = await fetch(url, { signal: klineCtrl.signal });
+        clearTimeout(klineTimer);
+        const data = await resp.json();
+        if (data && data.data && data.data[code]) {
+          const node = data.data[code];
+          const kdata = node.day || node.qfqday || node.hkday || [];
+          if (kdata.length > 0) {
+            tencentDone = true;
+            return kdata.map(k => ({
+              date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+            }));
+          }
         }
+      } catch (e) {
+        clearTimeout(klineTimer);
+        console.warn('[K线] 腾讯API超时或失败:', e && e.message);
       }
 
       // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
@@ -2544,7 +2562,10 @@ const DataAPI = {
     try {
       const stockCode = code.substring(2);
       const url = `${CONFIG.EM_NEWS}?sr=-1&page_size=10&page_index=1&ann_type=A&stock_list=${stockCode}&f_node=0&s_node=0`;
-      const resp = await fetch(url);
+      const newsCtrl = new AbortController();
+      const newsTimer = setTimeout(() => newsCtrl.abort(), 8000);
+      const resp = await fetch(url, { signal: newsCtrl.signal });
+      clearTimeout(newsTimer);
       const text = await resp.text();
       const data = this._parseEastMoneyResp(text);
       let result = [];
@@ -11186,17 +11207,18 @@ const App = {
       this.showSection(id, false);
     });
     for (let i = 1; i <= 8; i++) {
-      document.getElementById(`diagMod${i}`).style.display = 'none';
+      const el = document.getElementById(`diagMod${i}`);
+      if (el) el.style.display = 'none';
     }
     document.getElementById('riskSummaryCard').style.display = 'none';
 
     try {
-      // 并行获取数据
+      // 并行获取数据（所有请求加 .catch 兜底，防止单个接口异常阻塞整个分析）
       const [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
-        DataAPI.fetchQuote(code),
-        DataAPI.fetchKline(code, 300),
-        DataAPI.fetchCapitalFlow(code),
-        DataAPI.fetchNews(code),
+        DataAPI.fetchQuote(code).catch(e => { console.warn('[分析] fetchQuote异常:', e && e.message); return null; }),
+        DataAPI.fetchKline(code, 300).catch(e => { console.warn('[分析] fetchKline异常:', e && e.message); return []; }),
+        DataAPI.fetchCapitalFlow(code).catch(e => { console.warn('[分析] fetchCapitalFlow异常:', e && e.message); return []; }),
+        DataAPI.fetchNews(code).catch(e => { console.warn('[分析] fetchNews异常:', e && e.message); return []; }),
         DataAPI.fetchFinancials(code).catch(() => null),
         DataAPI.fetchDragonTiger(code).catch(() => null)
       ]);
