@@ -6391,18 +6391,6 @@ const NextDayPrediction = {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
-  /** v4.4 P27: 返回下一个交易日的日期字符串（周五→下周一，周六/周日→下周一，其他→次日） */
-  _nextTradingDayStr(date) {
-    const d = date ? new Date(date) : new Date();
-    const day = d.getDay(); // 0=周日 1=周一 ... 5=周五 6=周六
-    let addDays = 1;
-    if (day === 5) addDays = 3;       // 周五 → 下周一
-    else if (day === 6) addDays = 2;  // 周六 → 下周一
-    else if (day === 0) addDays = 1;  // 周日 → 下周一
-    const next = new Date(d);
-    next.setDate(d.getDate() + addDays);
-    return next.getFullYear() + '-' + String(next.getMonth() + 1).padStart(2, '0') + '-' + String(next.getDate()).padStart(2, '0');
-  },
   _boardTag(code) {
     if (code.startsWith('hk')) return '港股';
     const raw = code.replace(/^(sh|sz|bj)/, '');
@@ -6634,11 +6622,8 @@ const NextDayPrediction = {
         return;
       }
 
-      // v4.4 P27: 快照date使用下一个交易日（预测目标日），周五生成的是下周一预测
-      const targetDate = this._nextTradingDayStr();
       const snapshot = {
-        date: targetDate,
-        baseDate: this._todayStr(),  // v4.4 P27: 数据基准日（实际扫描日）
+        date: this._todayStr(),
         ts: Date.now(),
         marketTag: mkt.tag,
         marketAdjust: mkt.adjust,
@@ -6653,7 +6638,7 @@ const NextDayPrediction = {
       this._saveSnapshots(snaps);
 
       this._renderList(snapshot);
-      if (!silent) { Utils.toast ? Utils.toast('已保存 ' + targetDate + ' 预测排名，开盘后可核实') : null; }
+      if (!silent) { Utils.toast ? Utils.toast('已保存 ' + this._todayStr() + ' 排名，次日可点「核实昨日排名」验证') : null; }
     } catch (e) {
       console.error('NextDayPrediction.scan error:', e);
       if (!silent && body) body.innerHTML = '<div class="empty-tip">扫描失败：' + (e.message || e) + '，请稍后重试。</div>';
@@ -7770,11 +7755,7 @@ const NextDayPrediction = {
       ? '<div style="font-size:11px;color:var(--text-secondary);margin:2px 0 8px">🌡️ 大盘情绪：' + snapshot.marketTag
         + (snapshot.marketAdjust ? '（全局' + (snapshot.marketAdjust > 0 ? '+' : '') + snapshot.marketAdjust + '分）' : '') + '</div>'
       : '';
-    // v4.4 P27: 区分数据基准日和预测目标日
-    const dateLabel = snapshot.baseDate
-      ? '📅 数据基准日：' + snapshot.baseDate + '（盘后） · 预测目标：' + snapshot.date
-      : '📅 数据基准日：' + snapshot.date + '（盘后）';
-    let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' + dateLabel + ' · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
+    let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">📅 数据基准日：' + snapshot.date + '（盘后） · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
     html += mktLine;
     html += '<div class="hot-stocks-list">';
     snapshot.stocks.forEach((s, idx) => {
@@ -8023,15 +8004,9 @@ const NextDayPrediction = {
   // ---------- v4.4 P4: 历史验证台账 ----------
   async verifyAllPending() {
     const snaps = this._loadSnapshots();
-    const today = this._todayStr();
-    // v4.4 P27: 只核实目标日已过的快照（新格式用 baseDate 判断，旧格式用 date 判断）
-    const pending = snaps.filter(s => {
-      if (s.verified === true) return false;
-      if (s.baseDate) return s.date <= today;
-      return true; // 旧格式快照全部可核实
-    });
+    const pending = snaps.filter(s => s.verified !== true);
     if (pending.length === 0) {
-      Utils.toast ? Utils.toast('所有排名都已核实，或尚无到期可核实的榜单') : null;
+      Utils.toast ? Utils.toast('所有排名都已核实') : null;
       return;
     }
     // 关闭弹窗
@@ -8042,8 +8017,7 @@ const NextDayPrediction = {
     let totalHit = 0, totalResolved = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
-      const displayDate = target.baseDate ? target.baseDate + '→' + target.date : target.date;
-      body.innerHTML = '<div class="loading-pulse">核实中：' + displayDate + '（' + (si + 1) + '/' + pending.length + '）</div>';
+      body.innerHTML = '<div class="loading-pulse">核实中：' + target.date + '（' + (si + 1) + '/' + pending.length + '）</div>';
       let hit = 0, resolved = 0;
       const batchSize = 10;
       const list = target.stocks || [];
@@ -8051,29 +8025,16 @@ const NextDayPrediction = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const klines = await DataAPI.fetchKline(s.code, 10);
+            const klines = await DataAPI.fetchKline(s.code, 5);
             if (klines && klines.length > 0) {
-              if (target.baseDate) {
-                // v4.4 P27 新格式：比较 baseDate 和 date
-                const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
-                const targetKline = klines.find(k => k.date === target.date) || klines.filter(k => k.date <= target.date).pop();
-                if (baseKline && targetKline && baseKline.close > 0 && targetKline.date === target.date) {
-                  s.nextChangePct = (targetKline.close - baseKline.close) / baseKline.close * 100;
+              const next = klines.find(k => k.date > target.date);
+              if (next) {
+                const base = klines.filter(k => k.date <= target.date).pop();
+                if (base) {
+                  s.nextChangePct = (next.close - base.close) / base.close * 100;
                   s.verified = true;
                   resolved++;
                   if (s.nextChangePct > 0) hit++;
-                }
-              } else {
-                // 旧格式兼容
-                const next = klines.find(k => k.date > target.date);
-                if (next) {
-                  const base = klines.filter(k => k.date <= target.date).pop();
-                  if (base) {
-                    s.nextChangePct = (next.close - base.close) / base.close * 100;
-                    s.verified = true;
-                    resolved++;
-                    if (s.nextChangePct > 0) hit++;
-                  }
                 }
               }
             }
@@ -8210,9 +8171,7 @@ const NextDayPrediction = {
       const wr = s.winRate || 0;
       const total = s.resolvedCount || (s.stocks ? s.stocks.length : 0);
       html += '<div class="ledger-item" onclick="NextDayPrediction._showSnapshotFromLedger(' + idx + ')">';
-      // v4.4 P27: 显示数据基准日和预测目标日
-      const dateDisplay = s.baseDate ? s.baseDate + '→' + s.date : s.date;
-      html += '<div class="ledger-date">' + dateDisplay + '</div>';
+      html += '<div class="ledger-date">' + s.date + '</div>';
       html += '<div class="ledger-info">';
       html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
       if (s.marketTag) html += '<span class="ledger-tag">🌡 ' + s.marketTag + '</span>';
@@ -9364,16 +9323,7 @@ const AutoVerify = {
   async _verifyNextDay() {
     const snaps = NextDayPrediction._loadSnapshots();
     const today = NextDayPrediction._todayStr();
-    // v4.4 P27: 兼容新旧快照格式
-    // 旧格式: snapshot.date = 扫描日，验证时找 date 之后第一天的涨跌
-    // 新格式: snapshot.date = 预测目标日, snapshot.baseDate = 扫描日，验证时比较 baseDate 和 date
-    const pending = snaps.filter(s => {
-      if (s.verified === true) return false;
-      // 新格式：目标日已到或已过（target date <= today）才可核实
-      if (s.baseDate) return s.date <= today;
-      // 旧格式：扫描日的次日才可核实
-      return s.date < today;
-    });
+    const pending = snaps.filter(s => s.verified !== true && s.date < today);
     if (pending.length === 0) return;
 
     for (const target of pending) {
@@ -9384,29 +9334,16 @@ const AutoVerify = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const klines = await DataAPI.fetchKline(s.code, 10);
+            const klines = await DataAPI.fetchKline(s.code, 5);
             if (klines && klines.length > 0) {
-              if (target.baseDate) {
-                // v4.4 P27 新格式：比较 baseDate（扫描日/数据基准日）的收盘价 和 date（预测目标日）的收盘价
-                const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
-                const targetKline = klines.find(k => k.date === target.date) || klines.filter(k => k.date <= target.date).pop();
-                if (baseKline && targetKline && baseKline.close > 0 && targetKline.date === target.date) {
-                  s.nextChangePct = (targetKline.close - baseKline.close) / baseKline.close * 100;
+              const next = klines.find(k => k.date > target.date);
+              if (next) {
+                const base = klines.filter(k => k.date <= target.date).pop();
+                if (base && base.close > 0) {
+                  s.nextChangePct = (next.close - base.close) / base.close * 100;
                   s.verified = true;
                   resolved++;
                   if (s.nextChangePct > 0) hit++;
-                }
-              } else {
-                // 旧格式兼容：找 date 之后第一天的涨跌
-                const next = klines.find(k => k.date > target.date);
-                if (next) {
-                  const base = klines.filter(k => k.date <= target.date).pop();
-                  if (base && base.close > 0) {
-                    s.nextChangePct = (next.close - base.close) / base.close * 100;
-                    s.verified = true;
-                    resolved++;
-                    if (s.nextChangePct > 0) hit++;
-                  }
                 }
               }
             }
@@ -9485,12 +9422,12 @@ const AutoScan = {
     } catch (e) { return true; }
   },
 
-  /** v4.4 P27: 是否已有当前目标交易日的次日预测榜单（检查下一个交易日的快照） */
+  /** 今日是否已有次日预测榜单 */
   _hasTodayNextDay() {
     try {
       const snaps = NextDayPrediction._loadSnapshots();
-      const targetDate = NextDayPrediction._nextTradingDayStr();
-      return snaps.length > 0 && snaps[0].date === targetDate;
+      const today = NextDayPrediction._todayStr();
+      return snaps.length > 0 && snaps[0].date === today;
     } catch (e) { return false; }
   },
 
@@ -9519,16 +9456,14 @@ const AutoScan = {
       return;
     }
 
-    // v4.4 P27: 周末不生成次日预测榜单（次日非交易日，无"次日走势"可言）
     if (!this._isTradingDay()) {
-      console.log('[AutoScan] 非交易日（周末），跳过次日预测扫描');
-      this._showWeekendBanner();
+      console.log('[AutoScan] 非交易日，跳过自动扫描');
       return;
     }
 
-    // 当前目标交易日已有榜单，不重复扫描
+    // 今天已有榜单，不重复扫描
     if (this._hasTodayNextDay()) {
-      console.log('[AutoScan] 目标交易日榜单已存在，跳过扫描');
+      console.log('[AutoScan] 今日榜单已存在，跳过扫描');
       // v4.4 P26b: 收盘后打开APP，显示已生成的提示
       if (this._isAfterClose()) {
         this._showAlreadyGeneratedBanner();
@@ -9540,7 +9475,7 @@ const AutoScan = {
       this._scanning = true;
       this._showScanningBanner();
 
-      console.log('[AutoScan] 开始自动扫描预测榜单（目标日：' + NextDayPrediction._nextTradingDayStr() + '）...');
+      console.log('[AutoScan] 开始自动扫描今日预测榜单...');
       const result = await NextDayPrediction.scan(true); // silent模式
 
       if (result === false) {
@@ -9562,9 +9497,8 @@ const AutoScan = {
     try {
       const snaps = NextDayPrediction._loadSnapshots();
       if (snaps.length === 0) return 0;
-      // v4.4 P27: 检查目标交易日（下一个交易日）的快照
-      const targetDate = NextDayPrediction._nextTradingDayStr();
-      if (snaps[0].date !== targetDate) return 0;
+      const today = NextDayPrediction._todayStr();
+      if (snaps[0].date !== today) return 0;
       return (snaps[0].stocks || []).length;
     } catch (e) { return 0; }
   },
@@ -9572,19 +9506,11 @@ const AutoScan = {
   _showScanningBanner() {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    // v4.4 P27: 显示预测目标日
-    const targetDate = NextDayPrediction._nextTradingDayStr();
-    const today = NextDayPrediction._todayStr();
-    const isFriday = new Date().getDay() === 5;
-    let msg;
-    if (isFriday) {
-      msg = '📊 收盘啦，正在生成下周一（' + targetDate + '）预测榜单...';
-    } else if (this._isAfterClose()) {
-      msg = '📊 收盘啦，正在生成明日（' + targetDate + '）预测榜单...';
-    } else {
-      msg = '🔍 正在生成今日预测榜单...';
-    }
-    bar.innerHTML = msg;
+    // v4.4 P26b: 收盘后提示"明日预测"，盘中提示"今日预测"
+    const afterClose = this._isAfterClose();
+    bar.innerHTML = afterClose
+      ? '📊 收盘啦，正在生成明日预测榜单...'
+      : '🔍 正在生成今日预测榜单...';
     bar.className = 'verify-status-bar auto-scanning';
     bar.style.display = '';
     bar.style.opacity = '1';
@@ -9593,10 +9519,9 @@ const AutoScan = {
   _showScanResultBanner(count, noRanking) {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    // v4.4 P27: 显示预测目标日
-    const targetDate = NextDayPrediction._nextTradingDayStr();
-    const isFriday = new Date().getDay() === 5;
-    const label = isFriday ? '下周一（' + targetDate + '）' : (this._isAfterClose() ? '明日（' + targetDate + '）' : '今日');
+    // v4.4 P26b: 收盘后提示"明日预测"
+    const afterClose = this._isAfterClose();
+    const label = afterClose ? '明日' : '今日';
     if (noRanking) {
       bar.innerHTML = '⚠️ ' + label + '大盘偏弱，未出具排名';
       bar.className = 'verify-status-bar';
@@ -9611,39 +9536,18 @@ const AutoScan = {
     }, 3000);
   },
 
-  /** v4.4 P27: 收盘后打开APP，榜单已存在时显示提示 */
+  /** v4.4 P26b: 收盘后打开APP，榜单已存在时显示提示 */
   _showAlreadyGeneratedBanner() {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
     const count = this._countTodayStocks();
-    const targetDate = NextDayPrediction._nextTradingDayStr();
-    const isFriday = new Date().getDay() === 5;
-    const label = isFriday ? '下周一（' + targetDate + '）' : '明日（' + targetDate + '）';
-    bar.innerHTML = '💡 收盘后打开，已自动生成' + label + '预测榜单' + (count > 0 ? '，共TOP' + count : '');
+    bar.innerHTML = '💡 收盘后打开，已自动生成明日预测榜单' + (count > 0 ? '，共TOP' + count : '');
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
     bar.style.opacity = '1';
     setTimeout(() => {
       bar.style.opacity = '0.6';
     }, 3000);
-  },
-
-  /** v4.4 P27: 周末休市提示 */
-  _showWeekendBanner() {
-    const bar = document.getElementById('homeVerifyStatusBar');
-    if (!bar) return;
-    const now = new Date();
-    const day = now.getDay();
-    let msg;
-    if (day === 6) {
-      msg = '📅 今日周六休市，次日预测榜单将在周一开盘前自动生成';
-    } else {
-      msg = '📅 今日周日休市，次日预测榜单将在明日开盘前自动生成';
-    }
-    bar.innerHTML = msg;
-    bar.className = 'verify-status-bar';
-    bar.style.display = '';
-    bar.style.opacity = '0.7';
   },
 
   _hideBanner() {
@@ -9745,15 +9649,8 @@ const HomeLedger = {
     const totalResolved = verifiedSnaps.reduce((sum, s) => sum + (s.resolvedCount || 0), 0);
     const avgRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
 
-    // 待核实数（v4.4 P27: 兼容新旧快照格式）
-    const todayStr = NextDayPrediction._todayStr();
-    const pendingCount = all.filter(s => {
-      if (s.verified === true) return false;
-      // 新格式（次日榜）：目标日 <= 今天 才可核实
-      if (s.baseDate) return s.date <= todayStr;
-      // 旧格式 / 短线榜：日期不是今天就可核实
-      return s.date !== todayStr;
-    }).length;
+    // 待核实数
+    const pendingCount = all.filter(s => s.verified !== true && s.date !== NextDayPrediction._todayStr()).length;
 
     let html = '';
 
@@ -11413,7 +11310,7 @@ const App = {
       try { this.renderDiagnostic(report); } catch(e) { console.warn('[分析] renderDiagnostic异常:', e); }
 
       // v4.4 P25: 模块二行业数据异步增强（不阻塞其他模块显示）
-      try { this._enhanceModule2(quote).catch(e => console.warn('[分析] 模块二增强异常:', e)); } catch(e) { console.error('[分析] 模块二增强同步异常:', e); }
+      this._enhanceModule2(quote).catch(e => console.warn('[分析] 模块二增强异常:', e));
 
       // 新闻公告
       if (news && news.length > 0) {
@@ -11421,10 +11318,10 @@ const App = {
       }
 
       // v4.4 P12: 股东结构分析（异步，不阻塞主流程）
-      try { this.renderShareholder(code, klines).catch(e => console.warn('[分析] renderShareholder异常:', e)); } catch(e) { console.error('[分析] renderShareholder同步异常:', e); }
+      this.renderShareholder(code, klines).catch(e => console.warn('[分析] renderShareholder异常:', e));
 
       // v4.4 P15: 板块热度详情（异步，不阻塞主流程）
-      try { this._renderSectorHeatDetail(quote, code).catch(e => console.warn('[分析] 板块热度详情异常:', e)); } catch(e) { console.error('[分析] 板块热度详情同步异常:', e); }
+      this._renderSectorHeatDetail(quote, code).catch(e => console.warn('[分析] 板块热度详情异常:', e));
 
       // v4.4 P16: 科技成长因子诊断（仅科技股显示）
       try { this._renderTechGrowthCard(quote, klines, capitalFlow, financials); } catch(e) { console.warn('[分析] 科技成长卡片异常:', e); }
@@ -11436,9 +11333,8 @@ const App = {
       try { this._renderRiskRadarCard(quote, klines, capitalFlow, financials); } catch(e) { console.warn('[分析] 风险雷达异常:', e); }
 
     } catch (e) {
-      console.error('[分析] runAnalysis异常:', e && e.message, e && e.stack);
-      // v4.4 P27: 不覆盖已渲染成功的模块，仅在底部追加错误提示
-      Utils.toast('部分分析模块加载异常：' + (e && e.message || '未知错误') + '，已渲染模块不受影响');
+      console.error('Analysis error:', e);
+      Utils.toast('分析过程出错，请重试');
     }
   },
 
@@ -12996,14 +12892,7 @@ const App = {
     let sectorFlow = null;
     try { sectorFlow = RiskRadar.getSectorFlowForStock(quote); } catch(e) {}
 
-    // v4.4 P27: calcRiskScore 加 try-catch 防护，避免冒泡导致整个分析页崩溃
-    let result;
-    try {
-      result = RiskRadar.calcRiskScore(quote, klines, capitalFlow, financials, { sectorFlow });
-    } catch(e) {
-      console.error('[风险雷达] calcRiskScore异常:', e && e.message);
-      return; // 静默跳过该模块，不影响其他模块
-    }
+    const result = RiskRadar.calcRiskScore(quote, klines, capitalFlow, financials, { sectorFlow });
     this.showSection('riskRadarCard', true);
 
     const lvl = result.levelInfo;
