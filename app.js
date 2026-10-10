@@ -7823,7 +7823,11 @@ const NextDayPrediction = {
     if (!body) return;
     const snaps = this._loadSnapshots();
     if (snaps.length === 0) return; // 保留HTML中的默认提示
-    this._renderList(snaps[0]);
+    // v4.4 P28: 跳过周末快照，展示最近的交易日预测
+    const nonWeekend = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
+    if (nonWeekend.length === 0) return;
+    this._renderList(nonWeekend[0]);
   },
 
   // ---------- v4.4 P15: 首页板块热度榜 ----------
@@ -8100,7 +8104,10 @@ const NextDayPrediction = {
 
   showLedger() {
     const snaps = this._loadSnapshots();
-    if (snaps.length === 0) {
+    // v4.4 P28: 过滤掉周末快照（仅显示过滤，不删除数据）
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
+    if (filtered.length === 0) {
       Utils.toast ? Utils.toast('暂无历史排名，请先生成') : null;
       return;
     }
@@ -8113,7 +8120,7 @@ const NextDayPrediction = {
       overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = this._renderLedger(snaps);
+    overlay.innerHTML = this._renderLedger(filtered);
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
   },
@@ -8129,8 +8136,11 @@ const NextDayPrediction = {
   switchLedgerTab(tab) {
     this._ledgerTab = tab;
     const snaps = this._loadSnapshots();
+    // v4.4 P28: 过滤周末快照
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('nd-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
   },
 
   _renderLedger(snaps) {
@@ -8474,8 +8484,11 @@ const NextDayPrediction = {
     if (!code) { Utils.toast ? Utils.toast('未找到该股票') : null; return; }
     this._backtrackCode = code;
     const snaps = this._loadSnapshots();
+    // v4.4 P28: 过滤周末快照
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('nd-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
   },
 
   _calcStockBacktest(snaps, code) {
@@ -8639,7 +8652,10 @@ const NextDayPrediction = {
 
   _showSnapshotFromLedger(idx) {
     const snaps = this._loadSnapshots();
-    const snap = snaps[idx];
+    // v4.4 P28: 过滤周末快照（与台账列表保持一致）
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
+    const snap = filtered[idx];
     if (!snap) return;
     this.closeLedger();
     // 渲染该日排名
@@ -8702,7 +8718,10 @@ const ShortTermLedger = {
   // ---------- 弹窗控制 ----------
   showLedger() {
     const snaps = this._loadSnapshots();
-    if (snaps.length === 0) {
+    // v4.4 P28: 过滤掉周末快照（仅显示过滤，不删除数据）
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
+    if (filtered.length === 0) {
       Utils.toast ? Utils.toast('暂无历史快照，请先加载短线榜') : null;
       return;
     }
@@ -8714,7 +8733,7 @@ const ShortTermLedger = {
       overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = this._renderLedger(snaps);
+    overlay.innerHTML = this._renderLedger(filtered);
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
   },
@@ -8728,8 +8747,11 @@ const ShortTermLedger = {
   switchLedgerTab(tab) {
     this._ledgerTab = tab;
     const snaps = this._loadSnapshots();
+    // v4.4 P28: 过滤周末快照
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
   },
 
   // ---------- 渲染 ----------
@@ -9028,8 +9050,11 @@ const ShortTermLedger = {
     if (!code) { Utils.toast ? Utils.toast('未找到该股票') : null; return; }
     this._backtrackCode = code;
     const snaps = this._loadSnapshots();
+    // v4.4 P28: 过滤周末快照
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
   },
 
   _calcStockBacktest(snaps, code) {
@@ -9125,8 +9150,11 @@ const ShortTermLedger = {
     // 展开/收起当日明细：同一时间只展开一个
     this._expandedIdx = (this._expandedIdx === idx) ? null : idx;
     const snaps = this._loadSnapshots();
+    // v4.4 P28: 过滤周末快照
+    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
+      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
+    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
   },
 };
 
@@ -9154,13 +9182,27 @@ const AutoVerify = {
     return false;
   },
 
-  /** 是否应当核实（休市时有昨日数据未核实则核实） */
+  /** v4.4 P28: 判断日期字符串是否为周末（周六或周日） */
+  _isWeekendDate(dateStr) {
+    try {
+      const d = new Date(dateStr + 'T00:00:00');
+      const day = d.getDay();
+      return day === 0 || day === 6;
+    } catch (e) { return false; }
+  },
+
+  /** v4.4 P28: 过滤掉周末的快照（仅用于显示和统计，不删除数据） */
+  _filterWeekendSnaps(snaps) {
+    return snaps.filter(s => !this._isWeekendDate(s.date));
+  },
+
+  /** v4.4 P28: 是否应当核实（交易日15:00收盘后才核实） */
   _shouldVerifyNow() {
     const now = new Date();
     if (!this._isTradingDay(now)) return false;  // 周末不核实
-    // 交易日：只要不在早盘前（<9:25）就可能有数据核实
+    // v4.4 P28: 交易日15:00收盘后才自动核实（之前数据还没出来）
     const h = now.getHours(), m = now.getMinutes();
-    if (h < 9 || (h === 9 && m < 25)) return false;  // 太早没数据
+    if (h < 15) return false;  // 15:00前不核实
     return true;
   },
 
@@ -9190,13 +9232,9 @@ const AutoVerify = {
     if (this._done) return;
     this._done = true;
 
-    // 交易日判断：非交易时段不核实，但仍可扫描
+    // v4.4 P28: 交易日15:00前不核实也不自动扫描次日榜（数据还没出来）
     if (!this._shouldVerifyNow()) {
-      console.log('[AutoVerify] 非交易时段，跳过自动核实');
-      // v4.4 P20: 非交易时段但为交易日时，仍启动自动扫描
-      if (this._isTradingDay()) {
-        this._triggerAutoScan();
-      }
+      console.log('[AutoVerify] 15:00前或非交易日，跳过自动核实和次日扫描');
       return;
     }
 
@@ -9311,7 +9349,8 @@ const AutoVerify = {
       .map(s => ({ ...s, _type: 'nextday' }));
     const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
       .map(s => ({ ...s, _type: 'shortterm' }));
-    const all = [...ndSnaps, ...stSnaps];
+    // v4.4 P28: 过滤掉周末的快照（只统计交易日数据）
+    const all = [...ndSnaps, ...stSnaps].filter(s => !this._isWeekendDate(s.date));
     const verified = all.filter(s => s.verified === true);
 
     // 累计
@@ -9730,14 +9769,17 @@ const HomeLedger = {
       .map(s => ({ ...s, _type: 'nextday' }));
     const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
       .map(s => ({ ...s, _type: 'shortterm' }));
+    // v4.4 P28: 过滤掉周末的快照（不删除数据，仅显示时过滤）
+    const ndFiltered = ndSnaps.filter(s => !AutoVerify._isWeekendDate(s.date));
+    const stFiltered = stSnaps.filter(s => !AutoVerify._isWeekendDate(s.date));
 
-    if (ndSnaps.length === 0 && stSnaps.length === 0) {
+    if (ndFiltered.length === 0 && stFiltered.length === 0) {
       container.innerHTML = '<div class="empty-tip">暂无历史台账数据<br><span style="font-size:11px;color:var(--text-muted)">短线榜加载后自动生成快照，次日上涨概率需手动扫描生成</span></div>';
       return;
     }
 
     // 合并并按日期倒序
-    const all = [...ndSnaps, ...stSnaps];
+    const all = [...ndFiltered, ...stFiltered];
     // 统计
     const totalDays = new Set(all.map(s => s.date)).size;
     const verifiedSnaps = all.filter(s => s.verified === true);
