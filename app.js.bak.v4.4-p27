@@ -46,8 +46,6 @@
 // 1. CONFIG - 全局配置
 // ============================================================
 const CONFIG = {
-  // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p29',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -2016,15 +2014,12 @@ const DataAPI = {
     return [];
   },
 
-  /** 多通道请求东方财富clist接口（板块/排行/成分股容灾，主域失败自动切延时备份域，单通道8秒超时） */
+  /** 多通道请求东方财富clist接口（板块/排行/成分股容灾，主域失败自动切延时备份域） */
   async _fetchEMClist(queryStr) {
     const channels = CONFIG.EM_CLIST_CHANNELS;
     for (let i = 0; i < channels.length; i++) {
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-        const resp = await fetch(channels[i] + '?' + queryStr, { signal: controller.signal });
-        clearTimeout(timeoutId);
+        const resp = await fetch(channels[i] + '?' + queryStr);
         const text = await resp.text();
         const json = this._parseEastMoneyResp(text);
         if (json && json.data && Array.isArray(json.data.diff)) {
@@ -2037,7 +2032,7 @@ const DataAPI = {
     return null;
   },
 
-  /** 获取全市场股票排行（按成交额排序，取前N只） - 双域名容灾 + 重试 */
+  /** 获取全市场股票排行（按成交额排序，取前N只） - 双域名容灾 */
   async fetchMarketRanking(topN) {
     topN = topN || 300;
     const cacheKey = 'ranking_' + topN;
@@ -2045,16 +2040,7 @@ const DataAPI = {
     if (cached) return cached;
     try {
       const queryStr = 'pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23,f62,f100';
-      // 最多重试2次（共3次尝试）
-      let data = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        data = await this._fetchEMClist(queryStr);
-        if (data) break;
-        if (attempt < 2) {
-          console.warn('fetchMarketRanking 第' + (attempt + 1) + '次尝试失败，重试中...');
-          await new Promise(r => setTimeout(r, 1000));
-        }
-      }
+      const data = await this._fetchEMClist(queryStr);
       let result = [];
       if (data) {
         result = data.data.diff.map(item => {
@@ -5069,7 +5055,7 @@ const Screener = {
     const fetchSize = strategy === 'msci' ? 1500 : 800;
     const marketRanking = await DataAPI.fetchMarketRanking(fetchSize);
     if (!marketRanking || marketRanking.length === 0) {
-      container.innerHTML = '<div class="empty-tip" style="text-align:center;padding:20px">全市场数据获取失败<br><span style="font-size:12px;color:var(--text-secondary)">可能是网络问题或数据源暂时不可用</span><br><button onclick="App.runScreener()" style="margin-top:12px;padding:8px 24px;background:var(--accent-cyan);color:#0a0e17;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">🔄 重新获取</button></div>';
+      container.innerHTML = '<div class="empty-tip">全市场数据获取失败，请刷新重试</div>';
       return;
     }
     
@@ -7837,11 +7823,7 @@ const NextDayPrediction = {
     if (!body) return;
     const snaps = this._loadSnapshots();
     if (snaps.length === 0) return; // 保留HTML中的默认提示
-    // v4.4 P28: 跳过周末快照，展示最近的交易日预测
-    const nonWeekend = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
-    if (nonWeekend.length === 0) return;
-    this._renderList(nonWeekend[0]);
+    this._renderList(snaps[0]);
   },
 
   // ---------- v4.4 P15: 首页板块热度榜 ----------
@@ -8118,10 +8100,7 @@ const NextDayPrediction = {
 
   showLedger() {
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤掉周末快照（仅显示过滤，不删除数据）
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
-    if (filtered.length === 0) {
+    if (snaps.length === 0) {
       Utils.toast ? Utils.toast('暂无历史排名，请先生成') : null;
       return;
     }
@@ -8134,7 +8113,7 @@ const NextDayPrediction = {
       overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = this._renderLedger(filtered);
+    overlay.innerHTML = this._renderLedger(snaps);
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
   },
@@ -8150,11 +8129,8 @@ const NextDayPrediction = {
   switchLedgerTab(tab) {
     this._ledgerTab = tab;
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('nd-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 
   _renderLedger(snaps) {
@@ -8498,11 +8474,8 @@ const NextDayPrediction = {
     if (!code) { Utils.toast ? Utils.toast('未找到该股票') : null; return; }
     this._backtrackCode = code;
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('nd-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 
   _calcStockBacktest(snaps, code) {
@@ -8666,10 +8639,7 @@ const NextDayPrediction = {
 
   _showSnapshotFromLedger(idx) {
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照（与台账列表保持一致）
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
-    const snap = filtered[idx];
+    const snap = snaps[idx];
     if (!snap) return;
     this.closeLedger();
     // 渲染该日排名
@@ -8732,10 +8702,7 @@ const ShortTermLedger = {
   // ---------- 弹窗控制 ----------
   showLedger() {
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤掉周末快照（仅显示过滤，不删除数据）
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
-    if (filtered.length === 0) {
+    if (snaps.length === 0) {
       Utils.toast ? Utils.toast('暂无历史快照，请先加载短线榜') : null;
       return;
     }
@@ -8747,7 +8714,7 @@ const ShortTermLedger = {
       overlay.onclick = (e) => { if (e.target === overlay) this.closeLedger(); };
       document.body.appendChild(overlay);
     }
-    overlay.innerHTML = this._renderLedger(filtered);
+    overlay.innerHTML = this._renderLedger(snaps);
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
   },
@@ -8761,11 +8728,8 @@ const ShortTermLedger = {
   switchLedgerTab(tab) {
     this._ledgerTab = tab;
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 
   // ---------- 渲染 ----------
@@ -9064,11 +9028,8 @@ const ShortTermLedger = {
     if (!code) { Utils.toast ? Utils.toast('未找到该股票') : null; return; }
     this._backtrackCode = code;
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 
   _calcStockBacktest(snaps, code) {
@@ -9164,11 +9125,8 @@ const ShortTermLedger = {
     // 展开/收起当日明细：同一时间只展开一个
     this._expandedIdx = (this._expandedIdx === idx) ? null : idx;
     const snaps = this._loadSnapshots();
-    // v4.4 P28: 过滤周末快照
-    const filtered = (typeof AutoVerify !== 'undefined' && AutoVerify._filterWeekendSnaps)
-      ? AutoVerify._filterWeekendSnaps(snaps) : snaps;
     const overlay = document.getElementById('st-ledger-overlay');
-    if (overlay) overlay.innerHTML = this._renderLedger(filtered);
+    if (overlay) overlay.innerHTML = this._renderLedger(snaps);
   },
 };
 
@@ -9196,27 +9154,13 @@ const AutoVerify = {
     return false;
   },
 
-  /** v4.4 P28: 判断日期字符串是否为周末（周六或周日） */
-  _isWeekendDate(dateStr) {
-    try {
-      const d = new Date(dateStr + 'T00:00:00');
-      const day = d.getDay();
-      return day === 0 || day === 6;
-    } catch (e) { return false; }
-  },
-
-  /** v4.4 P28: 过滤掉周末的快照（仅用于显示和统计，不删除数据） */
-  _filterWeekendSnaps(snaps) {
-    return snaps.filter(s => !this._isWeekendDate(s.date));
-  },
-
-  /** v4.4 P28: 是否应当核实（交易日15:00收盘后才核实） */
+  /** 是否应当核实（休市时有昨日数据未核实则核实） */
   _shouldVerifyNow() {
     const now = new Date();
     if (!this._isTradingDay(now)) return false;  // 周末不核实
-    // v4.4 P28: 交易日15:00收盘后才自动核实（之前数据还没出来）
+    // 交易日：只要不在早盘前（<9:25）就可能有数据核实
     const h = now.getHours(), m = now.getMinutes();
-    if (h < 15) return false;  // 15:00前不核实
+    if (h < 9 || (h === 9 && m < 25)) return false;  // 太早没数据
     return true;
   },
 
@@ -9246,9 +9190,13 @@ const AutoVerify = {
     if (this._done) return;
     this._done = true;
 
-    // v4.4 P28: 交易日15:00前不核实也不自动扫描次日榜（数据还没出来）
+    // 交易日判断：非交易时段不核实，但仍可扫描
     if (!this._shouldVerifyNow()) {
-      console.log('[AutoVerify] 15:00前或非交易日，跳过自动核实和次日扫描');
+      console.log('[AutoVerify] 非交易时段，跳过自动核实');
+      // v4.4 P20: 非交易时段但为交易日时，仍启动自动扫描
+      if (this._isTradingDay()) {
+        this._triggerAutoScan();
+      }
       return;
     }
 
@@ -9363,8 +9311,7 @@ const AutoVerify = {
       .map(s => ({ ...s, _type: 'nextday' }));
     const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
       .map(s => ({ ...s, _type: 'shortterm' }));
-    // v4.4 P28: 过滤掉周末的快照（只统计交易日数据）
-    const all = [...ndSnaps, ...stSnaps].filter(s => !this._isWeekendDate(s.date));
+    const all = [...ndSnaps, ...stSnaps];
     const verified = all.filter(s => s.verified === true);
 
     // 累计
@@ -9783,17 +9730,14 @@ const HomeLedger = {
       .map(s => ({ ...s, _type: 'nextday' }));
     const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
       .map(s => ({ ...s, _type: 'shortterm' }));
-    // v4.4 P28: 过滤掉周末的快照（不删除数据，仅显示时过滤）
-    const ndFiltered = ndSnaps.filter(s => !AutoVerify._isWeekendDate(s.date));
-    const stFiltered = stSnaps.filter(s => !AutoVerify._isWeekendDate(s.date));
 
-    if (ndFiltered.length === 0 && stFiltered.length === 0) {
+    if (ndSnaps.length === 0 && stSnaps.length === 0) {
       container.innerHTML = '<div class="empty-tip">暂无历史台账数据<br><span style="font-size:11px;color:var(--text-muted)">短线榜加载后自动生成快照，次日上涨概率需手动扫描生成</span></div>';
       return;
     }
 
     // 合并并按日期倒序
-    const all = [...ndFiltered, ...stFiltered];
+    const all = [...ndSnaps, ...stSnaps];
     // 统计
     const totalDays = new Set(all.map(s => s.date)).size;
     const verifiedSnaps = all.filter(s => s.verified === true);
@@ -10035,9 +9979,6 @@ const App = {
     // 注册Service Worker
     this.registerSW();
 
-    // v4.4 P29: 初始化版本号显示
-    this.initVersionDisplay();
-
     // 绑定搜索事件
     Search.bindInput('homeSearchInput', 'homeSearchResults', 'App.selectFromHomeSearch');
     Search.bindInput('analysisSearchInput', 'analysisSearchResults', 'App.selectFromAnalysisSearch');
@@ -10102,114 +10043,10 @@ const App = {
     if (window.__PORTABLE__) return; // 单文件便携版不注册SW
     if (location.protocol === 'file:') return;
     if ('serviceWorker' in navigator) {
-      // v4.4 P29: 检测新SW安装完成
-      let swUpdateReady = false;
-      navigator.serviceWorker.register('./sw.js').then(reg => {
-        // 检测到新版本SW已下载
-        reg.addEventListener('updatefound', () => {
-          const newWorker = reg.installing;
-          if (!newWorker) return;
-          newWorker.addEventListener('statechange', () => {
-            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-              // 有新版本等待安装
-              swUpdateReady = true;
-              console.log('[SW] 新版本就绪，等待用户确认更新');
-              const statusEl = document.getElementById('updateStatus');
-              const btnEl = document.getElementById('checkUpdateBtn');
-              if (statusEl) {
-                statusEl.innerHTML = '<span style="color:#00e676">✅ 发现新版本，点击下方按钮更新</span>';
-              }
-              if (btnEl) {
-                btnEl.textContent = '立即更新';
-                btnEl.style.borderColor = '#00e676';
-                btnEl.style.color = '#00e676';
-                btnEl.onclick = () => {
-                  newWorker.postMessage({ type: 'SKIP_WAITING' });
-                };
-              }
-            }
-          });
-        });
-        // SW controller变更时自动刷新
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          window.location.reload();
-        });
-        // 启动时静默检查一次更新
-        reg.update();
-      }).catch(err => {
+      navigator.serviceWorker.register('./sw.js').catch(err => {
         console.log('SW registration failed:', err);
       });
     }
-  },
-
-  /** v4.4 P29: 手动检查更新 */
-  checkUpdate() {
-    const statusEl = document.getElementById('updateStatus');
-    const btnEl = document.getElementById('checkUpdateBtn');
-    if (!('serviceWorker' in navigator)) {
-      if (statusEl) statusEl.innerHTML = '<span style="color:#ff5252">当前浏览器不支持Service Worker</span>';
-      return;
-    }
-    if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-secondary)">正在检查更新...</span>';
-    if (btnEl) { btnEl.disabled = true; btnEl.textContent = '检查中...'; }
-    navigator.serviceWorker.getRegistration().then(reg => {
-      if (!reg) {
-        if (statusEl) statusEl.innerHTML = '<span style="color:#ff5252">未注册Service Worker</span>';
-        if (btnEl) { btnEl.disabled = false; btnEl.textContent = '检查更新'; }
-        return;
-      }
-      // 先检查是否有waiting的SW
-      if (reg.waiting) {
-        if (statusEl) statusEl.innerHTML = '<span style="color:#00e676">✅ 发现新版本，点击更新</span>';
-        if (btnEl) {
-          btnEl.disabled = false;
-          btnEl.textContent = '立即更新';
-          btnEl.style.borderColor = '#00e676';
-          btnEl.style.color = '#00e676';
-          btnEl.onclick = () => { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); };
-        }
-        return;
-      }
-      // 触发更新检查
-      reg.update().then(() => {
-        // 等待2秒看是否有新SW进入waiting
-        setTimeout(() => {
-          if (reg.waiting) {
-            if (statusEl) statusEl.innerHTML = '<span style="color:#00e676">✅ 发现新版本，点击更新</span>';
-            if (btnEl) {
-              btnEl.disabled = false;
-              btnEl.textContent = '立即更新';
-              btnEl.style.borderColor = '#00e676';
-              btnEl.style.color = '#00e676';
-              btnEl.onclick = () => { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); };
-            }
-          } else if (reg.installing) {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-secondary)">正在下载新版本...</span>';
-            if (btnEl) { btnEl.disabled = false; btnEl.textContent = '检查更新'; }
-          } else {
-            if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-secondary)">✅ 当前已是最新版本</span>';
-            if (btnEl) { btnEl.disabled = false; btnEl.textContent = '检查更新'; }
-          }
-        }, 2000);
-      }).catch(() => {
-        if (statusEl) statusEl.innerHTML = '<span style="color:#ff5252">检查更新失败，请稍后重试</span>';
-        if (btnEl) { btnEl.disabled = false; btnEl.textContent = '检查更新'; }
-      });
-    }).catch(() => {
-      if (statusEl) statusEl.innerHTML = '<span style="color:#ff5252">检查更新失败，请稍后重试</span>';
-      if (btnEl) { btnEl.disabled = false; btnEl.textContent = '检查更新'; }
-    });
-  },
-
-  /** v4.4 P29: 初始化版本号显示 */
-  initVersionDisplay() {
-    const ver = CONFIG.VERSION || 'unknown';
-    // 设置页版本号
-    const settingsVer = document.getElementById('settingsVersion');
-    if (settingsVer) settingsVer.textContent = ver;
-    // 关于页版本号
-    const aboutVer = document.getElementById('aboutVersion');
-    if (aboutVer) aboutVer.textContent = '智股分析 ' + ver;
   },
 
   /** v4.4 P11: 首页主Tab切换（明日预测 / 历史台账 / 价值投资 v4.4 P17） */

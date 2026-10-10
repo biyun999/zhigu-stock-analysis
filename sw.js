@@ -29,6 +29,13 @@ self.addEventListener('install', event => {
   self.skipWaiting();
 });
 
+// v4.4 P29: 监听SKIP_WAITING消息，立即激活新SW
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
+
 // 激活时清理旧缓存
 self.addEventListener('activate', event => {
   event.waitUntil(
