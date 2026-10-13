@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p29',
+  VERSION: 'v4.4-p30',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -8707,7 +8707,7 @@ const ShortTermLedger = {
   },
 
   // ---------- 保存当日快照 ----------
-  saveSnapshot(topStocks, topSectors, fallbackMode) {
+  saveSnapshot(topStocks, topSectors, fallbackMode, afterClose) {
     const today = this._todayStr();
     const stocks = (topStocks || []).map(s => ({
       code: s.code, name: s.name, price: s.price, changePct: s.changePct,
@@ -8722,6 +8722,7 @@ const ShortTermLedger = {
       ts: Date.now(),
       topSectors: topSectors || [],
       fallbackMode: fallbackMode || 'normal',
+      afterClose: !!afterClose,
       stocks: stocks
     };
     const snaps = this._loadSnapshots().filter(x => x.date !== today);
@@ -9309,7 +9310,7 @@ const AutoVerify = {
   _showVerifyingBanner() {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    bar.innerHTML = '📊 正在自动核实昨日预测准确率...';
+    bar.innerHTML = '📊 正在核实昨日预测准确率（次日榜+短线榜）...';
     bar.className = 'verify-status-bar verifying';
     bar.style.display = '';
   },
@@ -9325,7 +9326,8 @@ const AutoVerify = {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
     bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' +
-      (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实');
+      (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实') +
+      ' · 正在生成明日预测...';
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
     // 3秒后淡出，但保留（点击可重新查看 / 留作信息）
@@ -9528,6 +9530,7 @@ const AutoVerify = {
 const AutoScan = {
   _done: false,
   _scanning: false,
+  _shortTermRefreshed: false,  // v4.4 P30: 当日收盘后短线榜是否已刷新
   _settingKey: 'zhigu_auto_scan',
 
   /** 读取开关设置（默认开启） */
@@ -9559,9 +9562,59 @@ const AutoScan = {
     return t >= 15 * 60;
   },
 
+  /** v4.4 P30: 检查今日短线快照是否已是收盘后生成 */
+  _hasTodayAfterCloseSnapshot() {
+    try {
+      const snaps = ShortTermLedger._loadSnapshots();
+      const today = ShortTermLedger._todayStr();
+      const todaySnap = snaps.find(s => s.date === today);
+      return todaySnap && todaySnap.afterClose === true;
+    } catch (e) { return false; }
+  },
+
+  /** v4.4 P30: 收盘后重新生成短线榜（用收盘价替代盘中数据） */
+  async _refreshShortTermAfterClose() {
+    if (this._shortTermRefreshed) return;
+    if (!this._isAfterClose()) return;
+    if (this._hasTodayAfterCloseSnapshot()) {
+      console.log('[AutoScan] 今日短线榜已是收盘后数据，跳过刷新');
+      this._shortTermRefreshed = true;
+      return;
+    }
+    if (typeof App === 'undefined' || !App.loadHotStocks) return;
+
+    try {
+      this._shortTermRefreshed = true;
+      console.log('[AutoScan] 15:00后重新生成短线榜（收盘价数据）...');
+      const bar = document.getElementById('homeVerifyStatusBar');
+      if (bar) {
+        bar.innerHTML = '📊 正在更新短线榜（收盘价数据）...';
+        bar.className = 'verify-status-bar auto-scanning';
+        bar.style.display = '';
+        bar.style.opacity = '1';
+      }
+      await App.loadHotStocks();
+      // 刷新完成后更新状态条
+      if (bar) {
+        const ndCount = this._countTodayStocks();
+        const stCount = (ShortTermLedger._loadSnapshots().find(s => s.date === ShortTermLedger._todayStr()) || {}).stocks || [];
+        let msg = '✅ 明日预测TOP' + ndCount + '已生成 · 短线榜已更新（收盘价）';
+        bar.innerHTML = msg;
+        bar.className = 'verify-status-bar success';
+        bar.style.display = '';
+        bar.style.opacity = '1';
+        setTimeout(() => { bar.style.opacity = '0.6'; }, 3000);
+      }
+      console.log('[AutoScan] 短线榜收盘后刷新完成');
+    } catch (e) {
+      console.warn('[AutoScan] 短线榜刷新失败:', e);
+    }
+  },
+
   /** 启动自动扫描（由 AutoVerify 核实完成后回调）
-   *  顺序：先核实昨日 → 再生成今日榜单
+   *  顺序：先核实昨日 → 再生成次日榜单 → 刷新短线榜（收盘价）
    *  v4.4 P26b: 15:00后生成的是"明日预测"
+   *  v4.4 P30: 15:00后同时刷新短线榜（用收盘价替代盘中数据）
    */
   async startAfterVerify() {
     if (this._done) return;
@@ -9586,6 +9639,8 @@ const AutoScan = {
       if (this._isAfterClose()) {
         this._showAlreadyGeneratedBanner();
       }
+      // v4.4 P30: 即使次日榜已存在，也要刷新短线榜（收盘价）
+      await this._refreshShortTermAfterClose();
       return;
     }
 
@@ -9609,6 +9664,9 @@ const AutoScan = {
     } finally {
       this._scanning = false;
     }
+
+    // v4.4 P30: 次日榜扫描完成后，刷新短线榜（收盘价数据）
+    await this._refreshShortTermAfterClose();
   },
 
   _countTodayStocks() {
@@ -9672,7 +9730,7 @@ const AutoScan = {
     const targetDate = NextDayPrediction._nextTradingDayStr();
     const isFriday = new Date().getDay() === 5;
     const label = isFriday ? '下周一（' + targetDate + '）' : '明日（' + targetDate + '）';
-    bar.innerHTML = '💡 收盘后打开，已自动生成' + label + '预测榜单' + (count > 0 ? '，共TOP' + count : '');
+    bar.innerHTML = '💡 已生成' + label + '预测榜单' + (count > 0 ? '，共TOP' + count : '') + ' · 正在更新短线榜...';
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
     bar.style.opacity = '1';
@@ -10102,7 +10160,7 @@ const App = {
     if (window.__PORTABLE__) return; // 单文件便携版不注册SW
     if (location.protocol === 'file:') return;
     if ('serviceWorker' in navigator) {
-      // v4.4 P29: 检测新SW安装完成
+      // v4.4 P30: 检测新SW安装完成
       let swUpdateReady = false;
       navigator.serviceWorker.register('./sw.js').then(reg => {
         // 检测到新版本SW已下载
@@ -10501,7 +10559,9 @@ const App = {
       // v4.4 P6: 保存当日短线快照（同日覆盖）
       if (typeof ShortTermLedger !== 'undefined') {
         try {
-          ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode);
+          // v4.4 P30: 标记是否为收盘后生成（15:00后数据为收盘价）
+          const isAfterClose = new Date().getHours() >= 15;
+          ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, isAfterClose);
         } catch (e) { console.warn('保存短线快照失败', e); }
       }
     } catch (e) {
