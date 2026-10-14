@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p30',
+  VERSION: 'v4.4-p31',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -565,6 +565,16 @@ Object.entries(STOCK_MAP).forEach(([name, code]) => { CODE_TO_NAME[code] = name;
 // 3. Utils - 工具函数
 // ============================================================
 const Utils = {
+  /** v4.4 P31: 日期格式标准化（兼容 YYYY-MM-DD / YYYYMMDD / YYYY/MM/DD） */
+  normalizeDate(d) {
+    if (!d) return '';
+    const s = String(d).trim();
+    if (s.includes('-')) return s.length >= 10 ? s.substring(0, 10) : s;
+    if (s.includes('/')) return s.substring(0, 4) + '-' + s.substring(5, 7) + '-' + s.substring(8, 10);
+    if (s.length === 8) return s.substring(0, 4) + '-' + s.substring(4, 6) + '-' + s.substring(6, 8);
+    return s;
+  },
+
   /** 将ArrayBuffer从GBK转为UTF-8字符串（腾讯API必须） */
   gbkToUtf8(arrayBuffer) {
     const decoder = new TextDecoder('gbk');
@@ -8008,6 +8018,8 @@ const NextDayPrediction = {
         try {
           const klines = await DataAPI.fetchKline(s.code, 5);
           if (klines && klines.length > 0) {
+            // v4.4 P31: 标准化K线日期格式
+            for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
             const next = klines.find(k => k.date > target.date);
             if (next) {
               const base = klines.filter(k => k.date <= target.date).pop();
@@ -8071,6 +8083,8 @@ const NextDayPrediction = {
           try {
             const klines = await DataAPI.fetchKline(s.code, 10);
             if (klines && klines.length > 0) {
+              // v4.4 P31: 标准化K线日期格式
+              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
               if (target.baseDate) {
                 // v4.4 P27 新格式：比较 baseDate 和 date
                 const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
@@ -8113,7 +8127,11 @@ const NextDayPrediction = {
     const updated = this._loadSnapshots();
     this._renderList(updated[0] || { stocks: [] });
     this.showLedger();
-    Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只收涨') : null;
+    if (totalResolved === 0 && pending.length > 0) {
+      Utils.toast ? Utils.toast('核实未成功：K线数据获取异常，请稍后重试') : null;
+    } else {
+      Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只收涨') : null;
+    }
   },
 
   showLedger() {
@@ -9113,7 +9131,7 @@ const ShortTermLedger = {
     const container = document.getElementById('hotStocks');
     if (container) container.innerHTML = '<div class="loading-pulse">正在批量核实 ' + pending.length + ' 个交易日的短线榜...</div>';
 
-    let totalHit = 0, totalResolved = 0;
+    let totalHit = 0, totalResolved = 0, failDays = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
       if (container) container.innerHTML = '<div class="loading-pulse">核实中：' + target.date + '（' + (si + 1) + '/' + pending.length + '）</div>';
@@ -9128,6 +9146,8 @@ const ShortTermLedger = {
             if (typeof DataAPI !== 'undefined' && DataAPI.fetchKline) {
               const klines = await DataAPI.fetchKline(s.code, 10);
               if (klines && klines.length > 0) {
+                // v4.4 P31: 标准化K线日期格式
+                for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
                 const next = klines.find(k => k.date > target.date);
                 if (next) {
                   const base = klines.filter(k => k.date <= target.date).pop();
@@ -9140,7 +9160,7 @@ const ShortTermLedger = {
                 }
               }
             }
-          } catch (e) { /* 单只失败不影响 */ }
+          } catch (e) { console.warn('[ShortTermLedger] 核实单股异常:', s.code, e && e.message); }
         }));
       }
       if (resolved > 0) {
@@ -9151,6 +9171,8 @@ const ShortTermLedger = {
         target.verifyDate = this._todayStr();
         totalHit += hit;
         totalResolved += resolved;
+      } else {
+        failDays++;
       }
     }
     this._saveSnapshots(snaps);
@@ -9158,7 +9180,12 @@ const ShortTermLedger = {
     if (typeof App !== 'undefined' && App.loadHotStocks) App.loadHotStocks();
     const updated = this._loadSnapshots();
     this.showLedger();
-    Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只次日收涨') : null;
+    // v4.4 P31: 区分成功/失败提示
+    if (totalResolved === 0 && failDays > 0) {
+      Utils.toast ? Utils.toast('核实未成功：K线数据获取异常，请稍后重试') : null;
+    } else {
+      Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只次日收涨' + (failDays > 0 ? '，' + failDays + '天失败' : '')) : null;
+    }
   },
 
   _showSnapshotDetail(idx) {
@@ -9431,6 +9458,7 @@ const AutoVerify = {
     });
     if (pending.length === 0) return;
 
+    let totalResolved = 0, totalFailDays = 0;
     for (const target of pending) {
       let hit = 0, resolved = 0;
       const list = target.stocks || [];
@@ -9441,6 +9469,8 @@ const AutoVerify = {
           try {
             const klines = await DataAPI.fetchKline(s.code, 10);
             if (klines && klines.length > 0) {
+              // v4.4 P31: 标准化K线日期格式，确保与快照日期一致
+              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
               if (target.baseDate) {
                 // v4.4 P27 新格式：比较 baseDate（扫描日/数据基准日）的收盘价 和 date（预测目标日）的收盘价
                 const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
@@ -9465,7 +9495,7 @@ const AutoVerify = {
                 }
               }
             }
-          } catch (e) { /* 单只失败不影响 */ }
+          } catch (e) { console.warn('[AutoVerify] 次日榜核实单股异常:', s.code, e && e.message); }
         }));
       }
       if (resolved > 0) {
@@ -9474,6 +9504,10 @@ const AutoVerify = {
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = today;
+        totalResolved += resolved;
+      } else {
+        totalFailDays++;
+        console.warn('[AutoVerify] 次日榜核实失败:', target.date, '- K线日期可能不匹配');
       }
     }
     NextDayPrediction._saveSnapshots(snaps);
@@ -9486,6 +9520,7 @@ const AutoVerify = {
     const pending = snaps.filter(s => s.verified !== true && s.date < today);
     if (pending.length === 0) return;
 
+    let totalResolved = 0, totalFailDays = 0;
     for (const target of pending) {
       let hit = 0, resolved = 0;
       const list = target.stocks || [];
@@ -9496,6 +9531,8 @@ const AutoVerify = {
           try {
             const klines = await DataAPI.fetchKline(s.code, 10);
             if (klines && klines.length > 0) {
+              // v4.4 P31: 标准化K线日期格式，确保与快照日期一致
+              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
               const next = klines.find(k => k.date > target.date);
               if (next) {
                 const base = klines.filter(k => k.date <= target.date).pop();
@@ -9507,7 +9544,7 @@ const AutoVerify = {
                 }
               }
             }
-          } catch (e) { /* 单只失败不影响 */ }
+          } catch (e) { console.warn('[AutoVerify] 短线核实单股异常:', s.code, e && e.message); }
         }));
       }
       if (resolved > 0) {
@@ -9516,10 +9553,19 @@ const AutoVerify = {
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = today;
+        totalResolved += resolved;
+      } else {
+        totalFailDays++;
+        console.warn('[AutoVerify] 短线榜核实失败:', target.date, '- K线日期可能不匹配，样例date:', list.length > 0 ? '(已获取K线但未匹配)' : '(无股票)');
       }
     }
     ShortTermLedger._saveSnapshots(snaps);
-    console.log('[AutoVerify] 短线榜核实完成，共' + pending.length + '个交易日');
+    console.log('[AutoVerify] 短线榜核实完成，共' + pending.length + '个交易日，成功resolve:' + totalResolved + '只，失败天数:' + totalFailDays);
+    // v4.4 P31: 核实全部失败时给用户反馈
+    if (totalResolved === 0 && totalFailDays > 0) {
+      console.warn('[AutoVerify] 短线榜所有待核实日均核实失败，可能K线数据获取异常');
+    }
+    return { totalResolved, totalFailDays };
   }
 };
 
