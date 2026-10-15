@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p32',
+  VERSION: 'v4.4-p33',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -215,6 +215,184 @@ const CONFIG = {
     'bj833575': { name: '生物制品', type: '医疗' },
     'bj835305': { name: '大数据', type: '科技' },
     'bj830799': { name: '金融科技', type: '科技' },
+    'sh601088': { name: '煤炭', type: '能源' },
+    'sh600900': { name: '电力', type: '能源' },
+    'sh601012': { name: '光伏', type: '新能源' },
+    'sh600585': { name: '水泥', type: '周期' },
+    'sh600438': { name: '光伏', type: '新能源' },
+    'sz300014': { name: '锂电池', type: '新能源' },
+    'sz002709': { name: '化工', type: '周期' },
+    'sz300122': { name: '生物制品', type: '医疗' },
+    'sz300347': { name: 'CRO', type: '医疗' },
+    'sz000538': { name: '中药', type: '医疗' },
+    'sh603259': { name: 'CXO', type: '医疗' },
+    'sh603501': { name: '芯片', type: '科技' },
+    'sz002371': { name: '半导体设备', type: '科技' },
+    'sz300136': { name: '通信', type: '科技' },
+    'sh600600': { name: '啤酒', type: '消费' },
+    'sh603345': { name: '速冻食品', type: '消费' },
+    'sz002507': { name: '调味品', type: '消费' },
+    'sz002142': { name: '银行', type: '金融' },
+    'sh601601': { name: '保险', type: '金融' },
+    'sz300059': { name: '互联网金融', type: '金融' },
+    'sz000100': { name: '面板', type: '科技' },
+    'sh600703': { name: '光伏', type: '新能源' },
+    'sz300274': { name: '光伏逆变器', type: '新能源' },
+    'sh601877': { name: '电器', type: '制造' },
+    'sz002049': { name: '芯片', type: '科技' },
+    'sh688012': { name: '半导体设备', type: '科技' },
+    'sh600588': { name: '软件', type: '科技' },
+    'sz002841': { name: '消费电子', type: '科技' },
+    'sh600183': { name: '覆铜板', type: '科技' },
+    'sz002938': { name: '电子电路', type: '科技' },
+    'sh601633': { name: '汽车', type: '制造' },
+    'sz300124': { name: '工控自动化', type: '制造' },
+    'sh600406': { name: '电力设备', type: '制造' },
+    'sh601111': { name: '航空', type: '服务' },
+    'sz002601': { name: '钛白粉', type: '周期' },
+    'sh600745': { name: '手机ODM', type: '科技' },
+    'sz002241': { name: '电子制造', type: '科技' },
+    'sh600031': { name: '工程机械', type: '制造' },
+    'sz002050': { name: '制冷元器件', type: '制造' },
+    'sh600741': { name: '汽车零部件', type: '制造' },
+    'sz300015': { name: '医疗服务', type: '医疗' },
+    'sh600763': { name: '中药', type: '医疗' },
+    'sz002607': { name: '传媒', type: '服务' },
+    'sh600660': { name: '玻璃', type: '制造' },
+    'sz002271': { name: '防水建材', type: '制造' },
+    'sz000002': { name: '房地产', type: '地产' },
+    'sh600048': { name: '房地产', type: '地产' },
+    'sh601668': { name: '建筑', type: '基建' },
+    'sz000001': { name: '银行', type: '金融' },
+    'sh600000': { name: '银行', type: '金融' },
+    'sh601816': { name: '铁路', type: '服务' },
+    'sh601919': { name: '航运', type: '服务' },
+    'sz002230': { name: '教育', type: '服务' },
+    'sz002007': { name: '影视传媒', type: '服务' },
+    'sh603517': { name: '食品饮料', type: '消费' },
+    'sz300059': { name: '互联网金融', type: '金融' },
+    'sh601225': { name: '钢铁', type: '周期' },
+    'sh600104': { name: '汽车', type: '制造' },
+    'sz000725': { name: '面板', type: '科技' },
+    'sh600690': { name: '家电', type: '消费' },
+    'sz002304': { name: '白酒', type: '消费' },
+    'sz002032': { name: '家电', type: '消费' },
+    'sh600346': { name: '化工', type: '周期' },
+    'sh600436': { name: '中药', type: '医疗' },
+    'sz300760': { name: '医疗器械', type: '医疗' },
+    'sh601601': { name: '保险', type: '金融' },
+    'sz300750': { name: '锂电池', type: '新能源' },
+    'sz002594': { name: '新能源汽车', type: '科技' },
+    'sh688981': { name: '半导体', type: '科技' },
+    'sz002415': { name: '安防', type: '科技' },
+    'sh601899': { name: '有色金属', type: '周期' },
+    'sz002714': { name: '畜牧', type: '农业' },
+    'sh600309': { name: '化工', type: '周期' },
+    'sz002352': { name: '快递物流', type: '服务' },
+    'sh603288': { name: '调味品', type: '消费' },
+    'sz000333': { name: '家电', type: '消费' },
+    'sz000651': { name: '家电', type: '消费' },
+    'sh601318': { name: '保险', type: '金融' },
+    'sh600036': { name: '银行', type: '金融' },
+    'sh601166': { name: '银行', type: '金融' },
+    'sh601398': { name: '银行', type: '金融' },
+    'sh601288': { name: '银行', type: '金融' },
+    'sh600030': { name: '券商', type: '金融' },
+    'sh601688': { name: '券商', type: '金融' },
+    'sh600519': { name: '白酒', type: '消费' },
+    'sz000858': { name: '白酒', type: '消费' },
+    'sz000568': { name: '白酒', type: '消费' },
+    'sh601888': { name: '旅游', type: '消费' },
+    'sh600276': { name: '医药', type: '医疗' },
+    'sh600887': { name: '乳制品', type: '消费' },
+    'sh601857': { name: '石油石化', type: '能源' },
+    'sh600028': { name: '石油石化', type: '能源' },
+    'sh601628': { name: '保险', type: '金融' },
+    'sz002475': { name: '消费电子', type: '科技' },
+    'sh600989': { name: '煤化工', type: '周期' },
+    'sz002460': { name: '锂矿', type: '新能源' },
+    'sh600918': { name: '证券', type: '金融' },
+    'sh600999': { name: '证券', type: '金融' },
+    'sz002736': { name: '证券', type: '金融' },
+    'sz000776': { name: '证券', type: '金融' },
+    'sh601066': { name: '证券', type: '金融' },
+    'sz300059': { name: '互联网金融', type: '金融' },
+    'sh688111': { name: '科创板ETF', type: '科技' },
+    'sh688036': { name: '传音控股', type: '科技' },
+    'sz300496': { name: '中科创达', type: '科技' },
+    'sz002456': { name: '欧菲光', type: '科技' },
+    'sh603986': { name: '兆易创新', type: '科技' },
+    'sz002032': { name: '苏泊尔', type: '消费' },
+    'sh600809': { name: '白酒', type: '消费' },
+    'sz000799': { name: '白酒', type: '消费' },
+    'sh603589': { name: '保健品', type: '消费' },
+    'sz002714': { name: '畜牧', type: '农业' },
+    'sh600598': { name: '北大荒', type: '农业' },
+    'sz000505': { name: '饲料', type: '农业' },
+    'sh601006': { name: '铁路运输', type: '服务' },
+    'sh600023': { name: '电力', type: '能源' },
+    'sh600795': { name: '电力', type: '能源' },
+    'sh601985': { name: '核电', type: '能源' },
+    'sz002129': { name: '光伏材料', type: '新能源' },
+    'sz300274': { name: '光伏逆变器', type: '新能源' },
+    'sh688599': { name: '天合光能', type: '新能源' },
+    'sh600438': { name: '通威股份', type: '新能源' },
+    'sz002459': { name: '晶澳科技', type: '新能源' },
+    'sz300763': { name: '锦浪科技', type: '新能源' },
+    'sz002202': { name: '风电', type: '新能源' },
+    'sh688248': { name: '南网科技', type: '新能源' },
+    'sz300014': { name: '亿纬锂能', type: '新能源' },
+    'sz002812': { name: '恩捷股份', type: '新能源' },
+    'sz300750': { name: '宁德时代', type: '新能源' },
+    'sz002594': { name: '比亚迪', type: '科技' },
+    'sh601238': { name: '广汽集团', type: '制造' },
+    'sz000625': { name: '长安汽车', type: '制造' },
+    'sh600741': { name: '华域汽车', type: '制造' },
+    'sz002920': { name: '德赛西威', type: '科技' },
+    'sh688017': { name: '绿的谐波', type: '制造' },
+    'sz300124': { name: '汇川技术', type: '制造' },
+    'sh688169': { name: '石头科技', type: '科技' },
+    'sz002236': { name: '大华股份', type: '科技' },
+    'sz002415': { name: '海康威视', type: '科技' },
+    'sz300496': { name: '中科创达', type: '科技' },
+    'sh688036': { name: '传音控股', type: '科技' },
+    'sz002475': { name: '立讯精密', type: '科技' },
+    'sz300408': { name: '三环集团', type: '科技' },
+    'sh603160': { name: '汇顶科技', type: '科技' },
+    'sz002371': { name: '北方华创', type: '科技' },
+    'sh688008': { name: '澜起科技', type: '科技' },
+    'sz300661': { name: '圣邦股份', type: '科技' },
+    'sh688012': { name: '中微公司', type: '科技' },
+    'sh603501': { name: '韦尔股份', type: '科技' },
+    'sz002049': { name: '紫光国微', type: '科技' },
+    'sz300223': { name: '北京君正', type: '科技' },
+    'sz002180': { name: '纳思达', type: '科技' },
+    'sh688981': { name: '中芯国际', type: '科技' },
+    'sh688396': { name: '华润微', type: '科技' },
+    'sz300782': { name: '卓胜微', type: '科技' },
+    'sz002371': { name: '北方华创', type: '科技' },
+    'sh603986': { name: '兆易创新', type: '科技' },
+    'sz300760': { name: '迈瑞医疗', type: '医疗' },
+    'sh600276': { name: '恒瑞医药', type: '医疗' },
+    'sz300015': { name: '爱尔眼科', type: '医疗' },
+    'sh600436': { name: '片仔癀', type: '医疗' },
+    'sz300122': { name: '智飞生物', type: '医疗' },
+    'sz300347': { name: '泰格医药', type: '医疗' },
+    'sh603259': { name: '药明康德', type: '医疗' },
+    'sz000538': { name: '云南白药', type: '医疗' },
+    'sz300529': { name: '健帆生物', type: '医疗' },
+    'sz300760': { name: '迈瑞医疗', type: '医疗' },
+    'sh600085': { name: '同仁堂', type: '医疗' },
+    'sh600763': { name: '片仔癀', type: '医疗' },
+    'sz002007': { name: '华兰生物', type: '医疗' },
+    'sz300003': { name: '乐普医疗', type: '医疗' },
+    'sz300601': { name: '康泰生物', type: '医疗' },
+    'sh688180': { name: '君实生物', type: '医疗' },
+    'sz300347': { name: '泰格医药', type: '医疗' },
+    'sh600521': { name: '华海药业', type: '医疗' },
+    'sz002252': { name: '上海莱士', type: '医疗' },
+    'sz300294': { name: '博雅生物', type: '医疗' },
+    // v4.4 P33 SECTORS扩展
     // 行业周期分类（用于选股）
   },
   // 行业周期阶段：rising(上升), mature(成熟), declining(下行), cyclical_up(周期上行), cyclical_down(周期下行)
@@ -712,6 +890,33 @@ const Utils = {
     el.textContent = msg;
     el.classList.add('show');
     setTimeout(() => el.classList.remove('show'), duration);
+  },
+
+  /** v4.4 P33: 复制文本到剪贴板（兼容 navigator.clipboard 和 execCommand） */
+  copyToClipboard(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => {
+        Utils.toast('已复制：' + text);
+      }).catch(() => {
+        Utils._fallbackCopy(text);
+      });
+    } else {
+      Utils._fallbackCopy(text);
+    }
+  },
+  _fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      Utils.toast('已复制：' + text);
+    } catch(e) {
+      Utils.toast('复制失败，请手动复制');
+    }
+    document.body.removeChild(ta);
   },
 
   /** 计算移动平均 */
@@ -4113,17 +4318,55 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** 模块2：行业政策与成长性评估（v4.4 P25：增加异步行业数据增强） */
+
+  /** v4.4 P33: 从行业名称推断type分类 */
+  _inferSectorType(industryName) {
+    if (!industryName) return '服务';
+    const name = industryName;
+    const techKW = ['半导体','芯片','电子','软件','计算机','通信','AI','人工智能','算力','信创','信息技术','互联网','数字经济','集成电路','元器件','消费电子','安防','数据','通信','5G','光纤','光缆','光电','显示','面板'];
+    const financeKW = ['银行','证券','保险','金融','信托','期货','租赁'];
+    const consumeKW = ['白酒','食品','饮料','家电','服装','纺织','零售','百货','超市','餐饮','旅游','酒店','美容','化妆品','日用品','消费品'];
+    const newEnergyKW = ['光伏','风电','锂电','储能','氢能','碳中和','新能源','电池','逆变','太阳能','风力'];
+    const medicalKW = ['医药','医疗','生物','制药','疫苗','基因','CXO','CRO','CDMO','医疗器械','中药','保健','药业','药品'];
+    const cycleKW = ['化工','钢铁','有色','水泥','建材','造纸','玻璃','钛白粉','稀土','矿'];
+    const energyKW = ['石油','石化','煤炭','电力','天然气','能源','油气','核电'];
+    const mfgKW = ['汽车','机械','装备','制造','工业','机器人','电气','电机','液压','轴承','模具','船舶','军工','航空','航天','国防'];
+    const realestateKW = ['房地产','地产','物业','置业'];
+    const agriKW = ['农业','畜牧','养殖','种业','饲料','农药','化肥','种植'];
+    const infraKW = ['建筑','基建','铁路','公路','桥梁','水泥','工程','装饰'];
+    
+    for (const kw of techKW) if (name.indexOf(kw) >= 0) return '科技';
+    for (const kw of financeKW) if (name.indexOf(kw) >= 0) return '金融';
+    for (const kw of consumeKW) if (name.indexOf(kw) >= 0) return '消费';
+    for (const kw of newEnergyKW) if (name.indexOf(kw) >= 0) return '新能源';
+    for (const kw of medicalKW) if (name.indexOf(kw) >= 0) return '医疗';
+    for (const kw of cycleKW) if (name.indexOf(kw) >= 0) return '周期';
+    for (const kw of energyKW) if (name.indexOf(kw) >= 0) return '能源';
+    for (const kw of mfgKW) if (name.indexOf(kw) >= 0) return '制造';
+    for (const kw of realestateKW) if (name.indexOf(kw) >= 0) return '地产';
+    for (const kw of agriKW) if (name.indexOf(kw) >= 0) return '农业';
+    for (const kw of infraKW) if (name.indexOf(kw) >= 0) return '基建';
+    return '服务';
+  },
+
+  /** 模块2：行业政策与成长性评估（v4.4 P33：三层兜底增强） */
   module2_Industry({ quote }) {
-    const sector = CONFIG.SECTORS[quote.code] || null;
+    // v4.4 P33: 三层兜底 - ①CONFIG.SECTORS ②quote.industry ③异步增强
+    let sector = CONFIG.SECTORS[quote.code] || null;
     let html = '';
     let conclusion = '';
 
+    // 第二层兜底：使用腾讯quote接口返回的industry字段
+    if (!sector && quote.industry) {
+      const inferredType = this._inferSectorType(quote.industry);
+      sector = { name: quote.industry, type: inferredType, _fromQuote: true };
+    }
+
     if (!sector) {
-      conclusion = '📊 行业信息不足，建议查阅公司官网和年报确认行业归属。';
+      // 无本地映射且无quote.industry，显示占位等待异步
+      conclusion = '📊 正在加载行业信息...';
       html += `<div class="conclusion">${conclusion}</div>`;
-      html += '<p>无法获取准确的行业分类信息，建议结合公司年报中的主营业务构成进行分析。</p>';
-      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"></div>';
+      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在获取行业数据...</div></div>';
       return html;
     }
 
@@ -4186,9 +4429,29 @@ const DiagnosticEngine = {
         return;
       }
 
-      // 查找该股所属行业板块
-      const sector = CONFIG.SECTORS[quote.code];
-      const industryName = sector ? sector.name : (quote.industry || '');
+      // v4.4 P33: 查找该股所属行业板块（三层兜底）
+      let sector = CONFIG.SECTORS[quote.code];
+      let industryName = sector ? sector.name : '';
+      // 第二层兜底：quote.industry
+      if (!industryName && quote.industry) {
+        industryName = quote.industry;
+        if (!sector) {
+          const inferredType = TechRating._inferSectorType(industryName);
+          sector = { name: industryName, type: inferredType, _fromQuote: true };
+        }
+      }
+      // 第三层：模糊匹配全板块列表
+      if (!industryName && allSectors.length > 0) {
+        // 尝试用股票名称匹配板块
+        const stockName = quote.name || '';
+        for (let i = 0; i < allSectors.length; i++) {
+          if (stockName.length >= 2 && allSectors[i].name.indexOf(stockName.substring(0, 2)) >= 0) {
+            industryName = allSectors[i].name;
+            sector = { name: industryName, type: TechRating._inferSectorType(industryName), _fromAsync: true };
+            break;
+          }
+        }
+      }
       let matchedSector = null;
       let sectorRank = -1;
 
@@ -4270,7 +4533,14 @@ const DiagnosticEngine = {
 
     } catch (e) {
       console.warn('[模块2增强] 异步加载失败:', e);
-      container.innerHTML = '';
+      // v4.4 P33: 降级显示
+      const sector = CONFIG.SECTORS[quote.code];
+      const fallbackName = sector ? sector.name : (quote.industry || '');
+      if (fallbackName) {
+        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">📊 行业：' + fallbackName + '（暂无更多行业数据）</div>';
+      } else {
+        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">暂无行业数据，建议查阅公司年报</div>';
+      }
     }
   },
 
@@ -6689,6 +6959,7 @@ const NextDayPrediction = {
             s._sectorHeat = s.industry ? (industryHeatMap[s.industry] || null) : null;
             // v4.4 P15: 概念共振匹配（该行业命中的热门概念数）
             s._matchedConcepts = s.industry ? (industryToConcepts[s.industry] || []) : [];
+            s._mktBreadth = upRatio; // v4.4 P33: 传递市场上涨比例给评分模型
             const v = this._v2Score(s);
             s.techScore = v.score;
             s.techRisks = v.risks;
@@ -7817,10 +8088,39 @@ const NextDayPrediction = {
     else if (hasRT && !rtAgree) { dataQuality = 'low'; qualityReasons.push('双源分歧'); }
     else if (hasDT && !dtAgree && Math.abs(lhbDt.netBuy) > 5e7) { dataQuality = 'low'; qualityReasons.push('龙虎榜矛盾'); }
     
+    // ===== v4.4 P33: 市场状态自适应权重调整 =====
+    // 根据大盘情绪（upRatio）动态调整各维度权重
+    let adjF1 = f1, adjF2 = f2, adjF3 = f3, adjF4 = f4, adjF5 = f5, adjF6 = f6;
+    const _mktBreadth = s._mktBreadth || null; // 上涨家数比例，由scan传入
+    if (_mktBreadth !== null && _mktBreadth !== undefined) {
+      const upR = _mktBreadth;
+      if (upR < 0.4) {
+        // 大盘低迷：提高资金面和筹码面权重（+15%），降低动量权重
+        const adj = 1.15;
+        adjF1 = Math.round(f1 * adj);
+        adjF2 = Math.round(f2 * adj);
+        adjF4 = Math.round(f4 * 0.85); // 低迷时动量效应减弱
+      } else if (upR > 0.6) {
+        // 大盘高涨：提高动量和板块共振权重（+15%），降低资金面权重
+        const adj = 1.15;
+        adjF4 = Math.round(f4 * adj);
+        adjF5 = Math.round(f5 * adj);
+        adjF1 = Math.round(f1 * 0.85); // 高涨时资金面边际效用递减
+      }
+      // 确保调整幅度在±20%以内
+      adjF1 = Math.max(Math.round(f1 * 0.8), Math.min(Math.round(f1 * 1.2), adjF1));
+      adjF2 = Math.max(Math.round(f2 * 0.8), Math.min(Math.round(f2 * 1.2), adjF2));
+      adjF3 = Math.max(Math.round(f3 * 0.8), Math.min(Math.round(f3 * 1.2), adjF3));
+      adjF4 = Math.max(Math.round(f4 * 0.8), Math.min(Math.round(f4 * 1.2), adjF4));
+      adjF5 = Math.max(Math.round(f5 * 0.8), Math.min(Math.round(f5 * 1.2), adjF5));
+      adjF6 = Math.max(Math.round(f6 * 0.8), Math.min(Math.round(f6 * 1.2), adjF6));
+    }
+    const adjScore = adjF1 + adjF2 + adjF3 + adjF4 + adjF5 + adjF6;
+
     return { 
-      score: Math.max(0, Math.min(100, score)), 
+      score: Math.max(0, Math.min(100, adjScore)), 
       risks, factors: factors.slice(0, 4), 
-      dims: { capital: f1, volume: f2, trend: f3, momentum: f4, sector: f5, dragon: f6 },
+      dims: { capital: adjF1, volume: adjF2, trend: adjF3, momentum: adjF4, sector: adjF5, dragon: adjF6 },
       dataQuality, qualityReasons
     };
   },
@@ -7942,11 +8242,14 @@ const NextDayPrediction = {
         : '<span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + s.board + ']</span>';
       // v4.4 P21: 风险等级徽标
       const riskBadge = RiskRadar.quickRiskLevel({ name: s.name, price: s.price || 0, pe: s.pe || 0, pb: s.pb || 0, marketCap: s.marketCap || 0, turnover: s.turnover || 0, changePct: s.changePct || 0 });
+      // v4.4 P33: 预计算复制文本
+      const _copyCode = s.code.replace(/^(sh|sz|bj)/, '').toUpperCase();
+      const _copyText = s.name + ' ' + _copyCode;
       html += '<div class="hot-stock-item st-card" onclick="App.analyzeStock(\'' + s.code + '\')">'
         + '<div class="rank ' + rankCls + '">' + (idx + 1) + '</div>'
         + '<div class="hs-info">'
-        +   '<div class="hs-name">' + s.name + ' <span class="risk-badge risk-' + riskBadge.level + '">' + riskBadge.icon + '</span> ' + indLine + '</div>'
-        +   '<div class="hs-code">' + s.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
+        +   '<div class="hs-name">' + s.name + ' <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard(\'' + _copyText + '\')" title="复制股票名称和代码">📋</span> <span class="risk-badge risk-' + riskBadge.level + '">' + riskBadge.icon + '</span> ' + indLine + '</div>'
+        +   '<div class="hs-code">' + _copyCode + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
         +   factorLine
         +   verify
         + '</div>'
@@ -8312,8 +8615,10 @@ const NextDayPrediction = {
     let html = '<div class="modal-card ledger-modal">';
     html += '<div class="modal-header">';
     html += '<span>📊 历史验证台账</span>';
+    html += '<div style="display:flex;gap:6px;align-items:center">';
+    html += '<button onclick="event.stopPropagation();NextDayPrediction.closeLedger();NextDayPrediction.showModelDiagnostic()" style="padding:4px 8px;font-size:11px;background:rgba(255,213,79,0.12);border:1px solid rgba(255,213,79,0.3);color:#ffd54f;border-radius:4px;cursor:pointer">🔬 模型诊断</button>';
     html += '<button class="modal-close" onclick="NextDayPrediction.closeLedger()">✕</button>';
-    html += '</div>';
+    html += '</div></div>';
     // Tab 切换
     html += '<div class="ledger-tabs">';
     html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="NextDayPrediction.switchLedgerTab(\'verify\')">📈 胜率统计</div>';
@@ -8480,6 +8785,203 @@ const NextDayPrediction = {
       i = j;
     }
     return ranks;
+  },
+
+
+  // ---------- v4.4 P33: 六维维度IC深度分析（Pearson + 分档胜率 + TOP10贡献度） ----------
+  _calcFactorICAnalysis(snaps) {
+    const dimDefs = [
+      { key: 'capital', name: '资金面', icon: '💰', baseWeight: 25 },
+      { key: 'volume', name: '量价筹码', icon: '📊', baseWeight: 32 },
+      { key: 'trend', name: '趋势技术', icon: '📈', baseWeight: 29 },
+      { key: 'momentum', name: '位置动量', icon: '🚀', baseWeight: 22 },
+      { key: 'sector', name: '板块共振', icon: '🏷', baseWeight: 24 },
+      { key: 'dragon', name: '龙虎榜催化', icon: '🐉', baseWeight: 12 },
+    ];
+    const samples = [];
+    snaps.forEach(snap => {
+      if (snap.verified !== true) return;
+      (snap.stocks || []).forEach(s => {
+        if (s.verified !== true || s.nextChangePct == null) return;
+        const dims = s.dims || {};
+        samples.push({
+          capital: dims.capital || 0, volume: dims.volume || 0,
+          trend: dims.trend || 0, momentum: dims.momentum || 0,
+          sector: dims.sector || 0, dragon: dims.dragon || 0,
+          total: s.score || 0, ret: s.nextChangePct || 0,
+          name: s.name || '', code: s.code || ''
+        });
+      });
+    });
+    if (samples.length < 5) return { totalSamples: samples.length, dims: {}, suggestions: [], tooFew: true };
+
+    // Pearson相关系数
+    const pearson = (xs, ys) => {
+      const n = xs.length;
+      if (n < 3) return 0;
+      const mx = xs.reduce((a,b) => a+b, 0) / n;
+      const my = ys.reduce((a,b) => a+b, 0) / n;
+      let num = 0, dx = 0, dy = 0;
+      for (let i = 0; i < n; i++) {
+        const xi = xs[i] - mx, yi = ys[i] - my;
+        num += xi * yi; dx += xi * xi; dy += yi * yi;
+      }
+      const denom = Math.sqrt(dx * dy);
+      return denom > 0 ? num / denom : 0;
+    };
+
+    // 分档胜率
+    const bins = [[0,30],[30,50],[50,65],[65,80],[80,100]];
+    const binLabels = ['0-30','30-50','50-65','65-80','80-100'];
+
+    const result = { totalSamples: samples.length, dims: {}, suggestions: [], tooFew: false };
+    const rets = samples.map(s => s.ret);
+
+    dimDefs.forEach(d => {
+      const vals = samples.map(s => s[d.key]);
+      const ic = pearson(vals, rets);
+      // 分档统计
+      const tierStats = bins.map((bin, bi) => {
+        const matched = samples.filter(s => s[d.key] >= bin[0] && s[d.key] < bin[1]);
+        if (matched.length === 0) return { label: binLabels[bi], count: 0, winRate: 0, avgRet: 0 };
+        const wins = matched.filter(s => s.ret > 0).length;
+        const avgR = matched.reduce((a,s) => a + s.ret, 0) / matched.length;
+        return { label: binLabels[bi], count: matched.length, winRate: Math.round(wins/matched.length*100), avgRet: avgR };
+      });
+      // TOP10贡献度
+      const sorted = [...samples].sort((a,b) => b[d.key] - a[d.key]);
+      const top10 = sorted.slice(0, Math.min(10, sorted.length));
+      const top10Wins = top10.filter(s => s.ret > 0).length;
+      const top10AvgRet = top10.reduce((a,s) => a + s.ret, 0) / top10.length;
+
+      result.dims[d.key] = {
+        name: d.name, icon: d.icon, baseWeight: d.baseWeight,
+        ic: ic, tierStats,
+        top10WinRate: Math.round(top10Wins / top10.length * 100),
+        top10AvgRet: top10AvgRet
+      };
+      // 建议
+      if (ic < 0.05 && ic >= -0.05) {
+        result.suggestions.push({ dim: d.name, icon: d.icon, level: 'weak', msg: d.name + '维度IC偏低（' + (ic*100).toFixed(1) + '%），预测力弱，建议降低权重' });
+      } else if (ic < 0) {
+        result.suggestions.push({ dim: d.name, icon: d.icon, level: 'negative', msg: d.name + '维度IC为负（' + (ic*100).toFixed(1) + '%），存在反向预测，建议反转使用或剔除' });
+      } else if (ic > 0.15) {
+        result.suggestions.push({ dim: d.name, icon: d.icon, level: 'strong', msg: d.name + '维度IC较高（' + (ic*100).toFixed(1) + '%），预测力强，可考虑提高权重' });
+      }
+    });
+
+    // 总分IC
+    const totalVals = samples.map(s => s.total);
+    result.totalIC = pearson(totalVals, rets);
+    result.suggestions.sort((a,b) => {
+      const order = { negative: 0, weak: 1, strong: 2 };
+      return (order[a.level] || 3) - (order[b.level] || 3);
+    });
+    return result;
+  },
+
+  // ---------- v4.4 P33: 渲染IC深度分析弹窗 ----------
+  showModelDiagnostic() {
+    const snaps = this._loadSnapshots();
+    const verifiedSnaps = snaps.filter(s => s.verified === true);
+    if (verifiedSnaps.length === 0) {
+      Utils.toast ? Utils.toast('暂无已核实数据，请先核实历史排名') : null;
+      return;
+    }
+    const analysis = this._calcFactorICAnalysis(snaps);
+    if (analysis.tooFew) {
+      Utils.toast ? Utils.toast('已核实样本不足（需至少5只），请继续积累数据') : null;
+      return;
+    }
+
+    let overlay = document.getElementById('nd-diagnostic-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.id = 'nd-diagnostic-overlay';
+      overlay.className = 'modal-overlay';
+      overlay.onclick = (e) => { if (e.target === overlay) this.closeModelDiagnostic(); };
+      document.body.appendChild(overlay);
+    }
+
+    let html = '<div class="modal-card" style="max-width:520px;max-height:85vh;overflow-y:auto">';
+    html += '<div class="modal-header"><span>🔬 模型诊断 - 六维IC深度分析</span>';
+    html += '<button class="modal-close" onclick="NextDayPrediction.closeModelDiagnostic()">✕</button></div>';
+    html += '<div style="padding:12px">';
+
+    // 概览
+    html += '<div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;line-height:1.6">';
+    html += '基于 ' + analysis.totalSamples + ' 只已核实样本，Pearson相关系数分析。总分IC=' + (analysis.totalIC * 100).toFixed(1) + '%</div>';
+
+    // 六维条形雷达图（CSS模拟）
+    html += '<div style="margin:12px 0">';
+    html += '<div style="font-size:13px;font-weight:600;margin-bottom:8px">📊 六维IC条形图</div>';
+    const dimKeys = ['capital','volume','trend','momentum','sector','dragon'];
+    const maxIC = Math.max(0.3, ...dimKeys.map(k => Math.abs(analysis.dims[k].ic)));
+    dimKeys.forEach(k => {
+      const d = analysis.dims[k];
+      const ic = d.ic;
+      const barW = Math.min(100, Math.round(Math.abs(ic) / maxIC * 80));
+      const icColor = ic >= 0.15 ? '#00e676' : ic >= 0.05 ? '#ffd54f' : ic >= 0 ? '#ff9800' : '#ff5252';
+      const barBg = ic >= 0 ? 'linear-gradient(90deg,' + icColor + ',' + icColor + '88)' : 'linear-gradient(90deg,#ff5252,#ff525288)';
+      html += '<div style="display:flex;align-items:center;margin:4px 0;gap:6px">';
+      html += '<span style="width:70px;font-size:11px;text-align:right">' + d.icon + d.name + '</span>';
+      html += '<div style="flex:1;height:16px;background:rgba(255,255,255,0.05);border-radius:4px;overflow:hidden">';
+      html += '<div style="width:' + barW + '%;height:100%;background:' + barBg + ';border-radius:4px;transition:width 0.3s"></div>';
+      html += '</div>';
+      html += '<span style="width:55px;font-size:10px;color:' + icColor + '">' + (ic >= 0 ? '+' : '') + (ic * 100).toFixed(1) + '%</span>';
+      html += '</div>';
+    });
+    html += '</div>';
+
+    // 分档胜率表
+    html += '<div style="font-size:13px;font-weight:600;margin:12px 0 8px">📈 各维度分档胜率</div>';
+    html += '<div style="overflow-x:auto">';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:10px">';
+    html += '<tr style="border-bottom:1px solid var(--border-color)"><th style="padding:4px;text-align:left">维度</th>';
+    ['0-30','30-50','50-65','65-80','80-100'].forEach(l => {
+      html += '<th style="padding:4px;text-align:center">' + l + '</th>';
+    });
+    html += '<th style="padding:4px;text-align:center">TOP10</th></tr>';
+    dimKeys.forEach(k => {
+      const d = analysis.dims[k];
+      html += '<tr style="border-bottom:1px solid var(--border-color)">';
+      html += '<td style="padding:4px">' + d.icon + d.name + '</td>';
+      d.tierStats.forEach(ts => {
+        const wrColor = ts.winRate >= 60 ? '#00e676' : ts.winRate >= 50 ? '#ffd54f' : ts.winRate >= 40 ? '#ff9800' : '#ff5252';
+        html += '<td style="padding:4px;text-align:center;color:' + wrColor + '">' + (ts.count > 0 ? ts.winRate + '%(' + ts.count + ')' : '-') + '</td>';
+      });
+      const t10Color = d.top10WinRate >= 60 ? '#00e676' : d.top10WinRate >= 50 ? '#ffd54f' : '#ff5252';
+      html += '<td style="padding:4px;text-align:center;color:' + t10Color + ';font-weight:600">' + d.top10WinRate + '%</td>';
+      html += '</tr>';
+    });
+    html += '</table></div>';
+
+    // 优化建议
+    if (analysis.suggestions.length > 0) {
+      html += '<div style="font-size:13px;font-weight:600;margin:12px 0 8px">💡 优化建议</div>';
+      analysis.suggestions.forEach(s => {
+        const bgColor = s.level === 'strong' ? 'rgba(0,230,118,0.1)' : s.level === 'weak' ? 'rgba(255,152,0,0.1)' : 'rgba(255,82,82,0.1)';
+        const borderColor = s.level === 'strong' ? 'rgba(0,230,118,0.3)' : s.level === 'weak' ? 'rgba(255,152,0,0.3)' : 'rgba(255,82,82,0.3)';
+        const icon = s.level === 'strong' ? '✅' : s.level === 'weak' ? '⚠️' : '❌';
+        html += '<div style="padding:8px 10px;margin:4px 0;background:' + bgColor + ';border:1px solid ' + borderColor + ';border-radius:6px;font-size:11px;line-height:1.5">';
+        html += icon + ' ' + s.msg + '</div>';
+      });
+    }
+
+    // 市场自适应说明
+    html += '<div style="margin-top:12px;padding:10px;background:rgba(0,212,255,0.06);border:1px solid rgba(0,212,255,0.2);border-radius:8px;font-size:11px;line-height:1.6;color:var(--text-muted)">';
+    html += '🔄 <b>市场状态自适应</b>已启用：当大盘情绪低迷（上涨家数<40%）时，自动提高资金面和筹码面权重（+15%）；当大盘情绪高涨（上涨家数>60%）时，自动提高动量和板块共振权重（+15%）。调整幅度控制在±20%以内。</div>';
+
+    html += '</div></div>';
+    overlay.innerHTML = html;
+    overlay.style.display = 'flex';
+    document.body.style.overflow = 'hidden';
+  },
+
+  closeModelDiagnostic() {
+    const overlay = document.getElementById('nd-diagnostic-overlay');
+    if (overlay) overlay.style.display = 'none';
+    document.body.style.overflow = '';
   },
 
   _renderIcTab(snaps) {
@@ -11494,13 +11996,16 @@ const App = {
 
       // v4.4 P21: 风险等级徽标
       const riskBadge = RiskRadar.quickRiskLevel({ name: s.name, price: s.price, pe: s.pe || 0, pb: s.pb || 0, marketCap: s.marketCap || 0, turnover: s.turnover || 0, changePct: s.changePct || 0 });
+      // v4.4 P33: 预计算复制文本
+      const _hotCopyCode = s.code.replace(/^(sh|sz|bj)/, '').toUpperCase();
+      const _hotCopyText = s.name + ' ' + _hotCopyCode;
 
       return `
         <div class="hot-stock-item st-card" onclick="App.analyzeStock('${s.code}')">
           <div class="st-head">
             <div class="rank ${rankCls}">${i + 1}</div>
             <div class="hs-info">
-              <div class="hs-name">${s.name} ${catTag}<span class="risk-badge risk-${riskBadge.level}" title="风险：${riskBadge.level === 'low' ? '低' : riskBadge.level === 'medium' ? '中' : riskBadge.level === 'high' ? '较高' : '高'}">${riskBadge.icon}</span></div>
+              <div class="hs-name">${s.name} <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard('${_hotCopyText}')" title="复制股票名称和代码">📋</span> ${catTag}<span class="risk-badge risk-${riskBadge.level}" title="风险：${riskBadge.level === 'low' ? '低' : riskBadge.level === 'medium' ? '中' : riskBadge.level === 'high' ? '较高' : '高'}">${riskBadge.icon}</span></div>
               <div class="hs-code">${s.code} · ${s.sectorName}</div>
             </div>
             <div class="hs-price">

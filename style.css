@@ -6005,3 +6005,22 @@ body {
   background: rgba(255,255,255,0.03);
   white-space: nowrap;
 }
+
+/* v4.4 P33: 复制按钮样式 */
+.copy-stock-btn {
+  display: inline-block;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.5;
+  transition: all 0.2s;
+  padding: 0 2px;
+  vertical-align: middle;
+  user-select: none;
+}
+.copy-stock-btn:hover {
+  opacity: 1;
+  transform: scale(1.2);
+}
+.copy-stock-btn:active {
+  transform: scale(0.9);
+}
