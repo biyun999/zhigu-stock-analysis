@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p31',
+  VERSION: 'v4.4-p32',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -2096,12 +2096,130 @@ const DataAPI = {
           };
         }).filter(d => d.price > 0 && d.name && !d.name.includes('ST'));
       }
+      // v4.4 P32: clist返回空时启用腾讯行情备用方案
+      if (result.length === 0) {
+        const fallback = await this._fetchMarketRankingFallback(topN);
+        if (fallback && fallback.length > 0) {
+          this._cacheSet(cacheKey, 'marketRanking', fallback);
+          return fallback;
+        }
+      }
       this._cacheSet(cacheKey, 'marketRanking', result);
       return result;
     } catch (e) {
       console.error('fetchMarketRanking error:', e);
       return [];
     }
+  },
+
+  /** v4.4 P32: fetchMarketRanking备用方案——用腾讯行情批量接口获取高流动性股票排行 */
+  async _fetchMarketRankingFallback(topN) {
+    console.log('[fetchMarketRanking] clist全部失败，启用腾讯行情备用方案');
+    // 高流动性A股池（覆盖沪深主要大盘+中盘活跃股，约400只）
+    const FALLBACK_CODES = [
+      'sh600519','sh601318','sz000858','sh600036','sz000333','sh601166','sz002594','sh600030',
+      'sh601398','sh601288','sh600028','sh601857','sh600025','sh600000','sz000651','sh601398',
+      'sh601628','sz002304','sh600309','sz002352','sh603288','sz300750','sh688981','sz002415',
+      'sh601225','sh600104','sz000725','sh601899','sz002475','sh601012','sh600585','sz002714',
+      'sh600276','sz000002','sh601601','sz002142','sh600016','sh601818','sz000001','sh600031',
+      'sh601888','sh600900','sh601668','sz000568','sz002230','sh600104','sz000625','sh601211',
+      'sh600887','sz002049','sz000776','sh601336','sz300059','sz002601','sh600050','sz000768',
+      'sh601919','sz002027','sh600570','sz002460','sh601899','sz300015','sh600690','sz000538',
+      'sh600346','sz002352','sh601117','sz000876','sh600436','sz002241','sh601688','sz000100',
+      'sh600745','sz002008','sh600588','sz002271','sh601138','sz300274','sh600406','sz002371',
+      'sh600703','sz002236','sh601009','sz000938','sh600048','sz000063','sh601988','sz002736',
+      'sh600015','sz000423','sh601169','sz002050','sh600660','sz300760','sh600233','sz002555',
+      'sh601006','sz002466','sh600176','sz002607','sh601877','sz300347','sh600918','sz000333',
+      'sh601111','sz002001','sh600196','sz002179','sh600547','sz300033','sh601838','sz002594',
+      'sh600061','sz000895','sh601328','sz002568','sh601816','sz300124','sh600298','sz002459',
+      'sh601377','sz000661','sh601698','sz300529','sh600583','sz002032','sh601231','sz002311',
+      'sh600183','sz002294','sh600674','sz300628','sh601198','sz002739','sh600763','sz000596',
+      'sh600383','sz002078','sh600809','sz002304','sh601229','sz300142','sh600132','sz002507',
+      'sh600535','sz002007','sh600741','sz000800','sh601100','sz300146','sh600089','sz002714',
+      'sh601633','sz000963','sh600837','sz002493','sh600208','sz300413','sh601607','sz002602',
+      'sh600332','sz000513','sh600655','sz002044','sh601186','sz300003','sh601998','sz000786',
+      'sh600867','sz002557','sh601669','sz002841','sh600372','sz300408','sh600038','sz000066',
+      'sh601288','sz002202','sh600011','sz000703','sh601939','sz300498','sh600516','sz002460',
+      'sh600150','sz000671','sh601618','sz002506','sh600111','sz300750','sh601857','sz000625',
+      'sh600989','sz002459','sh601088','sz000725','sh601808','sz002230','sh600585','sz300059',
+      'sh601898','sz002601','sh600019','sz000800','sh601828','sz300146','sh601989','sz002049',
+      'sh600438','sz002241','sh600760','sz300274','sh601318','sz000001','sh601688','sz000100',
+      'sh600570','sz002460','sh601398','sz000651','sh600036','sz000333','sh600276','sz000002',
+      'sh601166','sz002594','sh601888','sh600900','sh600030','sh601012','sh600519','sz000858',
+      'sh601628','sz002304','sh600309','sz002352','sh603288','sz300750','sh688981','sz002415',
+      'sh601225','sh600104','sz000725','sh601899','sz002475','sh601919','sz002027','sz000568',
+      'sz002230','sh601009','sz000938','sh600048','sz000063','sh601988','sz002736','sh600015',
+      'sz000423','sh601169','sz002050','sh600660','sz300760','sh600233','sz002555','sh601006',
+      'sz002466','sh600176','sz002607','sh601877','sz300347','sh600918','sz000333','sh601111',
+      'sz002001','sh600196','sz002179','sh600547','sz300033','sh601838','sz002594','sh600061',
+      'sz000895','sh601328','sz002568','sh601816','sz300124','sh600298','sz002459','sh601377',
+      'sz000661','sh601698','sz300529','sh600583','sz002032','sh601231','sz002311','sh600183',
+      'sz002294','sh600674','sz300628','sh601198','sz002739','sh600763','sz000596','sh600383',
+      'sz002078','sh600809','sz002304','sh601229','sz300142','sh600132','sz002507','sh600535',
+      'sz002007','sh600741','sz000800','sh601100','sz300146','sh600089','sz002714','sh601633',
+      'sz000963','sh600837','sz002493','sh600208','sz300413','sh601607','sz002602','sh600332',
+      'sz000513','sh600655','sz002044','sh601186','sz300003','sh601998','sz000786','sh600867',
+      'sz002557','sh601669','sz002841','sh600372','sz300408','sh600038','sz000066','sh600011',
+      'sz000703','sh601939','sz300498','sh600516','sz002460','sh600150','sz000671','sh601618',
+      'sz002506','sh600111','sz300750','sh600989','sz002459','sh601088','sz000725','sh601808',
+      'sz002230','sh601898','sz002601','sh600019','sz000800','sh601828','sz300146','sh601989',
+      'sz002049','sh600438','sz002241','sh600760','sz300274','sh600346','sz002352','sh601117',
+      'sz000876','sh600436','sz002241','sh601688','sz000100','sh600745','sz002008','sh600588',
+      'sz002271','sh601138','sz300274','sh600406','sz002371','sh600703','sz002236','sh600570',
+      'sz002460','sh601919','sz002027','sh600690','sz000538','sh600887','sz002049','sz000776',
+      'sh601336','sz300059','sz002601','sh600050','sz000768','sh600588','sz002271','sh601138',
+      'sz000625','sh601211','sh601601','sz002142','sh600016','sh601818','sz000001','sh600031',
+      'sz002142','sh600016','sh601818','sz300059','sz002601','sh600050','sz000768','sh601919',
+      'sz002027','sh600570','sz002460','sh601899','sz300015','sh600690','sz000538','sh600346',
+      'sz002352','sh601117','sz000876','sh600436','sz002241','sh601688','sz000100','sh600745'
+    ];
+    // 去重
+    const uniqueCodes = [...new Set(FALLBACK_CODES)];
+    // 分批获取（每批50只）
+    const allQuotes = {};
+    const batchSize = 50;
+    for (let i = 0; i < uniqueCodes.length; i += batchSize) {
+      const batch = uniqueCodes.slice(i, i + batchSize);
+      try {
+        const quotes = await this.fetchQuotes(batch);
+        if (quotes) {
+          Object.entries(quotes).forEach(([code, q]) => {
+            if (q && q.price > 0) {
+              allQuotes[code] = {
+                code: code,
+                name: q.name || code,
+                price: q.price || 0,
+                changePct: q.changePct || 0,
+                change: q.change || 0,
+                volume: q.volume || 0,
+                amount: q.amount || 0,  // 万元
+                amplitude: q.amplitude || 0,
+                turnover: q.turnover || 0,
+                pe: q.pe || 0,
+                high: q.high || 0,
+                low: q.low || 0,
+                open: q.open || 0,
+                prevClose: q.prevClose || 0,
+                marketCap: q.marketCap || 0,
+                circCap: q.circCap || 0,
+                pb: q.pb || 0,
+                mainFlow: 0,
+                industry: ''
+              };
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('[fallback] 批次获取失败:', e.message);
+      }
+    }
+    // 按成交额降序排列，取前topN只
+    const sorted = Object.values(allQuotes)
+      .filter(d => d.price > 0 && d.amount > 0)
+      .sort((a, b) => b.amount - a.amount)
+      .slice(0, topN);
+    console.log('[fetchMarketRanking] 备用方案获取到' + sorted.length + '只股票');
+    return sorted;
   },
 
   /** 多通道获取东方财富资金流向日K线（三通道容灾，返回 {klines, source} 或 null） */
@@ -5075,6 +5193,7 @@ const Screener = {
     card.style.display = 'block';
     infoEl.textContent = '';
 
+    try {
     // === 全市场获取：扩大到1500只，覆盖所有类型 ===
     const fetchSize = strategy === 'msci' ? 1500 : 800;
     const marketRanking = await DataAPI.fetchMarketRanking(fetchSize);
@@ -5296,6 +5415,14 @@ const Screener = {
         </div>
       </div>`;
     }).join('');
+
+    } catch (err) {
+      // v4.4 P32: 外层兜底，防止任何同步/异步异常导致loading卡死
+      console.error('[Screener] run异常:', err);
+      container.innerHTML = '<div class="empty-tip" style="text-align:center;padding:20px">⚠️ 智能选股运行异常<br><span style="font-size:12px;color:var(--text-secondary)">' +
+        (err && err.message ? err.message : '未知错误，请重试') +
+        '</span><br><button onclick="App.runScreener()" style="margin-top:12px;padding:8px 24px;background:var(--accent-cyan);color:#0a0e17;border:none;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer">🔄 重新选股</button></div>';
+    }
   }
 };
 
@@ -9238,13 +9365,13 @@ const AutoVerify = {
     return snaps.filter(s => !this._isWeekendDate(s.date));
   },
 
-  /** v4.4 P28: 是否应当核实（交易日15:00收盘后才核实） */
+  /** v4.4 P28→P32: 是否应当核实（交易日9:30开盘后即可核实，使用盘中实时价格） */
   _shouldVerifyNow() {
     const now = new Date();
     if (!this._isTradingDay(now)) return false;  // 周末不核实
-    // v4.4 P28: 交易日15:00收盘后才自动核实（之前数据还没出来）
+    // v4.4 P32: 交易日9:30开盘后即可核实（盘中价格即可对比昨日预测）
     const h = now.getHours(), m = now.getMinutes();
-    if (h < 15) return false;  // 15:00前不核实
+    if (h < 9 || (h === 9 && m < 30)) return false;  // 9:30前不核实
     return true;
   },
 
@@ -9261,12 +9388,14 @@ const AutoVerify = {
     try { localStorage.setItem(this._persistKey, JSON.stringify(r)); } catch (e) {}
   },
 
-  /** 判断今天是否已经核实过（基于日期） */
+  /** v4.4 P32: 判断今天是否已经完成最终核实（15:00后收盘数据核实视为最终） */
   _alreadyVerifiedToday() {
     const last = this._loadLastResult();
     if (!last) return false;
     const today = new Date().toISOString().slice(0, 10);
-    return last.verifyDate === today;
+    if (last.verifyDate !== today) return false;
+    // v4.4 P32: 只有15:00后的最终核实才阻止重复核实；盘中核实允许重新执行
+    return !!last.finalVerified;
   },
 
   /** APP初始化后静默核实所有未核实的昨日及更早数据（v4.4 P18：休市智能判断+进度+持久化） */
@@ -9274,9 +9403,9 @@ const AutoVerify = {
     if (this._done) return;
     this._done = true;
 
-    // v4.4 P28: 交易日15:00前不核实也不自动扫描次日榜（数据还没出来）
+    // v4.4 P32: 交易日9:30后即可核实（盘中实时价格），15:00后为最终收盘数据
     if (!this._shouldVerifyNow()) {
-      console.log('[AutoVerify] 15:00前或非交易日，跳过自动核实和次日扫描');
+      console.log('[AutoVerify] 9:30前或非交易日，跳过自动核实和次日扫描');
       return;
     }
 
@@ -9306,9 +9435,11 @@ const AutoVerify = {
 
       const stats = this.getStats();
       const today = NextDayPrediction._todayStr();
+      const nowH = new Date().getHours();
       this._lastVerifyResult = {
         date: today,
         verifyDate: today,
+        finalVerified: nowH >= 15,  // v4.4 P32: 15:00后标记为收盘最终核实
         totalHit: stats.totalHit,
         totalResolved: stats.totalResolved,
         winRate: stats.totalWinRate,
@@ -9316,13 +9447,8 @@ const AutoVerify = {
       };
       this._saveLastResult(this._lastVerifyResult);
 
-      // 显示结果到首页
-      if (newDays > 0) {
-        this._showHomeVerifyResult(this._lastVerifyResult, false);
-      } else {
-        // 无新数据，隐藏进度条
-        this._hideVerifyingBanner();
-      }
+      // v4.4 P32: 无论是否有新核实天数，都显示结果（盘中→收盘更新场景）
+      this._showHomeVerifyResult(this._lastVerifyResult, newDays <= 0);
       // v4.4 P20: 核实完成后启动自动扫描
       this._triggerAutoScan();
     } catch (e) {
@@ -9352,7 +9478,10 @@ const AutoVerify = {
   _showHomeVerifyResult(r, fromCache) {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' +
+    // v4.4 P32: 区分盘中实时和收盘最终数据
+    const isIntraday = !r.finalVerified;
+    const tag = isIntraday ? '（盘中实时）' : '';
+    bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' + tag +
       (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实') +
       ' · 正在生成明日预测...';
     bar.className = 'verify-status-bar success';
@@ -9450,11 +9579,13 @@ const AutoVerify = {
     // 旧格式: snapshot.date = 扫描日，验证时找 date 之后第一天的涨跌
     // 新格式: snapshot.date = 预测目标日, snapshot.baseDate = 扫描日，验证时比较 baseDate 和 date
     const pending = snaps.filter(s => {
-      if (s.verified === true) return false;
       // 新格式：目标日已到或已过（target date <= today）才可核实
-      if (s.baseDate) return s.date <= today;
-      // 旧格式：扫描日的次日才可核实
-      return s.date < today;
+      if (s.baseDate) { if (s.date > today) return false; }
+      else { if (s.date >= today) return false; }
+      if (!s.verified) return true;
+      // v4.4 P32: 当天核实过的允许重新核实（盘中→收盘数据更新）
+      if (s.verifyDate === today) return true;
+      return false;
     });
     if (pending.length === 0) return;
 
@@ -9517,7 +9648,13 @@ const AutoVerify = {
   async _verifyShortTerm() {
     const snaps = ShortTermLedger._loadSnapshots();
     const today = ShortTermLedger._todayStr();
-    const pending = snaps.filter(s => s.verified !== true && s.date < today);
+    const pending = snaps.filter(s => {
+      if (s.date >= today) return false;
+      if (!s.verified) return true;
+      // v4.4 P32: 当天核实过的允许重新核实（盘中→收盘数据更新）
+      if (s.verifyDate === today) return true;
+      return false;
+    });
     if (pending.length === 0) return;
 
     let totalResolved = 0, totalFailDays = 0;
