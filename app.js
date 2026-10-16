@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p33',
+  VERSION: 'v4.4-p34',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -4349,9 +4349,34 @@ const DiagnosticEngine = {
     return '服务';
   },
 
-  /** 模块2：行业政策与成长性评估（v4.4 P33：三层兜底增强） */
+  /** v4.4 P34: 从股票名称推断行业类型（保底推断，用于quote.industry也为空时） */
+  _inferSectorTypeFromName(stockName) {
+    if (!stockName) return null;
+    const nameKwMap = [
+      { kw: ['银行','证券','保险','金融','信托'], type: '金融', name: '金融' },
+      { kw: ['科技','信息','软件','网络','数字'], type: '科技', name: '信息技术' },
+      { kw: ['医药','医疗','生物','制药','健康'], type: '医疗', name: '医药生物' },
+      { kw: ['地产','置业','房产'], type: '地产', name: '房地产' },
+      { kw: ['能源','电力','新能源'], type: '能源', name: '能源' },
+      { kw: ['食品','饮料','白酒','消费'], type: '消费', name: '消费' },
+      { kw: ['建设','建筑','工程'], type: '基建', name: '基建' },
+      { kw: ['农业','牧业','养殖','种业'], type: '农业', name: '农业' },
+      { kw: ['化工','化学'], type: '周期', name: '化工' },
+      { kw: ['汽车','机械','制造','重工'], type: '制造', name: '装备制造' }
+    ];
+    for (const entry of nameKwMap) {
+      for (const kw of entry.kw) {
+        if (stockName.indexOf(kw) >= 0) {
+          return { name: entry.name, type: entry.type };
+        }
+      }
+    }
+    return null;
+  },
+
+  /** 模块2：行业政策与成长性评估（v4.4 P34：四层兜底+超时保护+即时渲染） */
   module2_Industry({ quote }) {
-    // v4.4 P33: 三层兜底 - ①CONFIG.SECTORS ②quote.industry ③异步增强
+    // v4.4 P34: 四层兜底 - ①CONFIG.SECTORS ②quote.industry ③股票名称推断 ④异步增强
     let sector = CONFIG.SECTORS[quote.code] || null;
     let html = '';
     let conclusion = '';
@@ -4362,11 +4387,19 @@ const DiagnosticEngine = {
       sector = { name: quote.industry, type: inferredType, _fromQuote: true };
     }
 
+    // v4.4 P34: 第三层兜底 - 从股票名称推断行业（保底，至少能展示行业政策分析）
+    if (!sector && quote.name) {
+      const inferred = this._inferSectorTypeFromName(quote.name);
+      if (inferred) {
+        sector = { name: inferred.name, type: inferred.type, _fromStockName: true };
+      }
+    }
+
     if (!sector) {
-      // 无本地映射且无quote.industry，显示占位等待异步
-      conclusion = '📊 正在加载行业信息...';
+      // 完全无法推断行业，显示提示
+      conclusion = '📊 暂无行业数据，建议查阅公司年报';
       html += `<div class="conclusion">${conclusion}</div>`;
-      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在获取行业数据...</div></div>';
+      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"></div>';
       return html;
     }
 
@@ -4412,46 +4445,76 @@ const DiagnosticEngine = {
     return html;
   },
 
-  /** v4.4 P25: 异步增强模块二行业数据（板块排名+热度评分+个股行业对比+概念共振） */
+  /** v4.4 P25+P34: 异步增强模块二行业数据（板块排名+热度评分+个股行业对比+概念共振）
+   *  v4.4 P34: ①AbortController 10秒超时保护 ②修复TechRating→DiagnosticEngine ③股票名称四层兜底 */
   async _enhanceModule2(quote) {
     const container = document.getElementById('mod2AsyncData');
     if (!container) return;
 
     try {
-      // 并行获取行业板块排名和全市场板块列表
+      // v4.4 P34: 带 Promise.race 超时保护的 fetchSectorRank（10秒）
+      const fetchWithTimeout = async (limit) => {
+        const timeoutPromise = new Promise((resolve) => {
+          setTimeout(() => resolve([]), 10000);
+        });
+        try {
+          return await Promise.race([
+            DataAPI.fetchSectorRank(limit),
+            timeoutPromise
+          ]);
+        } catch (e) {
+          return [];
+        }
+      };
+
+      // 并行获取行业板块排名和全市场板块列表（带10秒超时）
       const [topSectors, allSectors] = await Promise.all([
-        DataAPI.fetchSectorRank(50).catch(() => []),
-        DataAPI.fetchSectorRank(200).catch(() => [])
+        fetchWithTimeout(50),
+        fetchWithTimeout(200)
       ]);
 
       if (!topSectors.length) {
+        // v4.4 P34: 接口无数据时清空loading
         container.innerHTML = '';
         return;
       }
 
-      // v4.4 P33: 查找该股所属行业板块（三层兜底）
+      // v4.4 P34: 查找该股所属行业板块（四层兜底）
       let sector = CONFIG.SECTORS[quote.code];
       let industryName = sector ? sector.name : '';
       // 第二层兜底：quote.industry
       if (!industryName && quote.industry) {
         industryName = quote.industry;
         if (!sector) {
-          const inferredType = TechRating._inferSectorType(industryName);
+          const inferredType = DiagnosticEngine._inferSectorType(industryName);
           sector = { name: industryName, type: inferredType, _fromQuote: true };
         }
       }
       // 第三层：模糊匹配全板块列表
       if (!industryName && allSectors.length > 0) {
-        // 尝试用股票名称匹配板块
         const stockName = quote.name || '';
         for (let i = 0; i < allSectors.length; i++) {
           if (stockName.length >= 2 && allSectors[i].name.indexOf(stockName.substring(0, 2)) >= 0) {
             industryName = allSectors[i].name;
-            sector = { name: industryName, type: TechRating._inferSectorType(industryName), _fromAsync: true };
+            sector = { name: industryName, type: DiagnosticEngine._inferSectorType(industryName), _fromAsync: true };
             break;
           }
         }
       }
+      // v4.4 P34: 第四层兜底 - 股票名称关键词推断行业名
+      if (!industryName && quote.name) {
+        const inferred = DiagnosticEngine._inferSectorTypeFromName(quote.name);
+        if (inferred) {
+          industryName = inferred.name;
+          sector = { name: inferred.name, type: inferred.type, _fromStockName: true };
+        }
+      }
+      // 所有兜底都失败，清空loading
+      if (!industryName) {
+        container.innerHTML = '';
+        return;
+      }
+
       let matchedSector = null;
       let sectorRank = -1;
 
@@ -4533,9 +4596,13 @@ const DiagnosticEngine = {
 
     } catch (e) {
       console.warn('[模块2增强] 异步加载失败:', e);
-      // v4.4 P33: 降级显示
+      // v4.4 P34: 降级显示（含股票名称兜底推断）
       const sector = CONFIG.SECTORS[quote.code];
-      const fallbackName = sector ? sector.name : (quote.industry || '');
+      let fallbackName = sector ? sector.name : (quote.industry || '');
+      if (!fallbackName && quote.name) {
+        const inferred = DiagnosticEngine._inferSectorTypeFromName(quote.name);
+        if (inferred) fallbackName = inferred.name;
+      }
       if (fallbackName) {
         container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">📊 行业：' + fallbackName + '（暂无更多行业数据）</div>';
       } else {
@@ -9836,6 +9903,7 @@ const AutoVerify = {
   _done: false,
   _lastVerifyResult: null,  // 最近一次自动核实结果
   _persistKey: 'zhigu_autoverify_last',
+  _schedulerInterval: null,  // v4.4 P34: 15:00调度器定时器ID
 
   /** 判断当前是否为交易日（简化：非周末） */
   _isTradingDay(date = new Date()) {
@@ -10205,6 +10273,44 @@ const AutoVerify = {
       console.warn('[AutoVerify] 短线榜所有待核实日均核实失败，可能K线数据获取异常');
     }
     return { totalResolved, totalFailDays };
+  },
+
+  /** v4.4 P34: 启动15:00自动核实调度器（每5分钟检查一次，15:00-23:00窗口内执行） */
+  _startScheduler() {
+    if (this._schedulerInterval) return; // 避免重复启动
+    console.log('[AutoVerify] 15:00自动核实调度器已启动');
+    this._schedulerInterval = setInterval(() => {
+      const now = new Date();
+      const h = now.getHours();
+      // 只在15:00-23:00窗口内检查
+      if (h < 15 || h >= 23) return;
+      // 非交易日不执行
+      if (!this._isTradingDay(now)) return;
+      // 如果今天还未完成最终核实（15:00后的收盘核实），重新触发
+      if (!this._alreadyVerifiedToday()) {
+        console.log('[AutoVerify] 15:00已到，调度器触发最终核实...');
+        // 显示提示
+        const bar = document.getElementById('homeVerifyStatusBar');
+        if (bar) {
+          bar.innerHTML = '🕐 15:00已到，正在自动核实昨日预测并生成明日榜单...';
+          bar.className = 'verify-status-bar verifying';
+          bar.style.display = '';
+          bar.style.opacity = '1';
+        }
+        // 重置 _done 标志以允许重新执行
+        this._done = false;
+        if (typeof AutoScan !== 'undefined') AutoScan._done = false;
+        this.silentVerify();
+      }
+    }, 5 * 60 * 1000); // 每5分钟检查一次
+  },
+
+  /** v4.4 P34: 停止调度器 */
+  _stopScheduler() {
+    if (this._schedulerInterval) {
+      clearInterval(this._schedulerInterval);
+      this._schedulerInterval = null;
+    }
   }
 };
 
@@ -10796,6 +10902,8 @@ const App = {
     // v4.4 P11: 静默自动核实昨日及更早未核实数据（异常隔离，不影响主功能）
     setTimeout(() => {
       try { AutoVerify.silentVerify(); } catch(e) { console.warn('[AutoVerify] init error:', e); }
+      // v4.4 P34: 启动15:00自动核实调度器
+      try { AutoVerify._startScheduler(); } catch(e) { console.warn('[AutoVerify] scheduler init error:', e); }
     }, 3000);
 
     // v4.4 P17: 价值投资模块——静默刷新价值榜单 + 长期持仓价格（异常隔离）
