@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p34',
+  VERSION: 'v4.4-p35',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -6879,6 +6879,17 @@ const NextDayPrediction = {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
+
+  /** v4.4 P35: 获取最近一个已核实的快照（用于首页胜率标识） */
+  getLatestVerified() {
+    try {
+      const snaps = this._loadSnapshots();
+      for (const s of snaps) {
+        if (s.verified === true && s.winRate != null) return s;
+      }
+      return null;
+    } catch (e) { return null; }
+  },
   /** v4.4 P27: 返回下一个交易日的日期字符串（周五→下周一，周六/周日→下周一，其他→次日） */
   _nextTradingDayStr(date) {
     const d = date ? new Date(date) : new Date();
@@ -10218,6 +10229,7 @@ const AutoVerify = {
   async _verifyShortTerm() {
     const snaps = ShortTermLedger._loadSnapshots();
     const today = ShortTermLedger._todayStr();
+    console.log('[AutoVerify][P35] _verifyShortTerm 开始，快照总数:' + snaps.length + ', today:' + today);
     const pending = snaps.filter(s => {
       if (s.date >= today) return false;
       if (!s.verified) return true;
@@ -10225,12 +10237,14 @@ const AutoVerify = {
       if (s.verifyDate === today) return true;
       return false;
     });
-    if (pending.length === 0) return;
+    console.log('[AutoVerify][P35] 待核实快照数:' + pending.length + ', 日期:' + pending.map(s => s.date).join(','));
+    if (pending.length === 0) { console.log('[AutoVerify][P35] 无需核实，跳过'); return; }
 
     let totalResolved = 0, totalFailDays = 0;
     for (const target of pending) {
       let hit = 0, resolved = 0;
       const list = target.stocks || [];
+      console.log('[AutoVerify][P35] 核实快照 date:' + target.date + ', 股票数:' + list.length);
       const batchSize = 10;
       for (let i = 0; i < list.length; i += batchSize) {
         const batch = list.slice(i, i + batchSize);
@@ -10248,8 +10262,14 @@ const AutoVerify = {
                   s.verified = true;
                   resolved++;
                   if (s.nextChangePct > 0) hit++;
+                } else {
+                  console.warn('[AutoVerify][P35] K线base缺失:', s.code, 'base:', base ? 'close=' + base.close : 'null');
                 }
+              } else {
+                console.warn('[AutoVerify][P35] K线next日期不匹配:', s.code, 'target:' + target.date, 'klineDates:' + klines.map(k => k.date).join(','));
               }
+            } else {
+              console.warn('[AutoVerify][P35] K线为空:', s.code);
             }
           } catch (e) { console.warn('[AutoVerify] 短线核实单股异常:', s.code, e && e.message); }
         }));
@@ -10261,6 +10281,7 @@ const AutoVerify = {
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = today;
         totalResolved += resolved;
+        console.log('[AutoVerify][P35] 快照' + target.date + '核实完成：hit=' + hit + '/' + resolved + ', winRate=' + target.winRate + '%');
       } else {
         totalFailDays++;
         console.warn('[AutoVerify] 短线榜核实失败:', target.date, '- K线日期可能不匹配，样例date:', list.length > 0 ? '(已获取K线但未匹配)' : '(无股票)');
@@ -10271,6 +10292,11 @@ const AutoVerify = {
     // v4.4 P31: 核实全部失败时给用户反馈
     if (totalResolved === 0 && totalFailDays > 0) {
       console.warn('[AutoVerify] 短线榜所有待核实日均核实失败，可能K线数据获取异常');
+      if (typeof Utils !== 'undefined' && Utils.toast) Utils.toast('短线榜核实失败，可能网络或数据源异常');
+    }
+    // v4.4 P35: 核实完成后刷新首页胜率标识
+    if (typeof App !== 'undefined' && App._refreshShortTermLedgerHint) {
+      try { App._refreshShortTermLedgerHint(); } catch(e) { console.warn('[P35] 刷新胜率标识异常:', e); }
     }
     return { totalResolved, totalFailDays };
   },
@@ -10299,7 +10325,10 @@ const AutoVerify = {
         }
         // 重置 _done 标志以允许重新执行
         this._done = false;
-        if (typeof AutoScan !== 'undefined') AutoScan._done = false;
+        if (typeof AutoScan !== 'undefined') {
+          AutoScan._done = false;
+          AutoScan._shortTermRefreshed = false;  // v4.4 P35: 同步重置收盘刷新标志，确保15:00后能刷新短线榜
+        }
         this.silentVerify();
       }
     }, 5 * 60 * 1000); // 每5分钟检查一次
@@ -11367,6 +11396,29 @@ const App = {
     }
   },
 
+  /** v4.4 P35: 刷新首页短线榜胜率标识（核实完成后调用） */
+  _refreshShortTermLedgerHint() {
+    const container = document.getElementById('hotStocks');
+    if (!container) return;
+    const sourceMode = container.querySelector('.st-source-mode');
+    if (!sourceMode) return;
+    // 移除旧的badge
+    const oldBadge = document.getElementById('stWinRateBadge');
+    if (oldBadge) oldBadge.remove();
+    // 读取最新已核实快照
+    try {
+      const latest = ShortTermLedger.getLatestVerified();
+      if (latest) {
+        const badge = document.createElement('span');
+        badge.id = 'stWinRateBadge';
+        badge.className = 'st-winrate-badge';
+        badge.title = '最近核实：' + latest.date;
+        badge.innerHTML = '📈 胜率 ' + latest.winRate + '%（' + latest.date.slice(5) + '）';
+        sourceMode.appendChild(badge);
+      }
+    } catch(e) { console.warn('[P35] 刷新胜率标识异常:', e); }
+  },
+
   /** 主力动向评分（0-100）：权重30% — 今日主力净流入+连续流入+大单占比+加速流入 */
   _scoreCapitalMovement(stock, flowData) {
     let s = 35;
@@ -12177,8 +12229,17 @@ const App = {
         `).join('')}
       </div>`;
 
+    // v4.4 P35: 读取最近已核实快照的胜率，显示在顶部
+    let stWinRateHtml = '';
+    try {
+      const latest = ShortTermLedger.getLatestVerified();
+      if (latest) {
+        stWinRateHtml = '<span id="stWinRateBadge" class="st-winrate-badge" title="最近核实：' + latest.date + '">📈 胜率 ' + latest.winRate + '%（' + latest.date.slice(5) + '）</span>';
+      }
+    } catch(e) {}
+
     container.innerHTML = `
-      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button></div>
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${stWinRateHtml}</div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${sortBarHtml}
       ${stockHtml}
@@ -15801,6 +15862,9 @@ const InviteCode = {
   TTL_MS: 86400000,                           // 24小时有效期
   ADMIN_VERIFIED_KEY: 'zhigu_admin_verified', // 管理员已验证状态
   _countdownTimer: null,
+  _pwdFailCount: 0,       // v4.4 P35: 密码连续失败次数
+  _lockUntil: 0,          // v4.4 P35: 锁定截止时间戳
+  _generating: false,     // v4.4 P35: 是否正在生成中
 
   // ===== 工具函数 =====
 
@@ -15894,10 +15958,15 @@ const InviteCode = {
     const iv = data.slice(16, 28);
     const ciphertext = data.slice(28);
     const key = await this._deriveAesKey(password, salt);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv }, key, ciphertext
-    );
-    return new TextDecoder().decode(decrypted);
+    try {
+      const decrypted = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: iv }, key, ciphertext
+      );
+      return new TextDecoder().decode(decrypted);
+    } catch (e) {
+      // v4.4 P35: AES-GCM认证失败（密码错误）抛友好错误
+      throw new Error('密码错误');
+    }
   },
 
   /** 设置管理员密码（同时生成RSA密钥对并用密码加密私钥） */
@@ -15968,8 +16037,19 @@ const InviteCode = {
   async _getPrivateKey(password) {
     const encryptedPriv = localStorage.getItem(this.PRIVATE_KEY_KEY);
     if (!encryptedPriv) throw new Error('未设置私钥，请重新设置管理员密码');
-    const privJwkStr = await this._aesDecrypt(encryptedPriv, password);
-    const privJwk = JSON.parse(privJwkStr);
+    let privJwkStr;
+    try {
+      privJwkStr = await this._aesDecrypt(encryptedPriv, password);
+    } catch (e) {
+      // v4.4 P35: 解密失败统一抛出"密码错误"
+      throw new Error('密码错误');
+    }
+    let privJwk;
+    try {
+      privJwk = JSON.parse(privJwkStr);
+    } catch (e) {
+      throw new Error('密码错误或数据已损坏');
+    }
     return await crypto.subtle.importKey('jwk', privJwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
   },
 
@@ -15985,13 +16065,30 @@ const InviteCode = {
       this._toast('请先设置管理员密码');
       return;
     }
+    // v4.4 P35: 锁定检查（连续3次失败后锁定60秒）
+    if (Date.now() < this._lockUntil) {
+      const remainSec = Math.ceil((this._lockUntil - Date.now()) / 1000);
+      this._toast('密码错误次数过多，请' + remainSec + '秒后重试');
+      return;
+    }
+    // v4.4 P35: 防止重复点击
+    if (this._generating) {
+      this._toast('正在生成中，请稍候...');
+      return;
+    }
 
     // 需要管理员输入密码才能生成（安全考虑）
     const pwd = prompt('请输入管理员密码以生成邀请码：');
-    if (!pwd) return;
+    if (!pwd) {
+      this._toast('已取消生成邀请码');  // v4.4 P35: 取消时明确提示
+      return;
+    }
 
+    this._generating = true;
     try {
       const privateKey = await this._getPrivateKey(pwd);
+      // 密码正确，重置失败计数
+      this._pwdFailCount = 0;
       const now = Date.now();
       const id = 'inv_' + now + '_' + Math.random().toString(36).substring(2, 6);
       const payload = JSON.stringify({ id: id, ts: now, ttl: this.TTL_MS });
@@ -16023,7 +16120,47 @@ const InviteCode = {
       this._renderInviteList();
       this._toast('邀请码生成成功');
     } catch (e) {
-      this._toast('生成失败：' + e.message);
+      // v4.4 P35: 区分密码错误和其他错误
+      this._pwdFailCount++;
+      const isPwdError = e.message === '密码错误' || (e.name && e.name === 'OperationError');
+      if (isPwdError || e.message === '密码错误') {
+        const remaining = 3 - this._pwdFailCount;
+        if (this._pwdFailCount >= 3) {
+          // 连续3次失败，锁定60秒
+          this._lockUntil = Date.now() + 60000;
+          this._pwdFailCount = 0;
+          this._toast('密码连续错误3次，已锁定60秒。如忘记密码可重置管理员密码');
+          setTimeout(() => {
+            if (confirm('是否重置管理员密码？\n⚠ 重置将清除所有邀请码记录！')) {
+              this._resetAdminPassword();
+            }
+          }, 500);
+        } else {
+          this._toast('密码错误，还剩' + remaining + '次尝试机会');
+        }
+      } else {
+        this._toast('生成失败：' + (e.message || '未知错误'));
+      }
+    } finally {
+      this._generating = false;
+    }
+  },
+
+  /** v4.4 P35: 重置管理员密码（清除所有邀请码记录） */
+  _resetAdminPassword() {
+    try {
+      localStorage.removeItem(this.ADMIN_PWD_KEY);
+      localStorage.removeItem(this.PRIVATE_KEY_KEY);
+      localStorage.removeItem(this.ADMIN_VERIFIED_KEY);
+      localStorage.removeItem(this.INVITES_KEY);
+      this._lockUntil = 0;
+      this._pwdFailCount = 0;
+      this._toast('管理员密码已重置，请重新设置');
+      // 刷新面板
+      const overlay = document.getElementById('invite-overlay');
+      if (overlay) overlay.style.display = 'none';
+    } catch (e) {
+      this._toast('重置失败：' + e.message);
     }
   },
 

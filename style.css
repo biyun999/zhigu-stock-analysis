@@ -3072,6 +3072,20 @@ body {
   transform: scale(0.95);
   opacity: 0.85;
 }
+/* v4.4 P35: 短线榜顶部胜率标识 */
+.st-winrate-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  font-size: 10px;
+  color: #00e676;
+  background: rgba(0,230,118,0.1);
+  border: 1px solid rgba(0,230,118,0.25);
+  border-radius: 8px;
+  font-weight: 500;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 /* 短线台账整体胜率卡片 */
 .overall-winrate {
   text-align: center;
