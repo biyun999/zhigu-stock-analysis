@@ -4098,6 +4098,20 @@ body {
 }
 
 /* ===== v4.4 P12: 股东结构分析 ===== */
+/* v4.4 P36: 数据时效信息 */
+.sh-data-date-info {
+  background: rgba(0, 212, 255, 0.06);
+  border: 1px solid rgba(0, 212, 255, 0.15);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+#shRefreshBtn:hover {
+  background: rgba(0, 212, 255, 0.1);
+  color: var(--text-primary);
+}
 .sh-section {
   margin-bottom: 16px;
   padding-bottom: 12px;

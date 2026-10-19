@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="description" content="智股分析 - A股七维度智能分析系统，零Token纯前端算法">
-  <title>智股分析 v4.4-p35</title>
+  <title>智股分析 v4.4-p36</title>
   <link rel="manifest" href="manifest.json">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='16' fill='%230a0e17'/><text x='50' y='42' text-anchor='middle' font-size='30' fill='%2300d4ff'>智</text><text x='50' y='75' text-anchor='middle' font-size='22' fill='%2300e676'>股</text></svg>">
   <link rel="stylesheet" href="style.css">
@@ -403,7 +403,12 @@
 
       <!-- 股东结构分析（v4.4 P12） -->
       <section class="card" id="shareholderCard" style="display:none">
-        <div class="card-title">👥 股东结构分析</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <div class="card-title" style="margin-bottom:0">👥 股东结构分析</div>
+          <div id="shRefreshBtn" style="display:none;cursor:pointer;font-size:13px;color:var(--text-muted);padding:2px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.1);transition:all 0.2s" onclick="App._refreshShareholderData()" title="清除缓存并重新加载股东数据">🔄 刷新</div>
+        </div>
+        <!-- v4.4 P36: 数据时效信息 -->
+        <div id="shDataDateInfo" class="sh-data-date-info" style="display:none"></div>
         <div class="disclaimer">⚠️ 股东数据按季度披露，存在滞后性，仅供参考。</div>
         <!-- 股东人数变化 -->
         <div class="sh-section" id="shHolderNumSection">

@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p35',
+  VERSION: 'v4.4-p36',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1868,7 +1868,8 @@ const DataAPI = {
     realtimeFlow: 30000,    // v4.0 实时资金流30秒
     marketBreadth: 300000,  // v4.1 大盘情绪/指数5分钟
     dragonTigerBatch: 1800000, // v4.1 全市场龙虎榜批量30分钟
-    stockBatch: 120000     // v4.2 批量行情快照(主力/行业,自选股次日评分)2分钟
+    stockBatch: 120000,    // v4.2 批量行情快照(主力/行业,自选股次日评分)2分钟
+    shareholder: 3600000   // v4.4 P36: 股东数据1小时（季度更新，减少重复请求）
   },
   _cacheGet(key, type) {
     const c = this._cache[key];
@@ -10050,9 +10051,8 @@ const AutoVerify = {
   },
 
   _hideVerifyingBanner() {
-    const bar = document.getElementById('homeVerifyStatusBar');
-    if (!bar) return;
-    bar.style.display = 'none';
+    // v4.4 P36: 不隐藏，改为显示当前状态文本（常驻状态条）
+    try { this._showInitialStatus(); } catch(e) {}
   },
 
   /** 显示核实完成结果到首页状态条 */
@@ -10064,13 +10064,78 @@ const AutoVerify = {
     const tag = isIntraday ? '（盘中实时）' : '';
     bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' + tag +
       (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实') +
-      ' · 正在生成明日预测...';
+      ' · 正在生成明日预测...' +
+      ' <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
-    // 3秒后淡出，但保留（点击可重新查看 / 留作信息）
-    setTimeout(() => {
-      bar.style.opacity = '0.6';
-    }, 3000);
+    bar.style.opacity = '1';
+  },
+
+  /** v4.4 P36: 获取当前状态描述文本 */
+  _getStatusText() {
+    const now = new Date();
+    const h = now.getHours(), m = now.getMinutes();
+    const t = h * 60 + m;
+    const isTradingDay = this._isTradingDay(now);
+    const last = this._loadLastResult();
+
+    if (!isTradingDay) {
+      // 非交易日：找到下个交易日
+      const nextTd = new Date(now);
+      let daysToAdd = (6 - now.getDay()) % 7 || 2;
+      if (now.getDay() === 0) daysToAdd = 1;
+      else if (now.getDay() === 6) daysToAdd = 2;
+      nextTd.setDate(nextTd.getDate() + daysToAdd);
+      const nextStr = (nextTd.getMonth() + 1) + '月' + nextTd.getDate() + '日';
+      return '📅 今日休市，下个交易日 ' + nextStr + ' 15:00后自动更新';
+    }
+
+    if (t < 9 * 60 + 30) {
+      return '⏳ 开盘中，9:30后自动核实昨日预测';
+    }
+
+    if (t < 15 * 60) {
+      // 盘中
+      if (last && last.verifyDate === new Date().toISOString().slice(0, 10)) {
+        return '✅ 昨日预测胜率 <b style="color:#00e676">' + last.winRate + '%</b>（盘中实时）';
+      }
+      return '⏳ 开盘中，正在核实昨日预测并生成明日榜单...';
+    }
+
+    // 15:00后
+    if (last && last.finalVerified) {
+      const stats = this.getStats();
+      return '✅ 昨日预测胜率 <b style="color:#00e676">' + stats.totalWinRate + '%</b> · 明日预测榜单已生成 <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
+    }
+    return '⏳ 15:00后自动核实昨日预测并生成明日榜单...';
+  },
+
+  /** v4.4 P36: 手动触发核实/生成 */
+  _manualTrigger() {
+    this._done = false;
+    if (typeof AutoScan !== 'undefined') {
+      AutoScan._done = false;
+      AutoScan._shortTermRefreshed = false;
+    }
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (bar) {
+      bar.innerHTML = '📊 正在手动核实/生成...';
+      bar.className = 'verify-status-bar verifying';
+      bar.style.display = '';
+      bar.style.opacity = '1';
+    }
+    this.silentVerify();
+  },
+
+  /** v4.4 P36: 初始化时显示状态条（即使未开始核实） */
+  _showInitialStatus() {
+    const bar = document.getElementById('homeVerifyStatusBar');
+    if (!bar) return;
+    const statusText = this._getStatusText();
+    bar.innerHTML = statusText;
+    bar.className = 'verify-status-bar';
+    bar.style.display = '';
+    bar.style.opacity = '1';
   },
 
   /** 显示核实完成顶部提示条（保留旧版兼容） */
@@ -10423,7 +10488,6 @@ const AutoScan = {
         bar.className = 'verify-status-bar success';
         bar.style.display = '';
         bar.style.opacity = '1';
-        setTimeout(() => { bar.style.opacity = '0.6'; }, 3000);
       }
       console.log('[AutoScan] 短线榜收盘后刷新完成');
     } catch (e) {
@@ -10537,9 +10601,6 @@ const AutoScan = {
     }
     bar.style.display = '';
     bar.style.opacity = '1';
-    setTimeout(() => {
-      bar.style.opacity = '0.6';
-    }, 3000);
   },
 
   /** v4.4 P27: 收盘后打开APP，榜单已存在时显示提示 */
@@ -10554,9 +10615,6 @@ const AutoScan = {
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
     bar.style.opacity = '1';
-    setTimeout(() => {
-      bar.style.opacity = '0.6';
-    }, 3000);
   },
 
   /** v4.4 P27: 周末休市提示 */
@@ -10574,7 +10632,7 @@ const AutoScan = {
     bar.innerHTML = msg;
     bar.className = 'verify-status-bar';
     bar.style.display = '';
-    bar.style.opacity = '0.7';
+    bar.style.opacity = '1';
   },
 
   _hideBanner() {
@@ -10929,11 +10987,13 @@ const App = {
     this.loadHotStocks();
 
     // v4.4 P11: 静默自动核实昨日及更早未核实数据（异常隔离，不影响主功能）
+    // v4.4 P36: 1秒后启动（更快响应） + 立即显示初始状态条
     setTimeout(() => {
+      try { AutoVerify._showInitialStatus(); } catch(e) {}
       try { AutoVerify.silentVerify(); } catch(e) { console.warn('[AutoVerify] init error:', e); }
       // v4.4 P34: 启动15:00自动核实调度器
       try { AutoVerify._startScheduler(); } catch(e) { console.warn('[AutoVerify] scheduler init error:', e); }
-    }, 3000);
+    }, 1000);
 
     // v4.4 P17: 价值投资模块——静默刷新价值榜单 + 长期持仓价格（异常隔离）
     setTimeout(() => {
@@ -13585,6 +13645,22 @@ const App = {
 
       this.showSection('shareholderCard', true);
 
+      // === v4.4 P36: 显示数据时效信息 + 刷新按钮 ===
+      const shDateInfo = document.getElementById('shDataDateInfo');
+      const shRefreshBtn = document.getElementById('shRefreshBtn');
+      if (shDateInfo && latestEndDate) {
+        const qLabel = this._getQuarterLabel(latestEndDate);
+        const daysAgo = Math.floor((Date.now() - new Date(latestEndDate + 'T00:00:00').getTime()) / 86400000);
+        let dateHtml = '<span style="color:#00d4ff;font-weight:600">📅 数据截止：' + latestEndDate + '（' + qLabel + '）</span>';
+        dateHtml += ' <span style="color:var(--text-muted);font-size:11px">距今 ' + daysAgo + ' 天</span>';
+        if (daysAgo > 30) {
+          dateHtml += '<div style="color:var(--text-muted);font-size:11px;margin-top:2px">💡 股东数据按季度披露，请关注最新财报</div>';
+        }
+        shDateInfo.innerHTML = dateHtml;
+        shDateInfo.style.display = '';
+      }
+      if (shRefreshBtn) shRefreshBtn.style.display = '';
+
       // === 1. 股东人数变化 ===
       if (holderNumData && holderNumData.length > 0) {
         const periods = holderNumData.slice(0, 10); // 最近10期
@@ -14587,6 +14663,44 @@ const App = {
       html += `<div class="sh-point ${p.cls}">${p.text}</div>`;
     });
     document.getElementById('shAnalysisContent').innerHTML = html;
+  },
+
+  /** v4.4 P36: 根据日期获取季度标签 */
+  _getQuarterLabel(dateStr) {
+    try {
+      const d = new Date(dateStr + 'T00:00:00');
+      const m = d.getMonth() + 1;
+      const y = d.getFullYear();
+      if (m <= 3) return y + '年一季报';
+      if (m <= 6) return y + '年中报';
+      if (m <= 9) return y + '年三季报';
+      return y + '年年报';
+    } catch (e) { return ''; }
+  },
+
+  /** v4.4 P36: 清除股东数据缓存并重新加载 */
+  async _refreshShareholderData() {
+    if (!this.currentStock) return;
+    const code = this.currentStock.code;
+    const btn = document.getElementById('shRefreshBtn');
+    if (btn) { btn.style.opacity = '0.5'; btn.textContent = '🔄 刷新中...'; }
+    // 清除股东缓存
+    const keysToRemove = [];
+    for (const key in DataAPI._cache) {
+      if (key.startsWith('shNum_') || key.startsWith('shTop_')) keysToRemove.push(key);
+    }
+    keysToRemove.forEach(k => delete DataAPI._cache[k]);
+    console.log('[股东] P36: 已清除' + keysToRemove.length + '条缓存，重新加载...');
+    // 重新获取K线并重新渲染
+    try {
+      const klines = this._klineData;
+      await this.renderShareholder(code, klines);
+      Utils.toast('股东数据已刷新');
+    } catch (e) {
+      console.warn('[股东] 刷新失败:', e);
+      Utils.toast('刷新失败，请稍后重试');
+    }
+    if (btn) { btn.style.opacity = '1'; btn.innerHTML = '🔄 刷新'; }
   },
 
   /** 添加自选股 */
