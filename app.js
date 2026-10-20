@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p36',
+  VERSION: 'v4.4-p37',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -15972,6 +15972,7 @@ const InviteCode = {
 
   ADMIN_PWD_KEY: 'zhigu_admin_pwd',          // 管理员密码hash
   PRIVATE_KEY_KEY: 'zhigu_priv_key_enc',     // 加密后的私钥（AES-GCM）
+  PUBLIC_KEY_KEY: 'zhigu_pub_key',            // 用户生成的公钥（JWK）
   INVITES_KEY: 'zhigu_invites',              // 邀请码列表
   TTL_MS: 86400000,                           // 24小时有效期
   ADMIN_VERIFIED_KEY: 'zhigu_admin_verified', // 管理员已验证状态
@@ -16108,6 +16109,10 @@ const InviteCode = {
       const privJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
       const encryptedPriv = await this._aesEncrypt(JSON.stringify(privJwk), pwd);
 
+      // 导出公钥 JWK 并保存（v4.4-p37 修复：签名验证不一致问题）
+      const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
+      localStorage.setItem(this.PUBLIC_KEY_KEY, JSON.stringify(pubJwk));
+
       // 保存密码hash + 加密后的私钥
       localStorage.setItem(this.ADMIN_PWD_KEY, Auth._hash(pwd));
       localStorage.setItem(this.PRIVATE_KEY_KEY, encryptedPriv);
@@ -16167,9 +16172,11 @@ const InviteCode = {
     return await crypto.subtle.importKey('jwk', privJwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
   },
 
-  /** 获取公钥 */
+  /** 获取公钥（v4.4-p37 修复：优先使用用户生成的公钥，fallback到内置公钥） */
   async _getPublicKey() {
-    return await crypto.subtle.importKey('jwk', this.PUBLIC_KEY, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify']);
+    const localPubStr = localStorage.getItem(this.PUBLIC_KEY_KEY);
+    const jwk = localPubStr ? JSON.parse(localPubStr) : this.PUBLIC_KEY;
+    return await crypto.subtle.importKey('jwk', jwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify']);
   },
 
   // ===== 邀请码生成（管理员端） =====
@@ -16265,6 +16272,7 @@ const InviteCode = {
     try {
       localStorage.removeItem(this.ADMIN_PWD_KEY);
       localStorage.removeItem(this.PRIVATE_KEY_KEY);
+      localStorage.removeItem(this.PUBLIC_KEY_KEY);
       localStorage.removeItem(this.ADMIN_VERIFIED_KEY);
       localStorage.removeItem(this.INVITES_KEY);
       this._lockUntil = 0;
