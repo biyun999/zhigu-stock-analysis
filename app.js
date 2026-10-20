@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p37',
+  VERSION: 'v4.4-p38',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -15964,15 +15964,17 @@ const DeviceManager = {
 
 // ============================================================
 // 13c. InviteCode - 邀请码授权系统（RSA-PSS 非对称签名）
-// 公钥内置在APP中（任何人都可验签），私钥由管理员密码加密后仅存在管理员设备本地
+// v4.4-p38: 内置固定RSA密钥对，所有设备使用同一对密钥生成和验证邀请码，解决跨设备验证失败问题
 // ========================================================================
 const InviteCode = {
-  // 公钥（内置，用于验签）
-  PUBLIC_KEY: {"kty":"RSA","n":"sdDtetnb2L78C_NszWTP3hEcDaB5OpyBSvaEOntcZA1knVAKe995hAIee0qSt6DS4qScagO4SDaa_XZRN9OQAjR8wvNMoklgFpw7TDwbvI0nt6ni8DxPfVYXtEXeZK8FMbou4ojfc4rIVnVrsE6DXcQ42tQUR96tzine258cxLmaMcTreCp17HyloZCPW7BuzyS3fQxSH2UTpSN06zu8qznCk4i8PsilYuzWmaiGZ5QSbP0YRQVM9pnm0c_oBCXwBNbnuS0b-pilffTVc0a5pJVjQCWUsA8Ptc4niDdVlS4p0XB1a5vIcESdmNIiO5A7zKvwEM72mfSV_F2HzDqvcQ","e":"AQAB","alg":"PS256","use":"sig","ext":true},
+  // 内置RSA密钥对（v4.4-p38：所有设备使用同一对密钥，解决跨设备验证问题）
+  PUBLIC_KEY: {"key_ops":["verify"],"ext":true,"alg":"PS256","kty":"RSA","n":"zMDVd5Y1k3e2iXh3tUP1dtHN9_03osolnwumfbW3E2wLhqW5-GFqXDIW2iKr87h5KZlWMHuQNWFn4NcEoNjM9uRJUIPcbL_Ma3ZcI5div9C6B7Vky-v8AKKIO24iNF30Vuz_8m7l3RgZ1UId7tNRjjc0WAUmbhx_ByDax5-Z3qlfWbC9ytaO7bKOyFYVdHDCMfpmwf5tq5UIGz-yMcadNdcXLCzbq2apuoap8wtF5_ClaWmng8Mx5AliELS5W6yXhSWeWAgHAS04S750DWztQzupXGBY5a9s2ElZ2HDox6zcHhBSIY8bdz92OUPldfED834hFW8QDEPH8CxzZ4BsHQ","e":"AQAB"},
+  PRIVATE_KEY: {"key_ops":["sign"],"ext":true,"alg":"PS256","kty":"RSA","n":"zMDVd5Y1k3e2iXh3tUP1dtHN9_03osolnwumfbW3E2wLhqW5-GFqXDIW2iKr87h5KZlWMHuQNWFn4NcEoNjM9uRJUIPcbL_Ma3ZcI5div9C6B7Vky-v8AKKIO24iNF30Vuz_8m7l3RgZ1UId7tNRjjc0WAUmbhx_ByDax5-Z3qlfWbC9ytaO7bKOyFYVdHDCMfpmwf5tq5UIGz-yMcadNdcXLCzbq2apuoap8wtF5_ClaWmng8Mx5AliELS5W6yXhSWeWAgHAS04S750DWztQzupXGBY5a9s2ElZ2HDox6zcHhBSIY8bdz92OUPldfED834hFW8QDEPH8CxzZ4BsHQ","e":"AQAB","d":"RCdZxs0Od1AtR9P8EK-WyJ6sbwPv3XVpEWgo2oY-cq4PphmK7gTLCPY5ShGpZ947ImAiYs_2X_ZUw-_-X-XaT8IML0s890veaNTEdaph2dRJ39_-tawOvU1ciF-v7ftqJfcMeO91_uKTUruHyCO57VstxrCsKpG8rKxAdpsG9iiUr_Wj-Vk8t8i6HuUCq5u1BF0RcyLaqAOgJhYtqxhDUFHbTxDLt1tDHGvyBCM3EaYnypUCJKs09nNv89MkzmFMJJ2I2eTJxffYgSQaQB2u83o2zVkjpwCnyYweqjNGRiCAK0A1NSpLZtAwKkwXhJWO871s1hXv70BrCG_hpOSl1w","p":"91agg4-eeCKD814h0DG44OhUzw835lKe3_MmjfHZV3J2C8FZ8J9jw_PyLE-qBCwA07A9s_GHy0KEyW9Rl8X1u6QqcLT3At8fnthQPfcg7YYw42hO5W_MaBC3_bcbR23Ekhgww2W9p3-mqpigGegMkDKBQSkr10NKFbjcvapD3Gc","q":"0-xvETLs9XKRwQZt01y1I2vUsEaLAnbXm6EvaYgkElaMtc8f2H9aI2VLK1TkM-3bLvIko0Ct4hoofKN8meUdPM1DhWB8Ck2Dch1BwNlHpndNlEDsZZHxO4u_hiyQ3tVrF-YB6cWX-n_iRT2gP1OyMfxULz3j5Ue8cLqVZi0qINs","dp":"g5959Aktz8iuZ4ikfeK3_BgnabkzikJVgeAnmEon2z1yTHcsobxwnwrmyWXrmCTCm-SiMWxLU4Omnnu69AXI635Fh40GFmUesq1ypkcpIr3SrnIH6llAcfDTuRUEU1K61PRCnvk5oDVyQD7QlHjElsgJuN9sETYh6sVh0x0U1-k","dq":"h5FEK7hsJUe5PcWjFAbGSXZ9hJZb7qOfoYsnDVdt291J_jQVpyUwwFvYDkwr_5w1Dn8QOO7zTSR2qeTbnIcYgQC-JOBn-R9E6wcUPQ3B7Bd9pU0y7HbD3tezGV4A_st_yrX0m1svsauFT83waRJdd-R25hGta8rMHUD-uXJC9Ok","qi":"iqrzn_tOYmCMGXgsF_7_EkE5xtJ6pEWQHL6542CzyI5GFmPfMPbYHdI-xc-jy2MGsmxkFbDxW4Fk2mufbJSTNxRiEwTcedfu6AZNsz5mfKmFJkuLHqm1pfKaUGMPtkPTC8J_D2HWcNCwJQhMvAkoH1C_xIYotsQhNsKD9KfMnhg"},
 
   ADMIN_PWD_KEY: 'zhigu_admin_pwd',          // 管理员密码hash
-  PRIVATE_KEY_KEY: 'zhigu_priv_key_enc',     // 加密后的私钥（AES-GCM）
-  PUBLIC_KEY_KEY: 'zhigu_pub_key',            // 用户生成的公钥（JWK）
+  // v4.4-p38: 不再使用localStorage存储密钥
+  _PRIVATE_KEY_KEY: 'zhigu_priv_key_enc',
+  _PUBLIC_KEY_KEY: 'zhigu_pub_key',
   INVITES_KEY: 'zhigu_invites',              // 邀请码列表
   TTL_MS: 86400000,                           // 24小时有效期
   ADMIN_VERIFIED_KEY: 'zhigu_admin_verified', // 管理员已验证状态
@@ -16028,7 +16030,7 @@ const InviteCode = {
   },
 
   hasPrivateKey() {
-    return !!localStorage.getItem(this.PRIVATE_KEY_KEY);
+    return true;  // v4.4-p38: 密钥内置，始终可用
   },
 
   _verifyAdminPassword(password) {
@@ -16036,55 +16038,7 @@ const InviteCode = {
     return stored && Auth._hash(password) === stored;
   },
 
-  /** 从密码派生AES密钥（PBKDF2） */
-  async _deriveAesKey(password, salt) {
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw', this._strToBytes(password),
-      { name: 'PBKDF2' }, false, ['deriveKey']
-    );
-    return await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: salt, iterations: 10000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      true,
-      ['encrypt', 'decrypt']
-    );
-  },
-
-  /** AES-GCM 加密 */
-  async _aesEncrypt(plaintext, password) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await this._deriveAesKey(password, salt);
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv: iv }, key, this._strToBytes(plaintext)
-    );
-    const result = new Uint8Array(16 + 12 + encrypted.byteLength);
-    result.set(salt, 0);
-    result.set(iv, 16);
-    result.set(new Uint8Array(encrypted), 28);
-    return this._bytesToBase64Url(result);
-  },
-
-  /** AES-GCM 解密 */
-  async _aesDecrypt(b64data, password) {
-    const data = this._base64UrlToBytes(b64data);
-    const salt = data.slice(0, 16);
-    const iv = data.slice(16, 28);
-    const ciphertext = data.slice(28);
-    const key = await this._deriveAesKey(password, salt);
-    try {
-      const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-GCM', iv: iv }, key, ciphertext
-      );
-      return new TextDecoder().decode(decrypted);
-    } catch (e) {
-      // v4.4 P35: AES-GCM认证失败（密码错误）抛友好错误
-      throw new Error('密码错误');
-    }
-  },
-
-  /** 设置管理员密码（同时生成RSA密钥对并用密码加密私钥） */
+  /** 设置管理员密码（v4.4-p38：仅保护生成入口，不参与密钥生成） */
   async setupAdminPassword() {
     const pwd = document.getElementById('inviteNewPwd').value;
     const confirm = document.getElementById('inviteNewPwdConfirm').value;
@@ -16098,24 +16052,8 @@ const InviteCode = {
     }
 
     try {
-      // 生成 RSA-2048 密钥对
-      const keyPair = await crypto.subtle.generateKey(
-        { name: 'RSA-PSS', modulusLength: 2048, publicExponent: new Uint8Array([0x01, 0x00, 0x01]), hash: 'SHA-256' },
-        true,
-        ['sign', 'verify']
-      );
-
-      // 导出私钥 JWK 并用密码加密
-      const privJwk = await crypto.subtle.exportKey('jwk', keyPair.privateKey);
-      const encryptedPriv = await this._aesEncrypt(JSON.stringify(privJwk), pwd);
-
-      // 导出公钥 JWK 并保存（v4.4-p37 修复：签名验证不一致问题）
-      const pubJwk = await crypto.subtle.exportKey('jwk', keyPair.publicKey);
-      localStorage.setItem(this.PUBLIC_KEY_KEY, JSON.stringify(pubJwk));
-
-      // 保存密码hash + 加密后的私钥
+      // v4.4-p38: 仅保存密码hash，密钥已内置无需生成
       localStorage.setItem(this.ADMIN_PWD_KEY, Auth._hash(pwd));
-      localStorage.setItem(this.PRIVATE_KEY_KEY, encryptedPriv);
       localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
 
       this._showManagePanel();
@@ -16125,7 +16063,7 @@ const InviteCode = {
     }
   },
 
-  /** 验证管理员密码（解密私钥到内存待用） */
+  /** 验证管理员密码（v4.4-p38：仅验证密码hash，无需解密） */
   async verifyAdminPassword() {
     const pwd = document.getElementById('inviteAdminPwd').value;
     const errEl = document.getElementById('inviteAdminError');
@@ -16136,53 +16074,27 @@ const InviteCode = {
       return;
     }
 
-    try {
-      // 解密私钥验证密码正确
-      const encryptedPriv = localStorage.getItem(this.PRIVATE_KEY_KEY);
-      if (encryptedPriv) {
-        await this._aesDecrypt(encryptedPriv, pwd);
-      }
-      localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
-      errEl.style.display = 'none';
-      document.getElementById('inviteAdminPwd').value = '';
-      this._showManagePanel();
-    } catch (e) {
-      errEl.textContent = '密码验证失败';
-      errEl.style.display = 'block';
-    }
+    // v4.4-p38: 密码正确即可，密钥已内置无需解密
+    localStorage.setItem(this.ADMIN_VERIFIED_KEY, '1');
+    errEl.style.display = 'none';
+    document.getElementById('inviteAdminPwd').value = '';
+    this._showManagePanel();
   },
 
-  /** 获取私钥（解密后导入） */
-  async _getPrivateKey(password) {
-    const encryptedPriv = localStorage.getItem(this.PRIVATE_KEY_KEY);
-    if (!encryptedPriv) throw new Error('未设置私钥，请重新设置管理员密码');
-    let privJwkStr;
-    try {
-      privJwkStr = await this._aesDecrypt(encryptedPriv, password);
-    } catch (e) {
-      // v4.4 P35: 解密失败统一抛出"密码错误"
-      throw new Error('密码错误');
-    }
-    let privJwk;
-    try {
-      privJwk = JSON.parse(privJwkStr);
-    } catch (e) {
-      throw new Error('密码错误或数据已损坏');
-    }
-    return await crypto.subtle.importKey('jwk', privJwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
+  /** 获取内置私钥（v4.4-p38：直接导入硬编码的私钥JWK） */
+  async _getPrivateKey() {
+    return await crypto.subtle.importKey('jwk', this.PRIVATE_KEY, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['sign']);
   },
 
-  /** 获取公钥（v4.4-p37 修复：优先使用用户生成的公钥，fallback到内置公钥） */
+  /** 获取内置公钥（v4.4-p38：直接使用硬编码的公钥JWK） */
   async _getPublicKey() {
-    const localPubStr = localStorage.getItem(this.PUBLIC_KEY_KEY);
-    const jwk = localPubStr ? JSON.parse(localPubStr) : this.PUBLIC_KEY;
-    return await crypto.subtle.importKey('jwk', jwk, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify']);
+    return await crypto.subtle.importKey('jwk', this.PUBLIC_KEY, { name: 'RSA-PSS', hash: 'SHA-256' }, false, ['verify']);
   },
 
   // ===== 邀请码生成（管理员端） =====
 
   async generateInviteCode() {
-    if (!this.hasAdminPassword() || !this.hasPrivateKey()) {
+    if (!this.hasAdminPassword()) {
       this._toast('请先设置管理员密码');
       return;
     }
@@ -16207,7 +16119,11 @@ const InviteCode = {
 
     this._generating = true;
     try {
-      const privateKey = await this._getPrivateKey(pwd);
+      // v4.4-p38: 先验证管理员密码，再使用内置私钥签名
+      if (!this._verifyAdminPassword(pwd)) {
+        throw new Error('密码错误');
+      }
+      const privateKey = await this._getPrivateKey();
       // 密码正确，重置失败计数
       this._pwdFailCount = 0;
       const now = Date.now();
@@ -16267,14 +16183,15 @@ const InviteCode = {
     }
   },
 
-  /** v4.4 P35: 重置管理员密码（清除所有邀请码记录） */
+  /** v4.4 P38: 重置管理员密码（仅清除密码和验证状态，密钥为内置不可清除） */
   _resetAdminPassword() {
     try {
       localStorage.removeItem(this.ADMIN_PWD_KEY);
-      localStorage.removeItem(this.PRIVATE_KEY_KEY);
-      localStorage.removeItem(this.PUBLIC_KEY_KEY);
       localStorage.removeItem(this.ADMIN_VERIFIED_KEY);
       localStorage.removeItem(this.INVITES_KEY);
+      // 清理旧版遗留的localStorage数据
+      localStorage.removeItem('zhigu_priv_key_enc');
+      localStorage.removeItem('zhigu_pub_key');
       this._lockUntil = 0;
       this._pwdFailCount = 0;
       this._toast('管理员密码已重置，请重新设置');
