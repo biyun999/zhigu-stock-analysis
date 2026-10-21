@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p39',
+  VERSION: 'v4.4-p40',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -10986,6 +10986,9 @@ const App = {
     // 加载首页数据
     this.loadHotStocks();
 
+    // v4.4 P40: 启动短线榜智能自动刷新
+    try { this._startAutoRefresh(); } catch(e) { console.warn('[P40] startAutoRefresh init error:', e); }
+
     // v4.4 P11: 静默自动核实昨日及更早未核实数据（异常隔离，不影响主功能）
     // v4.4 P36: 1秒后启动（更快响应） + 立即显示初始状态条
     setTimeout(() => {
@@ -11001,11 +11004,8 @@ const App = {
       try { LongTermPortfolio.refreshPrices(); } catch(e) { console.warn('[LongTerm] init error:', e); }
     }, 5000);
 
-    // 定时刷新（5分钟）
+    // v4.4 P40: 定时刷新（5分钟）— 仅自选股列表，短线榜由智能自动刷新接管
     setInterval(() => {
-      if (Navigation.currentPage === 'home') {
-        this.loadHotStocks();
-      }
       if (Navigation.currentPage === 'watchlist') {
         Watchlist.render();
       }
@@ -11216,13 +11216,27 @@ const App = {
 
   /** 加载短线潜力TOP10（板块热度+主力资金+量价技术）
    *  多数据源多级降级：行业板块 → 概念板块 → 全市场活跃股 → 腾讯静态热门 */
-  async loadHotStocks() {
+  async loadHotStocks(opts) {
+    const isAutoRefresh = opts && opts.autoRefresh;
     const container = document.getElementById('hotStocks');
-    container.innerHTML = '<div class="loading-pulse">正在扫描热门板块与主力资金...</div>';
+    const savedScroll = isAutoRefresh ? (document.documentElement.scrollTop || document.body.scrollTop) : 0;
+    if (!isAutoRefresh) {
+      container.innerHTML = '<div class="loading-pulse">正在扫描热门板块与主力资金...</div>';
+    }
 
     let hotSectors = [];
     let candidates = [];
     let fallbackMode = 'normal';  // normal / concept / market / static
+
+    // v4.4 P40: 强制刷新时清除板块/排行相关缓存，确保拿到最新数据
+    if (opts && opts.force) {
+      const cache = DataAPI._cache || {};
+      for (const key of Object.keys(cache)) {
+        if (key.startsWith('sectorRank_') || key.startsWith('topMarketStocks') || key.startsWith('capitalFlow')) {
+          delete cache[key];
+        }
+      }
+    }
 
     try {
       // ====== 第1步：多源获取板块数据（带降级）======
@@ -11446,6 +11460,13 @@ const App = {
           ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, isAfterClose);
         } catch (e) { console.warn('保存短线快照失败', e); }
       }
+
+      // v4.4 P40: 自动刷新后恢复滚动位置 + 更新状态时间
+      if (isAutoRefresh && savedScroll) {
+        requestAnimationFrame(() => { window.scrollTo(0, savedScroll); });
+      }
+      App._lastRefreshTime = new Date();
+      App._updateAutoRefreshInfo();
     } catch (e) {
       console.error('[短线TOP10] 整体异常:', e);
       container.innerHTML = `
@@ -11478,6 +11499,179 @@ const App = {
       }
     } catch(e) { console.warn('[P35] 刷新胜率标识异常:', e); }
   },
+
+  // ====== v4.4 P40: 短线榜智能自动刷新系统 ======
+  _autoRefreshTimer: null,
+  _lastRefreshTime: null,
+  _autoRefreshTickTimer: null,
+
+  /** 启动智能自动刷新（在 init 中调用一次） */
+  _startAutoRefresh() {
+    // 清除已有定时器（幂等）
+    if (this._autoRefreshTimer) clearInterval(this._autoRefreshTimer);
+    if (this._autoRefreshTickTimer) clearInterval(this._autoRefreshTickTimer);
+
+    // 每15秒tick一次，判断是否到刷新点
+    this._autoRefreshTimer = setInterval(() => {
+      try { this._tickAutoRefresh(); } catch(e) { console.warn('[P40] tick异常:', e); }
+    }, 15000);
+
+    // 每秒更新倒计时显示
+    this._autoRefreshTickTimer = setInterval(() => {
+      try { this._updateCountdownDisplay(); } catch(e) {}
+    }, 1000);
+
+    // 监听页面可见性变化
+    document.addEventListener('visibilitychange', () => {
+      try {
+        if (!document.hidden) {
+          // 页面重新可见，检查是否需要补刷
+          this._tickAutoRefresh(true);
+        }
+      } catch(e) { console.warn('[P40] visibilitychange异常:', e); }
+    });
+
+    // 初始化状态显示
+    this._updateAutoRefreshInfo();
+    console.log('[P40] 智能自动刷新已启动');
+  },
+
+  /** 单次tick判断：是否满足刷新条件 */
+  _tickAutoRefresh(fromVisible) {
+    try {
+      const now = new Date();
+
+      // 页面不可见时跳过
+      if (document.hidden && !fromVisible) return;
+
+      // 不在首页时跳过
+      if (typeof Navigation !== 'undefined' && Navigation.currentPage !== 'home') return;
+
+      // 有弹窗/详情打开时跳过
+      if (this._isModalOpen()) return;
+
+      // 判断时段策略
+      const interval = this._getRefreshInterval(now);
+      if (interval <= 0) return; // 非交易时段，不刷新
+
+      // 距上次刷新是否满间隔
+      if (!this._lastRefreshTime) {
+        // 首次启动，立即刷新
+        this._doAutoRefresh();
+        return;
+      }
+
+      const elapsed = (now - this._lastRefreshTime) / 1000;
+      if (elapsed >= interval || fromVisible) {
+        this._doAutoRefresh();
+      }
+    } catch(e) {
+      console.warn('[P40] _tickAutoRefresh异常:', e);
+    }
+  },
+
+  /** 获取当前时段对应的刷新间隔（秒），0表示不刷新 */
+  _getRefreshInterval(now) {
+    const isTradingDay = (typeof AutoVerify !== 'undefined' && AutoVerify._isTradingDay)
+      ? AutoVerify._isTradingDay(now) : this._isTradingDaySimple(now);
+    if (!isTradingDay) {
+      // 周末不刷新
+      return 0;
+    }
+
+    const isTradingHours = (typeof AutoVerify !== 'undefined' && AutoVerify._isTradingHours)
+      ? AutoVerify._isTradingHours(now) : false;
+
+    if (isTradingHours) return 60; // 盘中：60秒
+
+    const h = now.getHours();
+    if (h >= 15 && h < 23) return 300; // 收盘后15:00-23:00：5分钟
+
+    return 0; // 夜间不刷新
+  },
+
+  /** 简易交易日判断（兜底） */
+  _isTradingDaySimple(date) {
+    const day = date.getDay();
+    return day !== 0 && day !== 6;
+  },
+
+  /** 执行自动刷新（静默，不弹toast） */
+  async _doAutoRefresh() {
+    try {
+      console.log('[P40] 自动刷新短线榜...');
+      await this.loadHotStocks({ autoRefresh: true, force: true });
+    } catch(e) {
+      console.warn('[P40] 自动刷新失败:', e);
+    }
+  },
+
+  /** 检测是否有弹窗/详情弹层打开 */
+  _isModalOpen() {
+    // 检查各类modal-overlay是否可见
+    const overlays = document.querySelectorAll('.modal-overlay, .batch-modal-mask');
+    for (const el of overlays) {
+      if (el && el.style.display === 'flex') return true;
+    }
+    // 检查分析页是否正在展示（用户可能在查看详情）
+    if (typeof Navigation !== 'undefined' && Navigation.currentPage === 'analysis') return true;
+    return false;
+  },
+
+  /** 更新自动刷新状态信息 */
+  _updateAutoRefreshInfo() {
+    const el = document.getElementById('st-auto-refresh-info');
+    if (!el) return;
+
+    const now = new Date();
+    const interval = this._getRefreshInterval(now);
+    let infoHtml = '';
+
+    if (this._lastRefreshTime) {
+      const t = this._lastRefreshTime;
+      const timeStr = String(t.getHours()).padStart(2,'0') + ':' +
+                      String(t.getMinutes()).padStart(2,'0') + ':' +
+                      String(t.getSeconds()).padStart(2,'0');
+      infoHtml = '<span class="st-ar-time">🕒 ' + timeStr + '</span>';
+    }
+
+    if (interval > 0 && this._lastRefreshTime) {
+      const elapsed = (now - this._lastRefreshTime) / 1000;
+      const remaining = Math.max(0, Math.ceil(interval - elapsed));
+      infoHtml += ' <span class="st-ar-next">· ' + remaining + 's后刷新</span>';
+    } else if (interval === 300) {
+      infoHtml += ' <span class="st-ar-status">· 收盘后每5分钟刷新</span>';
+    } else if (interval === 0) {
+      infoHtml += ' <span class="st-ar-status">· 当前非交易时段</span>';
+    }
+
+    el.innerHTML = infoHtml;
+  },
+
+  /** 每秒更新倒计时显示 */
+  _updateCountdownDisplay() {
+    const el = document.getElementById('st-auto-refresh-info');
+    if (!el || !this._lastRefreshTime) return;
+
+    const now = new Date();
+    const interval = this._getRefreshInterval(now);
+
+    if (interval > 0) {
+      const elapsed = (now - this._lastRefreshTime) / 1000;
+      const remaining = Math.max(0, Math.ceil(interval - elapsed));
+      const nextEl = el.querySelector('.st-ar-next');
+      if (nextEl) {
+        nextEl.textContent = '· ' + remaining + 's后刷新';
+      } else if (this._lastRefreshTime) {
+        // 还没有next元素，刷新完整info
+        this._updateAutoRefreshInfo();
+      }
+    } else {
+      // 非交易时段，更新状态文案
+      this._updateAutoRefreshInfo();
+    }
+  },
+
 
   /** 主力动向评分（0-100）：权重30% — 今日主力净流入+连续流入+大单占比+加速流入 */
   _scoreCapitalMovement(stock, flowData) {
@@ -12299,7 +12493,7 @@ const App = {
     } catch(e) {}
 
     container.innerHTML = `
-      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${stWinRateHtml}</div>
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks();App._lastRefreshTime=new Date();App._updateAutoRefreshInfo()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${stWinRateHtml}<span id="st-auto-refresh-info" class="st-auto-refresh-info"></span></div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${sortBarHtml}
       ${stockHtml}

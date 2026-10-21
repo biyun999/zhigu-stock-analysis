@@ -6052,3 +6052,24 @@ body {
 .copy-stock-btn:active {
   transform: scale(0.9);
 }
+
+/* v4.4 P40: 短线榜智能自动刷新状态 */
+.st-auto-refresh-info {
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+  margin-left: auto;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.st-auto-refresh-info .st-ar-time {
+  opacity: 0.85;
+}
+.st-auto-refresh-info .st-ar-next {
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+.st-auto-refresh-info .st-ar-status {
+  opacity: 0.6;
+}
