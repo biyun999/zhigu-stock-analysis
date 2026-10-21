@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p38',
+  VERSION: 'v4.4-p39',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -16206,7 +16206,7 @@ const InviteCode = {
   // ===== 邀请码验证（任何人都可验证，无需管理员密码） =====
 
   async verifyInviteCode(code) {
-    const clean = (code || '').trim();
+    const clean = (code || '').replace(/\s+/g, '');
     if (!clean.startsWith('ZG')) {
       return { valid: false, error: '邀请码格式无效' };
     }
