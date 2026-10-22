@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p40',
+  VERSION: 'v4.4-p41',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -9435,6 +9435,16 @@ const ShortTermLedger = {
   // ---------- 保存当日快照 ----------
   saveSnapshot(topStocks, topSectors, fallbackMode, afterClose) {
     const today = this._todayStr();
+    // v4.4 P41: 收盘后(afterClose=true)不允许覆盖盘中已定型的预测快照
+    if (afterClose) {
+      try {
+        const existing = this._loadSnapshots().find(x => x.date === today && !x.afterClose);
+        if (existing) {
+          console.log('[ShortTermLedger] P41: 今日盘中预测快照已存在(date=' + today + ')，跳过收盘后覆盖');
+          return;
+        }
+      } catch(e) { /* 异常时继续正常保存 */ }
+    }
     const stocks = (topStocks || []).map(s => ({
       code: s.code, name: s.name, price: s.price, changePct: s.changePct,
       sectorName: s.sectorName || '', total: s.total || 0,
@@ -9947,14 +9957,47 @@ const AutoVerify = {
     return snaps.filter(s => !this._isWeekendDate(s.date));
   },
 
-  /** v4.4 P28→P32: 是否应当核实（交易日9:30开盘后即可核实，使用盘中实时价格） */
+  /** v4.4 P41: 是否应当执行收盘核实（仅交易日15:00-23:00） */
   _shouldVerifyNow() {
     const now = new Date();
-    if (!this._isTradingDay(now)) return false;  // 周末不核实
-    // v4.4 P32: 交易日9:30开盘后即可核实（盘中价格即可对比昨日预测）
+    if (!this._isTradingDay(now)) return false;
     const h = now.getHours(), m = now.getMinutes();
-    if (h < 9 || (h === 9 && m < 30)) return false;  // 9:30前不核实
+    const t = h * 60 + m;
+    if (t < 15 * 60) return false;   // 15:00前不核实
+    if (h >= 23) return false;        // 23:00后不核实
     return true;
+  },
+
+  /** v4.4 P41: 判断当前是否为盘中时段（9:30-15:00交易日） */
+  _isIntradayPeriod(date = new Date()) {
+    if (!this._isTradingDay(date)) return false;
+    const t = date.getHours() * 60 + date.getMinutes();
+    return t >= 9 * 60 + 30 && t < 15 * 60;
+  },
+
+  /** v4.4 P41: 判断当前是否为定型窗口（14:45-15:00） */
+  _isFinalizationWindow(date = new Date()) {
+    const t = date.getHours() * 60 + date.getMinutes();
+    return t >= 14 * 60 + 45 && t < 15 * 60;
+  },
+
+  /** v4.4 P41: 检查今日预测是否已最终定型 */
+  _isPredictFinalized() {
+    const today = new Date().toISOString().slice(0, 10);
+    return !!localStorage.getItem('zhigu_predict_finalized_' + today);
+  },
+
+  /** v4.4 P41: 标记今日预测已最终定型 */
+  _setPredictFinalized() {
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.setItem('zhigu_predict_finalized_' + today, '1');
+    console.log('[AutoVerify] 已标记今日预测定型:', today);
+  },
+
+  /** v4.4 P41: 重置今日定型标记（手动触发时使用） */
+  _resetPredictFinalized() {
+    const today = new Date().toISOString().slice(0, 10);
+    localStorage.removeItem('zhigu_predict_finalized_' + today);
   },
 
   /** 加载持久化的最近核实结果 */
@@ -9970,39 +10013,99 @@ const AutoVerify = {
     try { localStorage.setItem(this._persistKey, JSON.stringify(r)); } catch (e) {}
   },
 
-  /** v4.4 P32: 判断今天是否已经完成最终核实（15:00后收盘数据核实视为最终） */
+  /** v4.4 P41: 判断今天是否已经完成收盘核实（仅15:00后的最终核实才阻止重复） */
   _alreadyVerifiedToday() {
     const last = this._loadLastResult();
     if (!last) return false;
     const today = new Date().toISOString().slice(0, 10);
     if (last.verifyDate !== today) return false;
-    // v4.4 P32: 只有15:00后的最终核实才阻止重复核实；盘中核实允许重新执行
     return !!last.finalVerified;
   },
 
-  /** APP初始化后静默核实所有未核实的昨日及更早数据（v4.4 P18：休市智能判断+进度+持久化） */
+  /** v4.4 P41: APP初始化/调度器入口——按时段分流预测生成与收盘核实 */
   async silentVerify() {
     if (this._done) return;
     this._done = true;
 
-    // v4.4 P32: 交易日9:30后即可核实（盘中实时价格），15:00后为最终收盘数据
-    if (!this._shouldVerifyNow()) {
-      console.log('[AutoVerify] 9:30前或非交易日，跳过自动核实和次日扫描');
+    const now = new Date();
+    if (!this._isTradingDay(now)) {
+      console.log('[AutoVerify] 非交易日，跳过');
       return;
     }
 
-    // 如果今天已经核实过，直接显示结果
+    const h = now.getHours(), m = now.getMinutes();
+    const t = h * 60 + m;
+
+    if (t < 9 * 60 + 30) {
+      console.log('[AutoVerify] 9:30前，跳过');
+      return;
+    }
+
+    if (t < 15 * 60) {
+      // 盘中(9:30-15:00)：只做预测生成/定型，绝不做核实
+      try { await this.ensurePredictionForToday(); } catch(e) { console.warn('[AutoVerify] ensurePrediction异常:', e); }
+    } else if (h < 23) {
+      // 收盘后(15:00-23:00)：只做台账核实
+      try { await this.runCloseVerification(); } catch(e) { console.warn('[AutoVerify] runCloseVerification异常:', e); }
+    }
+  },
+
+  /** v4.4 P41: 盘中预测生成/定型（9:30-15:00调用） */
+  async ensurePredictionForToday() {
+    console.log('[AutoVerify] 盘中：确保次日预测存在');
+
+    // 1. 次日榜：若今日目标交易日预测不存在 → 触发scan
+    if (typeof AutoScan !== 'undefined' && !AutoScan._hasTodayNextDay()) {
+      console.log('[AutoVerify] 次日预测不存在，触发scan');
+      try {
+        const bar = document.getElementById('homeVerifyStatusBar');
+        if (bar) {
+          bar.innerHTML = '⏳ 开盘中，正在生成明日预测（次日榜+短线榜）...';
+          bar.className = 'verify-status-bar verifying';
+          bar.style.display = '';
+          bar.style.opacity = '1';
+        }
+        await NextDayPrediction.scan(true);
+      } catch(e) { console.warn('[AutoVerify] 盘中scan异常:', e); }
+    }
+
+    // 2. 短线榜：loadHotStocks 已在init和P40自动刷新中调用，无需额外处理
+
+    // 3. 14:45-15:00 定型窗口：用最新盘中数据重新生成/刷新
+    const now = new Date();
+    if (this._isFinalizationWindow(now) && !this._isPredictFinalized()) {
+      console.log('[AutoVerify] 14:45后定型窗口：重新生成最终预测');
+      try {
+        const bar = document.getElementById('homeVerifyStatusBar');
+        if (bar) {
+          bar.innerHTML = '📊 临近收盘，正在用最新盘中数据定型明日预测...';
+          bar.className = 'verify-status-bar verifying';
+          bar.style.display = '';
+          bar.style.opacity = '1';
+        }
+        // 重新scan覆盖同目标日快照
+        await NextDayPrediction.scan(true);
+        // 刷新短线榜快照（此时仍为盘中，afterClose=false）
+        if (typeof App !== 'undefined' && App.loadHotStocks) {
+          await App.loadHotStocks({ autoRefresh: true, force: true });
+        }
+        this._setPredictFinalized();
+        console.log('[AutoVerify] 预测定型完成');
+      } catch(e) { console.warn('[AutoVerify] 定型异常:', e); }
+    }
+  },
+
+  /** v4.4 P41: 收盘后台账核实（15:00-23:00调用） */
+  async runCloseVerification() {
     if (this._alreadyVerifiedToday()) {
+      console.log('[AutoVerify] 今日已完成收盘核实');
       const last = this._loadLastResult();
       this._lastVerifyResult = last;
       this._showHomeVerifyResult(last, true);
-      // v4.4 P20: 核实已完成，立即启动自动扫描
-      this._triggerAutoScan();
       return;
     }
 
     try {
-      // 显示核实中状态条
       this._showVerifyingBanner();
 
       const ndBefore = NextDayPrediction._loadSnapshots().filter(s => s.verified === true).length;
@@ -10017,27 +10120,26 @@ const AutoVerify = {
 
       const stats = this.getStats();
       const today = NextDayPrediction._todayStr();
-      const nowH = new Date().getHours();
       this._lastVerifyResult = {
         date: today,
         verifyDate: today,
-        finalVerified: nowH >= 15,  // v4.4 P32: 15:00后标记为收盘最终核实
+        finalVerified: true,
         totalHit: stats.totalHit,
         totalResolved: stats.totalResolved,
         winRate: stats.totalWinRate,
         newDays: newDays
       };
       this._saveLastResult(this._lastVerifyResult);
-
-      // v4.4 P32: 无论是否有新核实天数，都显示结果（盘中→收盘更新场景）
       this._showHomeVerifyResult(this._lastVerifyResult, newDays <= 0);
-      // v4.4 P20: 核实完成后启动自动扫描
-      this._triggerAutoScan();
+
+      // v4.4 P41: 兜底——若盘中未生成次日预测（用户未打开APP），收盘后补生成
+      if (typeof AutoScan !== 'undefined' && AutoScan._isTradingDay() && !AutoScan._hasTodayNextDay()) {
+        console.log('[AutoVerify] 收盘后兜底：次日预测不存在，补生成');
+        try { await NextDayPrediction.scan(true); } catch(e) { console.warn('[AutoVerify] 兜底scan异常:', e); }
+      }
     } catch (e) {
-      console.warn('自动核实异常，下次打开重试', e);
+      console.warn('[AutoVerify] 收盘核实异常:', e);
       this._hideVerifyingBanner();
-      // v4.4 P20: 核实失败不影响自动扫描
-      this._triggerAutoScan();
     }
   },
 
@@ -10059,25 +10161,25 @@ const AutoVerify = {
   _showHomeVerifyResult(r, fromCache) {
     const bar = document.getElementById('homeVerifyStatusBar');
     if (!bar) return;
-    // v4.4 P32: 区分盘中实时和收盘最终数据
-    const isIntraday = !r.finalVerified;
-    const tag = isIntraday ? '（盘中实时）' : '';
-    bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + r.winRate + '%</b>' + tag +
+    // v4.4 P41: 收盘核实后显示结果，不再显示"正在生成"
+    const stats = this.getStats();
+    bar.innerHTML = '✅ 昨日预测胜率 <b style="color:#00e676">' + (r.winRate != null ? r.winRate : stats.totalWinRate) + '%</b>' +
       (r.newDays > 0 ? ' · 今日新核实' + r.newDays + '个交易日' : ' · 今日已核实') +
-      ' · 正在生成明日预测...' +
       ' <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
     bar.className = 'verify-status-bar success';
     bar.style.display = '';
     bar.style.opacity = '1';
   },
 
-  /** v4.4 P36: 获取当前状态描述文本 */
+  /** v4.4 P41: 获取当前状态描述文本（反映新时序） */
   _getStatusText() {
     const now = new Date();
     const h = now.getHours(), m = now.getMinutes();
     const t = h * 60 + m;
     const isTradingDay = this._isTradingDay(now);
     const last = this._loadLastResult();
+    const today = now.toISOString().slice(0, 10);
+    const refreshBtn = ' <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
 
     if (!isTradingDay) {
       // 非交易日：找到下个交易日
@@ -10091,26 +10193,37 @@ const AutoVerify = {
     }
 
     if (t < 9 * 60 + 30) {
-      return '⏳ 开盘中，9:30后自动核实昨日预测';
+      return '⏳ 等待开盘，9:30后自动生成今日预测...';
+    }
+
+    if (t < 14 * 60 + 45) {
+      // 盘中 9:30-14:45
+      // 检查次日预测是否已存在
+      let predictionExists = false;
+      try { predictionExists = (typeof AutoScan !== 'undefined' && AutoScan._hasTodayNextDay()); } catch(e) {}
+      if (predictionExists) {
+        return '🔮 明日预测已生成 · 收盘后15:00自动核实准确率' + refreshBtn;
+      }
+      return '⏳ 开盘中，正在生成明日预测（次日榜+短线榜）...';
     }
 
     if (t < 15 * 60) {
-      // 盘中
-      if (last && last.verifyDate === new Date().toISOString().slice(0, 10)) {
-        return '✅ 昨日预测胜率 <b style="color:#00e676">' + last.winRate + '%</b>（盘中实时）';
+      // 定型窗口 14:45-15:00
+      if (this._isPredictFinalized()) {
+        return '🔮 明日预测已定型 · 收盘后15:00自动核实准确率' + refreshBtn;
       }
-      return '⏳ 开盘中，正在核实昨日预测并生成明日榜单...';
+      return '📊 临近收盘，正在用最新盘中数据定型明日预测...';
     }
 
     // 15:00后
-    if (last && last.finalVerified) {
+    if (last && last.finalVerified && last.verifyDate === today) {
       const stats = this.getStats();
-      return '✅ 昨日预测胜率 <b style="color:#00e676">' + stats.totalWinRate + '%</b> · 明日预测榜单已生成 <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
+      return '✅ 昨日预测胜率 <b style="color:#00e676">' + stats.totalWinRate + '%</b> · 明日预测已生成' + refreshBtn;
     }
-    return '⏳ 15:00后自动核实昨日预测并生成明日榜单...';
+    return '⏳ 收盘后正在核实昨日预测准确率...' + refreshBtn;
   },
 
-  /** v4.4 P36: 手动触发核实/生成 */
+  /** v4.4 P41: 手动触发——按时段执行对应动作（盘中=预测定型，收盘后=核实） */
   _manualTrigger() {
     this._done = false;
     if (typeof AutoScan !== 'undefined') {
@@ -10118,13 +10231,45 @@ const AutoVerify = {
       AutoScan._shortTermRefreshed = false;
     }
     const bar = document.getElementById('homeVerifyStatusBar');
-    if (bar) {
-      bar.innerHTML = '📊 正在手动核实/生成...';
-      bar.className = 'verify-status-bar verifying';
-      bar.style.display = '';
-      bar.style.opacity = '1';
+    const now = new Date();
+    const t = now.getHours() * 60 + now.getMinutes();
+
+    if (this._isTradingDay(now) && t >= 9 * 60 + 30 && t < 15 * 60) {
+      // 盘中：重新生成/定型预测
+      this._resetPredictFinalized();
+      if (bar) {
+        bar.innerHTML = '📊 正在重新生成/定型今日预测...';
+        bar.className = 'verify-status-bar verifying';
+        bar.style.display = '';
+        bar.style.opacity = '1';
+      }
+      this.ensurePredictionForToday().then(() => {
+        this._setPredictFinalized();
+        this._showInitialStatus();
+      }).catch(e => { console.warn('[AutoVerify] 手动定型异常:', e); this._showInitialStatus(); });
+    } else if (this._isTradingDay(now) && t >= 15 * 60) {
+      // 收盘后：重新核实
+      if (bar) {
+        bar.innerHTML = '📊 正在重新核实台账...';
+        bar.className = 'verify-status-bar verifying';
+        bar.style.display = '';
+        bar.style.opacity = '1';
+      }
+      // 重置已核实标记以允许重新核实
+      const last = this._loadLastResult();
+      if (last) { last.finalVerified = false; this._saveLastResult(last); }
+      this.runCloseVerification().then(() => {
+        this._showInitialStatus();
+      }).catch(e => { console.warn('[AutoVerify] 手动核实异常:', e); this._showInitialStatus(); });
+    } else {
+      // 非交易时段
+      if (bar) {
+        bar.innerHTML = '📅 当前非交易时段，无法操作';
+        bar.className = 'verify-status-bar';
+        bar.style.display = '';
+        bar.style.opacity = '1';
+      }
     }
-    this.silentVerify();
   },
 
   /** v4.4 P36: 初始化时显示状态条（即使未开始核实） */
@@ -10366,35 +10511,44 @@ const AutoVerify = {
     return { totalResolved, totalFailDays };
   },
 
-  /** v4.4 P34: 启动15:00自动核实调度器（每5分钟检查一次，15:00-23:00窗口内执行） */
+  /** v4.4 P41: 统一调度器（交易日9:30-23:00，每5分钟巡检，按时段分流） */
   _startScheduler() {
     if (this._schedulerInterval) return; // 避免重复启动
-    console.log('[AutoVerify] 15:00自动核实调度器已启动');
+    console.log('[AutoVerify] P41统一调度器已启动（9:30-23:00，每5分钟）');
     this._schedulerInterval = setInterval(() => {
       const now = new Date();
-      const h = now.getHours();
-      // 只在15:00-23:00窗口内检查
-      if (h < 15 || h >= 23) return;
+      const h = now.getHours(), m = now.getMinutes();
+      const t = h * 60 + m;
+
       // 非交易日不执行
       if (!this._isTradingDay(now)) return;
-      // 如果今天还未完成最终核实（15:00后的收盘核实），重新触发
-      if (!this._alreadyVerifiedToday()) {
-        console.log('[AutoVerify] 15:00已到，调度器触发最终核实...');
-        // 显示提示
-        const bar = document.getElementById('homeVerifyStatusBar');
-        if (bar) {
-          bar.innerHTML = '🕐 15:00已到，正在自动核实昨日预测并生成明日榜单...';
-          bar.className = 'verify-status-bar verifying';
-          bar.style.display = '';
-          bar.style.opacity = '1';
+      // 9:30前或23:00后不执行
+      if (t < 9 * 60 + 30 || h >= 23) return;
+
+      // 重置_done以允许执行
+      this._done = false;
+      if (typeof AutoScan !== 'undefined') {
+        AutoScan._done = false;
+        AutoScan._shortTermRefreshed = false;
+      }
+
+      if (t < 15 * 60) {
+        // 盘中(9:30-15:00)：确保预测存在 + 定型窗口检查
+        console.log('[AutoVerify] 调度器-盘中巡检');
+        this.ensurePredictionForToday();
+      } else {
+        // 收盘后(15:00-23:00)：核实
+        if (!this._alreadyVerifiedToday()) {
+          console.log('[AutoVerify] 调度器-收盘后核实');
+          const bar = document.getElementById('homeVerifyStatusBar');
+          if (bar) {
+            bar.innerHTML = '🕐 15:00已到，正在核实昨日预测准确率...';
+            bar.className = 'verify-status-bar verifying';
+            bar.style.display = '';
+            bar.style.opacity = '1';
+          }
+          this.runCloseVerification();
         }
-        // 重置 _done 标志以允许重新执行
-        this._done = false;
-        if (typeof AutoScan !== 'undefined') {
-          AutoScan._done = false;
-          AutoScan._shortTermRefreshed = false;  // v4.4 P35: 同步重置收盘刷新标志，确保15:00后能刷新短线榜
-        }
-        this.silentVerify();
       }
     }, 5 * 60 * 1000); // 每5分钟检查一次
   },
@@ -10457,48 +10611,16 @@ const AutoScan = {
     } catch (e) { return false; }
   },
 
-  /** v4.4 P30: 收盘后重新生成短线榜（用收盘价替代盘中数据） */
+  /** v4.4 P41: 已废弃——收盘后不再重新生成短线预测快照（预测已在盘中定型）
+   *  保留方法签名兼容，但内部为空操作 */
   async _refreshShortTermAfterClose() {
-    if (this._shortTermRefreshed) return;
-    if (!this._isAfterClose()) return;
-    if (this._hasTodayAfterCloseSnapshot()) {
-      console.log('[AutoScan] 今日短线榜已是收盘后数据，跳过刷新');
-      this._shortTermRefreshed = true;
-      return;
-    }
-    if (typeof App === 'undefined' || !App.loadHotStocks) return;
-
-    try {
-      this._shortTermRefreshed = true;
-      console.log('[AutoScan] 15:00后重新生成短线榜（收盘价数据）...');
-      const bar = document.getElementById('homeVerifyStatusBar');
-      if (bar) {
-        bar.innerHTML = '📊 正在更新短线榜（收盘价数据）...';
-        bar.className = 'verify-status-bar auto-scanning';
-        bar.style.display = '';
-        bar.style.opacity = '1';
-      }
-      await App.loadHotStocks();
-      // 刷新完成后更新状态条
-      if (bar) {
-        const ndCount = this._countTodayStocks();
-        const stCount = (ShortTermLedger._loadSnapshots().find(s => s.date === ShortTermLedger._todayStr()) || {}).stocks || [];
-        let msg = '✅ 明日预测TOP' + ndCount + '已生成 · 短线榜已更新（收盘价）';
-        bar.innerHTML = msg;
-        bar.className = 'verify-status-bar success';
-        bar.style.display = '';
-        bar.style.opacity = '1';
-      }
-      console.log('[AutoScan] 短线榜收盘后刷新完成');
-    } catch (e) {
-      console.warn('[AutoScan] 短线榜刷新失败:', e);
-    }
+    console.log('[AutoScan] P41: _refreshShortTermAfterClose 已废弃，跳过');
+    this._shortTermRefreshed = true;
   },
 
-  /** 启动自动扫描（由 AutoVerify 核实完成后回调）
-   *  顺序：先核实昨日 → 再生成次日榜单 → 刷新短线榜（收盘价）
-   *  v4.4 P26b: 15:00后生成的是"明日预测"
-   *  v4.4 P30: 15:00后同时刷新短线榜（用收盘价替代盘中数据）
+  /** v4.4 P41: 启动自动扫描（仅在盘中被调用，收盘后不再生成预测）
+   *  盘中：确保次日预测存在
+   *  收盘后：不做任何事（预测已在盘中完成，核实由runCloseVerification负责）
    */
   async startAfterVerify() {
     if (this._done) return;
@@ -10509,7 +10631,13 @@ const AutoScan = {
       return;
     }
 
-    // v4.4 P27: 周末不生成次日预测榜单（次日非交易日，无"次日走势"可言）
+    // v4.4 P41: 收盘后不再触发扫描和短线刷新（预测已在盘中完成）
+    if (this._isAfterClose()) {
+      console.log('[AutoScan] P41: 收盘后不再生成预测，跳过');
+      return;
+    }
+
+    // v4.4 P27: 周末不生成次日预测榜单
     if (!this._isTradingDay()) {
       console.log('[AutoScan] 非交易日（周末），跳过次日预测扫描');
       this._showWeekendBanner();
@@ -10519,12 +10647,6 @@ const AutoScan = {
     // 当前目标交易日已有榜单，不重复扫描
     if (this._hasTodayNextDay()) {
       console.log('[AutoScan] 目标交易日榜单已存在，跳过扫描');
-      // v4.4 P26b: 收盘后打开APP，显示已生成的提示
-      if (this._isAfterClose()) {
-        this._showAlreadyGeneratedBanner();
-      }
-      // v4.4 P30: 即使次日榜已存在，也要刷新短线榜（收盘价）
-      await this._refreshShortTermAfterClose();
       return;
     }
 
@@ -10536,7 +10658,6 @@ const AutoScan = {
       const result = await NextDayPrediction.scan(true); // silent模式
 
       if (result === false) {
-        // 极端市不出榜的情况
         this._showScanResultBanner(0, true);
       } else {
         const count = this._countTodayStocks();
@@ -10548,9 +10669,6 @@ const AutoScan = {
     } finally {
       this._scanning = false;
     }
-
-    // v4.4 P30: 次日榜扫描完成后，刷新短线榜（收盘价数据）
-    await this._refreshShortTermAfterClose();
   },
 
   _countTodayStocks() {
@@ -10841,13 +10959,13 @@ const HomeLedger = {
     this.render();
   },
 
-  /** 从首页台账发起批量核实 */
+  /** 从首页台账发起批量核实（v4.4 P41: 使用runCloseVerification） */
   async verifyAllFromHome() {
     const container = document.getElementById('homeLedgerBody');
     if (container) container.innerHTML = '<div class="loading-pulse">正在核实所有待核实数据...</div>';
-    // 复用 AutoVerify 逻辑
+    // v4.4 P41: 直接使用runCloseVerification，不再走silentVerify分发
     AutoVerify._done = false;
-    await AutoVerify.silentVerify();
+    await AutoVerify.runCloseVerification();
     this.render();
     Utils.toast ? Utils.toast('核实完成') : null;
   },
