@@ -47,7 +47,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v4.4-p41',
+  VERSION: 'v5.0',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -2951,13 +2951,23 @@ const DataAPI = {
     }
   },
 
+  /** v5.0: 板块黑名单关键词（命中即剔除，含"融资融券""两融"等） */
+  _EXCLUDED_BOARD_KEYWORDS: ['融资融券', '两融'],
+
+  /** v5.0: 判断板块名称是否命中黑名单 */
+  _isExcludedBoard(name) {
+    if (!name) return false;
+    return this._EXCLUDED_BOARD_KEYWORDS.some(kw => name.includes(kw));
+  },
+
   /** 获取板块排行（行业板块 m:90+t:2，按涨幅排序） */
   async fetchSectorRank(topN = 10) {
     const cacheKey = 'sectorRank_industry_' + topN;
     const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
     try {
-      const queryStr = `fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
+      const fetchCount = topN + 5;
+      const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
       const json = await this._fetchEMClist(queryStr);
       if (!json) {
         console.warn('fetchSectorRank 所有通道失败');
@@ -2971,7 +2981,7 @@ const DataAPI = {
         turnoverPct: parseFloat(item.f8) || 0,
         upCount: parseInt(item.f104) || 0,
         downCount: parseInt(item.f105) || 0,
-      })).filter(s => s.code && s.name);
+      })).filter(s => s.code && s.name && !this._isExcludedBoard(s.name)).slice(0, topN);
       this._cacheSet(cacheKey, 'sectorRank', result);
       return result;
     } catch (e) {
@@ -2986,7 +2996,8 @@ const DataAPI = {
     const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
     try {
-      const queryStr = `fid=f3&po=1&pz=${topN}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
+      const fetchCount = topN + 5;
+      const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
       const json = await this._fetchEMClist(queryStr);
       if (!json) return [];
       const result = json.data.diff.map(item => ({
@@ -2997,7 +3008,7 @@ const DataAPI = {
         turnoverPct: parseFloat(item.f8) || 0,
         upCount: parseInt(item.f104) || 0,
         downCount: parseInt(item.f105) || 0,
-      })).filter(s => s.code && s.name);
+      })).filter(s => s.code && s.name && !this._isExcludedBoard(s.name)).slice(0, topN);
       this._cacheSet(cacheKey, 'sectorRank', result);
       return result;
     } catch (e) {
