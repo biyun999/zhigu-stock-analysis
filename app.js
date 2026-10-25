@@ -1,30 +1,5 @@
 /**
- * 智股分析 v4.4 - P21 全维度风险雷达模块（财务/资金/价格/合规四维评分+自选股风险扫描+榜单风险徽标）
- * v4.4-P21: 全维度风险雷达——四大维度100分制评估(财务运营/资金交易/价格趋势/合规基本面)+Canvas雷达图+自选股风险扫描+榜单风险徽标
- * v4.4-P20: 每日打开APP自动扫描次日预测榜单+自动核实联动调度+设置页开关+个股长期趋势研判（均线系统+长期评分+关键价位）
- * v4.4-P17: 巴菲特价值评分系统 + 全市场价值扫描TOP20 + 长期持有股票池 + 24小时自动刷新
- * v4.4-P11: 每日自动核实（打开APP静默补核实昨日及更早数据）+ 首页台账Tab前置 + 批量导出股票代码/名称
- * v4.4-P9: 跨设备授权管理系统（设备指纹+加密迁移+多设备管理）
- * v4.3-fix: 修复行业/资金流数据源，改用clist API+topStocks双源兜底，确保f100/f62字段可用
- * v4.4-P1: 资金加速度因子+筹码结构因子
- * v4.4-P2: 多源资金交叉验证+龙虎榜一致性+数据可信度评分
- * v4.4-P3: 板块持续性过滤+大盘情绪细化(涨停数+量能变化)
- * v4.4-P4: 历史验证台账+档位胜率统计+历史排名可查询
- * v4.4-P6b: 短线台账日期列表可展开查看TOP10明细，热门板块标签展示
- * v4.4-P9: 跨设备授权管理系统——
- *          1) 设备指纹：UUID v4 唯一标识，设备类型/浏览器/激活时间采集
- *          2) 设备管理：5台设备上限，可重命名/撤销，当前设备高亮
- *          3) 授权迁移：AES-256-GCM 加密导出，Base64文本迁移码，24小时有效期
- *          4) 激活增强：新设备激活时检查设备数上限，超限提示撤销旧设备
- *          5) 纯前端实现：Web Crypto API + localStorage，零后端依赖
- * v4.4-P8: 六维模型因子增强——
- *          1) 筹码结构：集中度90/70、平均成本偏离度、获利比例精细化
- *          2) 资金分层：超大单/大单/中单/小单分层分析、主力结构纯度
- *          3) 技术指标：BOLL带位置、CCI、DMI趋势强度（前端计算）
- *          4) 反转校准：基于Skill研究验证短期均值回归效应，校准动量类因子权重
- *          5) 龙虎榜强化：机构席位净买入比例、三日榜持续性
- *          总分保持100分制，阈值80/65/50不变
- * v4.1 - 次日上涨概率模型v2六维升级(资金持续性/量价动能/趋势技术/位置动量/板块共振/龙虎榜催化+大盘情绪±10)+次日TOP20移至首页双Tab并列
+ * 智股分析 v2.0 - A股七维度智能分析系统
  * 纯前端JavaScript，零Token消耗，不调用任何LLM API
  * 
  * 模块结构：
@@ -47,31 +22,17 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.0',
+  VERSION: 'v5.1',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
   TENCENT_KLINE: 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get',
   // 东方财富搜索API
   EM_SEARCH: 'https://searchapi.eastmoney.com/api/suggest/get',
-  // 腾讯智能搜索API（备用，JSONP方式返回v_hint变量）
-  TENCENT_SEARCH: 'https://smartbox.gtimg.cn/s3/',
-  // 东方财富资金流向API（多通道容灾，按优先级排列）
-  EM_CAPITAL_CHANNELS: [
-    'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
-    'https://82.push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
-    'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get'
-  ],
+  // 东方财富资金流向API
   EM_CAPITAL: 'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
   // 东方财富财务数据API
   EM_FINANCE: 'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get',
-  // 东方财富实时行情API（北交所备用）
-  EM_QUOTE: 'https://push2.eastmoney.com/api/qt/stock/get',
-  // 东方财富clist系列API多通道（板块/排行/成分股，主域+延时备份域）
-  EM_CLIST_CHANNELS: [
-    'https://push2.eastmoney.com/api/qt/clist/get',
-    'https://push2delay.eastmoney.com/api/qt/clist/get'
-  ],
   // 东方财富公告API
   EM_NEWS: 'https://np-anotice-stock.eastmoney.com/api/security/ann',
   // 全球市场指数代码
@@ -131,167 +92,6 @@ const CONFIG = {
     'sh600519': { name: '白酒', type: '消费' },
     'sz000858': { name: '白酒', type: '消费' },
     'sz000568': { name: '白酒', type: '消费' },
-    'sh601318': { name: '保险', type: '金融' },
-    'sh600036': { name: '银行', type: '金融' },
-    'sh601166': { name: '银行', type: '金融' },
-    'sh601398': { name: '银行', type: '金融' },
-    'sh601288': { name: '银行', type: '金融' },
-    'sh600030': { name: '券商', type: '金融' },
-    'sh601688': { name: '券商', type: '金融' },
-    'sz000333': { name: '家电', type: '消费' },
-    'sz000651': { name: '家电', type: '消费' },
-    'sz002594': { name: '新能源汽车', type: '科技' },
-    'sz300750': { name: '锂电池', type: '新能源' },
-    'sh601888': { name: '旅游', type: '消费' },
-    'sh600276': { name: '医药', type: '医疗' },
-    'sh600887': { name: '乳制品', type: '消费' },
-    'sh601857': { name: '石油石化', type: '能源' },
-    'sh600028': { name: '石油石化', type: '能源' },
-    'sh601628': { name: '保险', type: '金融' },
-    'sz002475': { name: '消费电子', type: '科技' },
-    'sh688981': { name: '半导体', type: '科技' },
-    'sz002415': { name: '安防', type: '科技' },
-    'sh601899': { name: '有色金属', type: '周期' },
-    'sz002714': { name: '畜牧', type: '农业' },
-    'sh600309': { name: '化工', type: '周期' },
-    'sz002352': { name: '快递物流', type: '服务' },
-    'sh603288': { name: '调味品', type: '消费' },
-    'sh601225': { name: '钢铁', type: '周期' },
-    'sh600104': { name: '汽车', type: '制造' },
-    'sz000725': { name: '面板', type: '科技' },
-    'sh601919': { name: '航运', type: '服务' },
-    'sh600690': { name: '家电', type: '消费' },
-    'sz002230': { name: '教育', type: '服务' },
-    'sz002304': { name: '白酒', type: '消费' },
-    'sz002032': { name: '家电', type: '消费' },
-    'sh600346': { name: '化工', type: '周期' },
-    'sz300015': { name: '医疗服务', type: '医疗' },
-    'sh600436': { name: '中药', type: '医疗' },
-    'sz002007': { name: '影视传媒', type: '服务' },
-    'sh603517': { name: '食品饮料', type: '消费' },
-    'sz300059': { name: '互联网金融', type: '金融' },
-    'sh600660': { name: '玻璃', type: '制造' },
-    'sz002607': { name: '传媒', type: '服务' },
-    'sh601816': { name: '铁路', type: '服务' },
-    'sz300760': { name: '医疗器械', type: '医疗' },
-    'sh688012': { name: '半导体设备', type: '科技' },
-    'sh600048': { name: '房地产', type: '地产' },
-    'sz000002': { name: '房地产', type: '地产' },
-    'sh601668': { name: '建筑', type: '基建' },
-    'sz000001': { name: '银行', type: '金融' },
-    'sh600000': { name: '银行', type: '金融' },
-    'sz002271': { name: '防水建材', type: '制造' },
-    'sh601877': { name: '电器', type: '制造' },
-    'sz002049': { name: '芯片', type: '科技' },
-    'sh600763': { name: '中药', type: '医疗' },
-    'sz002142': { name: '银行', type: '金融' },
-    'sz002601': { name: '钛白粉', type: '周期' },
-    'sh600703': { name: '光伏', type: '新能源' },
-    'sz000100': { name: '面板', type: '科技' },
-    'sh601111': { name: '航空', type: '服务' },
-    'sh600031': { name: '工程机械', type: '制造' },
-    'sz002241': { name: '电子制造', type: '科技' },
-    'sh600745': { name: '手机ODM', type: '科技' },
-    'sz300124': { name: '工控自动化', type: '制造' },
-    'sh600588': { name: '用友网络', type: '科技' },
-    'sz002050': { name: '制冷元器件', type: '制造' },
-    'sh601633': { name: '汽车', type: '制造' },
-    'sz002841': { name: '消费电子', type: '科技' },
-    'sh600406': { name: '电力设备', type: '制造' },
-    'sz300274': { name: '光伏逆变器', type: '新能源' },
-    'sh601601': { name: '保险', type: '金融' },
-    'sz002938': { name: '电子电路', type: '科技' },
-    'sh600183': { name: '覆铜板', type: '科技' },
-    'sz002607': { name: '传媒', type: '服务' },
-    'sh600741': { name: '汽车零部件', type: '制造' },
-    // 北交所行业
-    'bj832727': { name: '数据服务', type: '科技' },
-    'bj835185': { name: '锂电负极', type: '新能源' },
-    'bj835368': { name: '光伏设备', type: '新能源' },
-    'bj832982': { name: '医美', type: '医疗' },
-    'bj872808': { name: '数据中心', type: '科技' },
-    'bj836247': { name: '电力设备', type: '新能源' },
-    'bj834599': { name: '矿用车', type: '制造' },
-    'bj833575': { name: '生物制品', type: '医疗' },
-    'bj835305': { name: '大数据', type: '科技' },
-    'bj830799': { name: '金融科技', type: '科技' },
-    'sh601088': { name: '煤炭', type: '能源' },
-    'sh600900': { name: '电力', type: '能源' },
-    'sh601012': { name: '光伏', type: '新能源' },
-    'sh600585': { name: '水泥', type: '周期' },
-    'sh600438': { name: '光伏', type: '新能源' },
-    'sz300014': { name: '锂电池', type: '新能源' },
-    'sz002709': { name: '化工', type: '周期' },
-    'sz300122': { name: '生物制品', type: '医疗' },
-    'sz300347': { name: 'CRO', type: '医疗' },
-    'sz000538': { name: '中药', type: '医疗' },
-    'sh603259': { name: 'CXO', type: '医疗' },
-    'sh603501': { name: '芯片', type: '科技' },
-    'sz002371': { name: '半导体设备', type: '科技' },
-    'sz300136': { name: '通信', type: '科技' },
-    'sh600600': { name: '啤酒', type: '消费' },
-    'sh603345': { name: '速冻食品', type: '消费' },
-    'sz002507': { name: '调味品', type: '消费' },
-    'sz002142': { name: '银行', type: '金融' },
-    'sh601601': { name: '保险', type: '金融' },
-    'sz300059': { name: '互联网金融', type: '金融' },
-    'sz000100': { name: '面板', type: '科技' },
-    'sh600703': { name: '光伏', type: '新能源' },
-    'sz300274': { name: '光伏逆变器', type: '新能源' },
-    'sh601877': { name: '电器', type: '制造' },
-    'sz002049': { name: '芯片', type: '科技' },
-    'sh688012': { name: '半导体设备', type: '科技' },
-    'sh600588': { name: '软件', type: '科技' },
-    'sz002841': { name: '消费电子', type: '科技' },
-    'sh600183': { name: '覆铜板', type: '科技' },
-    'sz002938': { name: '电子电路', type: '科技' },
-    'sh601633': { name: '汽车', type: '制造' },
-    'sz300124': { name: '工控自动化', type: '制造' },
-    'sh600406': { name: '电力设备', type: '制造' },
-    'sh601111': { name: '航空', type: '服务' },
-    'sz002601': { name: '钛白粉', type: '周期' },
-    'sh600745': { name: '手机ODM', type: '科技' },
-    'sz002241': { name: '电子制造', type: '科技' },
-    'sh600031': { name: '工程机械', type: '制造' },
-    'sz002050': { name: '制冷元器件', type: '制造' },
-    'sh600741': { name: '汽车零部件', type: '制造' },
-    'sz300015': { name: '医疗服务', type: '医疗' },
-    'sh600763': { name: '中药', type: '医疗' },
-    'sz002607': { name: '传媒', type: '服务' },
-    'sh600660': { name: '玻璃', type: '制造' },
-    'sz002271': { name: '防水建材', type: '制造' },
-    'sz000002': { name: '房地产', type: '地产' },
-    'sh600048': { name: '房地产', type: '地产' },
-    'sh601668': { name: '建筑', type: '基建' },
-    'sz000001': { name: '银行', type: '金融' },
-    'sh600000': { name: '银行', type: '金融' },
-    'sh601816': { name: '铁路', type: '服务' },
-    'sh601919': { name: '航运', type: '服务' },
-    'sz002230': { name: '教育', type: '服务' },
-    'sz002007': { name: '影视传媒', type: '服务' },
-    'sh603517': { name: '食品饮料', type: '消费' },
-    'sz300059': { name: '互联网金融', type: '金融' },
-    'sh601225': { name: '钢铁', type: '周期' },
-    'sh600104': { name: '汽车', type: '制造' },
-    'sz000725': { name: '面板', type: '科技' },
-    'sh600690': { name: '家电', type: '消费' },
-    'sz002304': { name: '白酒', type: '消费' },
-    'sz002032': { name: '家电', type: '消费' },
-    'sh600346': { name: '化工', type: '周期' },
-    'sh600436': { name: '中药', type: '医疗' },
-    'sz300760': { name: '医疗器械', type: '医疗' },
-    'sh601601': { name: '保险', type: '金融' },
-    'sz300750': { name: '锂电池', type: '新能源' },
-    'sz002594': { name: '新能源汽车', type: '科技' },
-    'sh688981': { name: '半导体', type: '科技' },
-    'sz002415': { name: '安防', type: '科技' },
-    'sh601899': { name: '有色金属', type: '周期' },
-    'sz002714': { name: '畜牧', type: '农业' },
-    'sh600309': { name: '化工', type: '周期' },
-    'sz002352': { name: '快递物流', type: '服务' },
-    'sh603288': { name: '调味品', type: '消费' },
-    'sz000333': { name: '家电', type: '消费' },
-    'sz000651': { name: '家电', type: '消费' },
     'sh601318': { name: '保险', type: '金融' },
     'sh600036': { name: '银行', type: '金融' },
     'sh601166': { name: '银行', type: '金融' },
@@ -8311,10 +8111,10 @@ const NextDayPrediction = {
       ? '<div style="font-size:11px;color:var(--text-secondary);margin:2px 0 8px">🌡️ 大盘情绪：' + snapshot.marketTag
         + (snapshot.marketAdjust ? '（全局' + (snapshot.marketAdjust > 0 ? '+' : '') + snapshot.marketAdjust + '分）' : '') + '</div>'
       : '';
-    // v4.4 P27: 区分数据基准日和预测目标日
+    // v5.1: 统一措辞——预测基准日 + 次日核实目标日
     const dateLabel = snapshot.baseDate
-      ? '📅 数据基准日：' + snapshot.baseDate + '（盘后） · 预测目标：' + snapshot.date
-      : '📅 数据基准日：' + snapshot.date + '（盘后）';
+      ? '📅 预测基准日 ' + snapshot.baseDate + ' · 次日(' + snapshot.date + ')核实'
+      : '📅 预测基准日 ' + snapshot.date + '（盘后）';
     let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' + dateLabel + ' · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
     html += mktLine;
     html += '<div class="hot-stocks-list">';
@@ -8592,7 +8392,7 @@ const NextDayPrediction = {
     let totalHit = 0, totalResolved = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
-      const displayDate = target.baseDate ? target.baseDate + '→' + target.date : target.date;
+      const displayDate = target.baseDate ? target.baseDate + '→' + target.date : ('→' + target.date);
       body.innerHTML = '<div class="loading-pulse">核实中：' + displayDate + '（' + (si + 1) + '/' + pending.length + '）</div>';
       let hit = 0, resolved = 0;
       const batchSize = 10;
@@ -8709,6 +8509,8 @@ const NextDayPrediction = {
     html += '<button onclick="event.stopPropagation();NextDayPrediction.closeLedger();NextDayPrediction.showModelDiagnostic()" style="padding:4px 8px;font-size:11px;background:rgba(255,213,79,0.12);border:1px solid rgba(255,213,79,0.3);color:#ffd54f;border-radius:4px;cursor:pointer">🔬 模型诊断</button>';
     html += '<button class="modal-close" onclick="NextDayPrediction.closeLedger()">✕</button>';
     html += '</div></div>';
+    // v5.1: 副标题说明图标含义
+    html += '<div style="font-size:11px;color:var(--text-muted);padding:0 16px 4px;text-align:center">🔮=预测基准日 🎯=次日准确率核实日</div>';
     // Tab 切换
     html += '<div class="ledger-tabs">';
     html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="NextDayPrediction.switchLedgerTab(\'verify\')">📈 胜率统计</div>';
@@ -8774,9 +8576,15 @@ const NextDayPrediction = {
       const wr = s.winRate || 0;
       const total = s.resolvedCount || (s.stocks ? s.stocks.length : 0);
       html += '<div class="ledger-item" onclick="NextDayPrediction._showSnapshotFromLedger(' + idx + ')">';
-      // v4.4 P27: 显示数据基准日和预测目标日
-      const dateDisplay = s.baseDate ? s.baseDate + '→' + s.date : s.date;
-      html += '<div class="ledger-date">' + dateDisplay + '</div>';
+      // v5.1: 统一日期标注——预测基准日 + 核实目标日
+      const _ndBase = s.baseDate || '';
+      const _ndTarget = s.date;
+      html += '<div class="ledger-date nd-ledger-dates">';
+      if (_ndBase) {
+        html += '<div class="nd-date-predict">🔮 预测 ' + _ndBase.slice(5) + '</div>';
+      }
+      html += '<div class="nd-date-verify">🎯 核实 ' + _ndTarget.slice(5) + '</div>';
+      html += '</div>';
       html += '<div class="ledger-info">';
       html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
       if (s.marketTag) html += '<span class="ledger-tag">🌡 ' + s.marketTag + '</span>';
@@ -9442,6 +9250,22 @@ const ShortTermLedger = {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
   },
+  /** v5.1: 获取快照的预测基准日（选股日） */
+  _getBaseDate(snap) {
+    return snap.baseDate || snap.date || '';
+  },
+  /** v5.1: 获取快照的核实目标日（下一交易日） */
+  _getTargetDate(snap) {
+    if (snap.targetDate) return snap.targetDate;
+    const base = this._getBaseDate(snap);
+    if (!base) return '';
+    try {
+      if (typeof NextDayPrediction !== 'undefined' && NextDayPrediction._nextTradingDayStr) {
+        return NextDayPrediction._nextTradingDayStr(base);
+      }
+    } catch (e) { /* 降级返回空 */ }
+    return '';
+  },
 
   // ---------- 保存当日快照 ----------
   saveSnapshot(topStocks, topSectors, fallbackMode, afterClose) {
@@ -9466,6 +9290,8 @@ const ShortTermLedger = {
     }));
     const snapshot = {
       date: today,
+      baseDate: today,
+      targetDate: (typeof NextDayPrediction !== 'undefined' && NextDayPrediction._nextTradingDayStr) ? NextDayPrediction._nextTradingDayStr(today) : '',
       ts: Date.now(),
       topSectors: topSectors || [],
       fallbackMode: fallbackMode || 'normal',
@@ -9529,6 +9355,8 @@ const ShortTermLedger = {
     html += '<span>📊 短线潜力历史台账</span>';
     html += '<button class="modal-close" onclick="ShortTermLedger.closeLedger()">✕</button>';
     html += '</div>';
+    // v5.1: 副标题说明图标含义
+    html += '<div style="font-size:11px;color:var(--text-muted);padding:0 16px 4px;text-align:center">🔮=预测基准日 🎯=次日准确率核实日</div>';
     html += '<div class="ledger-tabs">';
     html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'verify\')">📈 胜率统计</div>';
     html += '<div class="ledger-tab' + (tab === 'stock' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'stock\')">🔍 单股回溯</div>';
@@ -9599,7 +9427,13 @@ const ShortTermLedger = {
 
       html += '<div class="ledger-item st-ledger-item' + (isExpanded ? ' expanded' : '') + '" onclick="ShortTermLedger._showSnapshotDetail(' + idx + ')">';
       html += '<div class="st-ledger-item-main">';
-      html += '<div class="ledger-date">' + s.date + '</div>';
+      // v5.1: 统一日期标注——预测基准日 + 核实目标日
+      const _stBase = this._getBaseDate(s);
+      const _stTarget = this._getTargetDate(s);
+      html += '<div class="ledger-date st-ledger-dates">';
+      html += '<div class="st-date-predict">🔮 预测 ' + (_stBase ? _stBase.slice(5) : s.date.slice(5)) + '</div>';
+      if (_stTarget) { html += '<div class="st-date-verify">🎯 核实 ' + _stTarget.slice(5) + '</div>'; }
+      html += '</div>';
       html += '<div class="ledger-info">';
       html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
       if (s.fallbackMode && s.fallbackMode !== 'normal') {
@@ -9621,7 +9455,7 @@ const ShortTermLedger = {
       if (isExpanded) {
         html += '<div class="st-ledger-detail">';
         html += '<div class="st-ledger-detail-header">';
-        html += '<span class="st-ledger-detail-date">📅 ' + s.date + ' TOP10 完整榜单</span>';
+        html += '<span class="st-ledger-detail-date">📅 预测基准日 ' + this._getBaseDate(s) + ' · 次日(' + (this._getTargetDate(s) || '?') + ')核实 TOP10 完整榜单</span>';
         if (s.topSectors && s.topSectors.length > 0) {
           const allSectors = s.topSectors.map(sec => {
             const name = typeof sec === 'string' ? sec : (sec.name || sec);
@@ -9851,7 +9685,13 @@ const ShortTermLedger = {
   async verifyAllPending() {
     const snaps = this._loadSnapshots();
     const today = this._todayStr();
-    const pending = snaps.filter(s => s.verified !== true && s.date < today);
+    // v5.1: 基于目标日判断是否可核实（目标日未到则不核实）
+    const pending = snaps.filter(s => {
+      if (s.verified === true) return false;
+      const td = this._getTargetDate(s);
+      if (td) return td < today;
+      return s.date < today; // 旧快照兜底
+    });
     if (pending.length === 0) {
       Utils.toast ? Utils.toast('暂无待核实的快照') : null;
       return;
@@ -9863,7 +9703,11 @@ const ShortTermLedger = {
     let totalHit = 0, totalResolved = 0, failDays = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
-      if (container) container.innerHTML = '<div class="loading-pulse">核实中：' + target.date + '（' + (si + 1) + '/' + pending.length + '）</div>';
+      // v5.1: 显示基准→目标日期
+      const _vBase = this._getBaseDate(target);
+      const _vTarget = this._getTargetDate(target);
+      const _vLabel = _vTarget ? (_vBase + '→' + _vTarget) : target.date;
+      if (container) container.innerHTML = '<div class="loading-pulse">核实中：' + _vLabel + '（' + (si + 1) + '/' + pending.length + '）</div>';
       let hit = 0, resolved = 0;
       const list = target.stocks || [];
       const batchSize = 8;
@@ -9877,15 +9721,24 @@ const ShortTermLedger = {
               if (klines && klines.length > 0) {
                 // v4.4 P31: 标准化K线日期格式
                 for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-                const next = klines.find(k => k.date > target.date);
-                if (next) {
-                  const base = klines.filter(k => k.date <= target.date).pop();
-                  if (base && base.close > 0) {
-                    s.nextChangePct = (next.close - base.close) / base.close * 100;
-                    s.verified = true;
-                    resolved++;
-                    if (s.nextChangePct > 0) hit++;
-                  }
+                // v5.1: 优先精确匹配目标日，回退到 >baseDate 逻辑
+                const baseDate = this._getBaseDate(target) || target.date;
+                const targetDate = this._getTargetDate(target);
+                let next, base;
+                if (targetDate) {
+                  next = klines.find(k => k.date === targetDate);
+                  base = klines.find(k => k.date === baseDate) || klines.filter(k => k.date <= baseDate).pop();
+                }
+                if (!next) {
+                  // 回退：找 baseDate 之后的第一根K线
+                  next = klines.find(k => k.date > baseDate);
+                  base = base || klines.filter(k => k.date <= baseDate).pop();
+                }
+                if (next && base && base.close > 0) {
+                  s.nextChangePct = (next.close - base.close) / base.close * 100;
+                  s.verified = true;
+                  resolved++;
+                  if (s.nextChangePct > 0) hit++;
                 }
               }
             }
@@ -10323,8 +10176,10 @@ const AutoVerify = {
       .map(s => ({ ...s, _type: 'nextday' }));
     const stSnaps = (typeof ShortTermLedger !== 'undefined' ? ShortTermLedger._loadSnapshots() : [])
       .map(s => ({ ...s, _type: 'shortterm' }));
-    // v4.4 P28: 过滤掉周末的快照（只统计交易日数据）
-    const all = [...ndSnaps, ...stSnaps].filter(s => !this._isWeekendDate(s.date));
+    // v5.1: 统一用"预测基准日"做去重和排序，修复两榜日期口径错位一天的问题
+    const _getBase = (s) => s.baseDate || s.date || '';
+    const all = [...ndSnaps, ...stSnaps].map(s => ({ ...s, _baseDate: _getBase(s) }))
+      .filter(s => !this._isWeekendDate(s._baseDate));
     const verified = all.filter(s => s.verified === true);
 
     // 累计
@@ -10332,12 +10187,12 @@ const AutoVerify = {
     const totalResolved = verified.reduce((sum, s) => sum + (s.resolvedCount || 0), 0);
     const totalWinRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
 
-    // 去重交易日数（同日可能有次日+短线两条）
-    const uniqueDays = new Set(verified.map(s => s.date)).size;
+    // v5.1: 去重基于预测基准日_baseDate（同日次日+短线只算一天）
+    const uniqueDays = new Set(verified.map(s => s._baseDate)).size;
 
-    // 按日期倒序排列，取最近的
+    // v5.1: 按预测基准日倒序排列
     const sorted = [...verified];
-    sorted.sort((a, b) => b.date.localeCompare(a.date));
+    sorted.sort((a, b) => b._baseDate.localeCompare(a._baseDate));
 
     // 近7日/近30日（基于交易日数量，不是自然日）
     const pickWeighted = (days) => {
@@ -10359,7 +10214,7 @@ const AutoVerify = {
           best = s;
         }
       }
-      bestDay = { date: best.date, winRate: best.winRate, hitCount: best.hitCount, resolvedCount: best.resolvedCount };
+      bestDay = { date: best._baseDate, winRate: best.winRate, hitCount: best.hitCount, resolvedCount: best.resolvedCount };
     }
 
     return {

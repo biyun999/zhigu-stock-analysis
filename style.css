@@ -6073,3 +6073,23 @@ body {
 .st-auto-refresh-info .st-ar-status {
   opacity: 0.6;
 }
+
+/* v5.1: 台账两行日期标注样式 */
+.st-ledger-dates, .nd-ledger-dates {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 72px;
+}
+.st-date-predict, .nd-date-predict {
+  font-size: 12px;
+  color: var(--text-primary, #e0e0e0);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.st-date-verify, .nd-date-verify {
+  font-size: 11px;
+  color: var(--text-muted, #6b7280);
+  line-height: 1.4;
+  white-space: nowrap;
+}
