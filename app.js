@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.1',
+  VERSION: 'v5.2',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -10733,7 +10733,14 @@ const HomeLedger = {
 
     let html = '';
 
-    // v4.4 P25: 准确率总览卡片已从首页移除（保留台账页面详细统计）
+    // v5.2: 准确率总览卡片
+    html += this._renderAccuracyCard();
+
+    // v5.2: 两个完整台账入口按钮
+    html += '<div style="display:flex;gap:8px;margin:10px 0">';
+    html += '<button class="btn-primary" onclick="NextDayPrediction.showLedger()" style="flex:1;font-size:12px;padding:10px;background:rgba(0,212,255,0.12);border:1px solid rgba(0,212,255,0.4);color:#00d4ff">🎯 次日完整台账</button>';
+    html += '<button class="btn-primary" onclick="ShortTermLedger.showLedger()" style="flex:1;font-size:12px;padding:10px;background:rgba(255,193,7,0.12);border:1px solid rgba(255,193,7,0.4);color:#ffc107">⚡ 短线完整台账</button>';
+    html += '</div>';
 
     // 筛选Tab
     html += '<div class="toplist-tabs" style="margin-bottom:10px">';
@@ -12477,7 +12484,7 @@ const App = {
     } catch(e) {}
 
     container.innerHTML = `
-      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks();App._lastRefreshTime=new Date();App._updateAutoRefreshInfo()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${stWinRateHtml}<span id="st-auto-refresh-info" class="st-auto-refresh-info"></span></div>
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks();App._lastRefreshTime=new Date();App._updateAutoRefreshInfo()">🔄 刷新</button> <button class="st-ledger-btn" onclick="App.switchMainTab('ledger')">🎯 准确率</button>${stWinRateHtml}<span id="st-auto-refresh-info" class="st-auto-refresh-info"></span></div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${sortBarHtml}
       ${stockHtml}
