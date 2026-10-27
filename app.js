@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.4',
+  VERSION: 'v5.5',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -6724,7 +6724,7 @@ const NextDayPrediction = {
   },
 
   // ---------- 入口：扫描 ----------
-  async scan(silent = false) {
+  async scan(silent = false, baseDate) {
     if (this.scanning) return;
     this.scanning = true;
     const body = document.getElementById('nextDayBody');
@@ -6947,10 +6947,10 @@ const NextDayPrediction = {
       }
 
       // v4.4 P27: 快照date使用下一个交易日（预测目标日），周五生成的是下周一预测
-      const targetDate = this._nextTradingDayStr();
+      const base = baseDate || this._todayStr(); const targetDate = this._nextTradingDayStr(base);
       const snapshot = {
         date: targetDate,
-        baseDate: this._todayStr(),  // v4.4 P27: 数据基准日（实际扫描日）
+        baseDate: base,  // v4.4 P27: 数据基准日（实际扫描日）
         ts: Date.now(),
         marketTag: mkt.tag,
         marketAdjust: mkt.adjust,
@@ -6960,7 +6960,7 @@ const NextDayPrediction = {
         limitDownCount,
         stocks: finalList
       };
-      const snaps = this._loadSnapshots().filter(x => x.date !== snapshot.date);
+      const snaps = this._loadSnapshots().filter(x => x.date !== snapshot.date && x.baseDate !== base);
       snaps.unshift(snapshot);
       this._saveSnapshots(snaps);
 
@@ -9268,8 +9268,8 @@ const ShortTermLedger = {
   },
 
   // ---------- 保存当日快照 ----------
-  saveSnapshot(topStocks, topSectors, fallbackMode, afterClose) {
-    const today = this._todayStr();
+  saveSnapshot(topStocks, topSectors, fallbackMode, afterClose, baseDate) {
+    const today = baseDate || this._todayStr();
     // v4.4 P41: 收盘后(afterClose=true)不允许覆盖盘中已定型的预测快照
     if (afterClose) {
       try {
@@ -9358,7 +9358,7 @@ const ShortTermLedger = {
     // v5.1: 副标题说明图标含义
     html += '<div style="font-size:11px;color:var(--text-muted);padding:0 16px 4px;text-align:center">🔮=预测基准日 🎯=次日准确率核实日</div>';
     html += '<div class="ledger-tabs">';
-    html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'verify\')">📈 胜率统计</div>';
+    html += '<div class="ledger-tab' + (tab === 'verify' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'verify\')">📋 台账明细</div>';
     html += '<div class="ledger-tab' + (tab === 'stock' ? ' active' : '') + '" onclick="ShortTermLedger.switchLedgerTab(\'stock\')">🔍 单股回溯</div>';
     html += '</div>';
     html += '<div class="ledger-body">';
@@ -9405,12 +9405,6 @@ const ShortTermLedger = {
       html += '<span class="st-ledger-overall-sub">' + totalHit + '/' + totalResolved + ' 只次日收涨</span>';
       html += '</div>';
     }
-
-    // ===== v4.4 P14: 次日榜 vs 短线榜 胜率对比 =====
-    html += this._renderRankCompareCard();
-
-    // ===== v4.4 P14: 六维分数档位胜率统计 =====
-    html += this._renderScoreBuckets();
 
     // 历史日期列表（主体）
     html += '<div class="ledger-list st-ledger-list">';
@@ -9892,16 +9886,21 @@ const AutoVerify = {
     this._done = true;
 
     const now = new Date();
-    if (!this._isTradingDay(now)) {
-      console.log('[AutoVerify] 非交易日，跳过');
-      return;
-    }
-
     const h = now.getHours(), m = now.getMinutes();
     const t = h * 60 + m;
 
+    if (!this._isTradingDay(now)) {
+      // v5.5: 非交易日（周末）——补漏上一交易日预测 + 顺势核实已到期预测
+      console.log('[AutoVerify] v5.5: 非交易日，执行补漏+核实');
+      try { await this._backfillMissingPredictions(); } catch(e) { console.warn('[AutoVerify] v5.5: 补漏异常:', e); }
+      try { await this.runCloseVerification(); } catch(e) { console.warn('[AutoVerify] v5.5: 周末核实异常:', e); }
+      return;
+    }
+
     if (t < 9 * 60 + 30) {
-      console.log('[AutoVerify] 9:30前，跳过');
+      // v5.5: 交易日9:30前——补漏上一交易日预测
+      console.log('[AutoVerify] v5.5: 交易日9:30前，执行补漏');
+      try { await this._backfillMissingPredictions(); } catch(e) { console.warn('[AutoVerify] v5.5: 补漏异常:', e); }
       return;
     }
 
@@ -9909,16 +9908,67 @@ const AutoVerify = {
       // v5.4: 盘中(9:30-15:00)不生成预测，等待15:00收盘后自动生成
       console.log('[AutoVerify] v5.4: 盘中不生成预测，等待15:00收盘后自动生成');
       return;
-    } else if (h < 23) {
-      // 收盘后(15:00-23:00)：核实+生成下一交易日预测
-      try { await this.runCloseVerification(); } catch(e) { console.warn('[AutoVerify] runCloseVerification异常:', e); }
     }
+
+    // v5.5: 收盘后(>=15:00)：核实+生成下一交易日预测（去掉23点上限）
+    try { await this.runCloseVerification(); } catch(e) { console.warn('[AutoVerify] runCloseVerification异常:', e); }
   },
+
 
   /** v5.4: 已废弃——预测改为收盘后生成，盘中不再调用。保留签名兼容遗漏调用方 */
   async ensurePredictionForToday() {
     console.log('[AutoVerify] v5.4: 预测已改为收盘后生成，盘中跳过');
     return;
+  },
+
+  /** v5.5: 返回严格早于 now 当天日期的最近一个交易日（跳过周末） */
+  _lastTradingDateStr(now) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - 1);
+    while (d.getDay() === 0 || d.getDay() === 6) {
+      d.setDate(d.getDate() - 1);
+    }
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  },
+
+  /** v5.5: 补漏——检查上一交易日基准的次日榜/短线榜预测是否缺失，缺失则补生成 */
+  async _backfillMissingPredictions() {
+    const now = new Date();
+    const base = this._lastTradingDateStr(now);
+    const backfillKey = 'zhigu_backfill_done_' + base;
+    try { if (localStorage.getItem(backfillKey) === '1') { console.log('[AutoVerify] v5.5: 补漏已完成(base=' + base + ')，跳过'); return; } } catch(e) {}
+    console.log('[AutoVerify] v5.5: 开始补漏检查，base=' + base);
+    const target = (typeof NextDayPrediction !== 'undefined' && NextDayPrediction._nextTradingDayStr) ? NextDayPrediction._nextTradingDayStr(base) : '';
+    // 次日榜幂等检查
+    try {
+      if (typeof NextDayPrediction !== 'undefined') {
+        const ndSnaps = NextDayPrediction._loadSnapshots();
+        const exists = ndSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === target));
+        if (!exists) {
+          console.log('[AutoVerify] v5.5: 次日榜缺失(base=' + base + ')，补生成');
+          await NextDayPrediction.scan(true, base);
+        } else {
+          console.log('[AutoVerify] v5.5: 次日榜已存在(base=' + base + ')，跳过');
+        }
+      }
+    } catch(e) { console.warn('[AutoVerify] v5.5: 次日榜补漏异常:', e); }
+    // 短线榜幂等检查
+    try {
+      if (typeof ShortTermLedger !== 'undefined') {
+        const stSnaps = ShortTermLedger._loadSnapshots();
+        const exists = stSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === base));
+        if (!exists) {
+          console.log('[AutoVerify] v5.5: 短线榜缺失(base=' + base + ')，补生成');
+          if (typeof App !== 'undefined' && App.loadHotStocks) {
+            await App.loadHotStocks({ autoRefresh: true, force: true, baseDate: base });
+          }
+        } else {
+          console.log('[AutoVerify] v5.5: 短线榜已存在(base=' + base + ')，跳过');
+        }
+      }
+    } catch(e) { console.warn('[AutoVerify] v5.5: 短线榜补漏异常:', e); }
+    try { localStorage.setItem(backfillKey, '1'); } catch(e) {}
+    console.log('[AutoVerify] v5.5: 补漏完成');
   },
 
   /** v5.4: 收盘后生成下一交易日预测（次日榜+短线榜），幂等 */
@@ -10049,15 +10099,27 @@ const AutoVerify = {
     const refreshBtn = ' <span style="cursor:pointer;font-size:11px;color:var(--text-muted);margin-left:6px;padding:1px 6px;border:1px solid rgba(255,255,255,0.15);border-radius:4px" onclick="AutoVerify._manualTrigger()" title="手动重新核实/生成">🔄</span>';
 
     if (!isTradingDay) {
-      // 非交易日：找到下个交易日
+      // v5.5: 非交易日——补漏+核实状态
+      var backfillDone = false;
+      try {
+        var tmpD = new Date(now);
+        tmpD.setDate(tmpD.getDate() - 1);
+        while (tmpD.getDay() === 0 || tmpD.getDay() === 6) tmpD.setDate(tmpD.getDate() - 1);
+        var tmpBase = tmpD.getFullYear() + '-' + String(tmpD.getMonth() + 1).padStart(2, '0') + '-' + String(tmpD.getDate()).padStart(2, '0');
+        backfillDone = localStorage.getItem('zhigu_backfill_done_' + tmpBase) === '1';
+      } catch(e) {}
       const nextTd = new Date(now);
       let daysToAdd = (6 - now.getDay()) % 7 || 2;
       if (now.getDay() === 0) daysToAdd = 1;
       else if (now.getDay() === 6) daysToAdd = 2;
       nextTd.setDate(nextTd.getDate() + daysToAdd);
       const nextStr = (nextTd.getMonth() + 1) + '月' + nextTd.getDate() + '日';
-      return '📅 今日休市，下个交易日 ' + nextStr + ' 15:00后自动更新';
+      if (backfillDone) {
+        return '📅 休市中·已补齐最近交易日预测，下个交易日 ' + nextStr + ' 15:00后自动更新';
+      }
+      return '📅 今日休市，正在补齐最近交易日预测...下个交易日 ' + nextStr + ' 15:00后自动更新';
     }
+
 
     if (t < 9 * 60 + 30) {
       return '⏳ 今日预测将在15:00收盘后自动生成';
@@ -10373,16 +10435,11 @@ const AutoVerify = {
   /** v4.4 P41: 统一调度器（交易日9:30-23:00，每5分钟巡检，按时段分流） */
   _startScheduler() {
     if (this._schedulerInterval) return; // 避免重复启动
-    console.log('[AutoVerify] P41统一调度器已启动（9:30-23:00，每5分钟）');
+    console.log('[AutoVerify] v5.5: 统一调度器已启动（全天候，每5分钟）');
     this._schedulerInterval = setInterval(() => {
       const now = new Date();
       const h = now.getHours(), m = now.getMinutes();
       const t = h * 60 + m;
-
-      // 非交易日不执行
-      if (!this._isTradingDay(now)) return;
-      // 9:30前或23:00后不执行
-      if (t < 9 * 60 + 30 || h >= 23) return;
 
       // 重置_done以允许执行
       this._done = false;
@@ -10391,11 +10448,25 @@ const AutoVerify = {
         AutoScan._shortTermRefreshed = false;
       }
 
+      if (!this._isTradingDay(now)) {
+        // v5.5: 非交易日——仅补漏（方法内部自身幂等，localStorage去重）
+        console.log('[AutoVerify] v5.5 调度器-非交易日，执行补漏');
+        this._backfillMissingPredictions().catch(e => console.warn('[AutoVerify] v5.5: 调度器补漏异常:', e));
+        return;
+      }
+
+      if (t < 9 * 60 + 30) {
+        // v5.5: 交易日9:30前——补漏上一交易日预测
+        console.log('[AutoVerify] v5.5 调度器-9:30前，执行补漏');
+        this._backfillMissingPredictions().catch(e => console.warn('[AutoVerify] v5.5: 调度器补漏异常:', e));
+        return;
+      }
+
       if (t < 15 * 60) {
         // v5.4: 盘中(9:30-15:00)：只做日志巡检，不生成预测
         console.log('[AutoVerify] v5.4 调度器-盘中巡检（不生成预测，等待15:00）');
       } else {
-        // 收盘后(15:00-23:00)：核实
+        // 收盘后(>=15:00)：核实（v5.5: 去掉23点上限）
         if (!this._alreadyVerifiedToday()) {
           console.log('[AutoVerify] 调度器-收盘后核实');
           const bar = document.getElementById('homeVerifyStatusBar');
@@ -10410,6 +10481,7 @@ const AutoVerify = {
       }
     }, 5 * 60 * 1000); // 每5分钟检查一次
   },
+
 
   /** v4.4 P34: 停止调度器 */
   _stopScheduler() {
@@ -10460,10 +10532,10 @@ const AutoScan = {
   },
 
   /** v4.4 P30: 检查今日短线快照是否已是收盘后生成 */
-  _hasTodayAfterCloseSnapshot() {
+  _hasTodayAfterCloseSnapshot(baseDate) {
     try {
       const snaps = ShortTermLedger._loadSnapshots();
-      const today = ShortTermLedger._todayStr();
+      const today = baseDate || ShortTermLedger._todayStr();
       const todaySnap = snaps.find(s => s.date === today);
       return todaySnap && todaySnap.afterClose === true;
     } catch (e) { return false; }
@@ -11431,9 +11503,11 @@ const App = {
       // v5.4: 仅收盘后保存短线预测快照，盘中实时浏览不产生快照
       if (typeof ShortTermLedger !== 'undefined') {
         try {
-          const isAfterClose = new Date().getHours() >= 15;
+          const optionsBase = opts && opts.baseDate;
+          const todayStr = (typeof ShortTermLedger !== 'undefined' && ShortTermLedger._todayStr) ? ShortTermLedger._todayStr() : new Date().toISOString().slice(0, 10);
+          const isAfterClose = (optionsBase && optionsBase !== todayStr) ? true : (new Date().getHours() >= 15);
           if (isAfterClose) {
-            ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, true);
+            ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, true, optionsBase);
           } else {
             console.log('[短线快照] 盘中不保存预测快照，等待15:00收盘后生成');
           }
