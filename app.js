@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.5',
+  VERSION: 'v5.6',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1650,6 +1650,35 @@ const Utils = {
 };
 
 // ============================================================
+// 3.5 HeavyTaskLock - 重任务串行锁（v5.6: 防止多个重任务并发导致接口雪崩）
+// ============================================================
+const HeavyTaskLock = {
+  _busy: false,
+  _runningNames: new Set(),
+  async run(name, fn) {
+    // 重入保护：同名任务正在运行则直接执行，避免自我死锁
+    if (this._runningNames.has(name)) {
+      console.log('[HeavyLock] 重入放行:', name);
+      return await fn();
+    }
+    let waited = 0;
+    while (this._busy && waited < 180000) {
+      await new Promise(r => setTimeout(r, 800));
+      waited += 800;
+    }
+    this._busy = true;
+    this._runningNames.add(name);
+    console.log('[HeavyLock] 开始:', name);
+    try { return await fn(); }
+    finally {
+      this._busy = false;
+      this._runningNames.delete(name);
+      console.log('[HeavyLock] 结束:', name);
+    }
+  }
+};
+
+// ============================================================
 // 4. DataAPI - 数据获取API
 // ============================================================
 const DataAPI = {
@@ -2102,7 +2131,15 @@ const DataAPI = {
           };
         }).filter(d => d.price > 0 && d.name && !d.name.includes('ST'));
       }
-      // v4.4 P32: clist返回空时启用腾讯行情备用方案
+      // v5.6: clist返回空时，先尝试新浪排行，再降级腾讯行情备用方案
+      if (result.length === 0) {
+        console.warn('[fetchMarketRanking] 东财result为空，尝试新浪兜底');
+        const sina = await this._fetchSinaRanking(topN);
+        if (sina && sina.length > 0) {
+          this._cacheSet(cacheKey, 'marketRanking', sina);
+          return sina;
+        }
+      }
       if (result.length === 0) {
         const fallback = await this._fetchMarketRankingFallback(topN);
         if (fallback && fallback.length > 0) {
@@ -2583,19 +2620,56 @@ const DataAPI = {
       const resp = await fetch(url, { signal: ctrl.signal });
       clearTimeout(timer);
       const data = await resp.json();
-      if (!data || !data.data || !Array.isArray(data.data.diff) || data.data.diff.length === 0) return null;
-      const idx = data.data.diff.map(d => ({
-        name: d.f14,
-        changePct: parseFloat(d.f3) || 0,
-        amount: parseFloat(d.f6) || 0
-      }));
+      if (data && data.data && Array.isArray(data.data.diff) && data.data.diff.length > 0) {
+        const idx = data.data.diff.map(d => ({
+          name: d.f14,
+          changePct: parseFloat(d.f3) || 0,
+          amount: parseFloat(d.f6) || 0
+        }));
+        const avg = idx.reduce((sum, x) => sum + x.changePct, 0) / idx.length;
+        const totalAmount = idx.reduce((sum, x) => sum + x.amount, 0);
+        const payload = { indexes: idx, avgChange: avg, totalAmount };
+        this._cacheSet('marketBreadth', 'marketBreadth', payload);
+        return payload;
+      }
+    } catch (e) {
+      console.warn('[大盘情绪] 东财获取失败:', e && e.message);
+    }
+    // v5.6: 东财ulist失败/返回空时，兜底到腾讯指数接口
+    try {
+      console.warn('[大盘情绪] 东财失败，降级到腾讯指数');
+      const tUrl = 'https://qt.gtimg.cn/q=sh000001,sz399001,sz399006';
+      const ctrl2 = new AbortController();
+      const timer2 = setTimeout(() => ctrl2.abort(), 8000);
+      const resp2 = await fetch(tUrl, { signal: ctrl2.signal });
+      clearTimeout(timer2);
+      const buf = await resp2.arrayBuffer();
+      const text = Utils.gbkToUtf8(buf);
+      const lines = text.split('\n').filter(l => l.trim().length > 0);
+      const idx = [];
+      const nameMap = { '000001': '上证指数', '399001': '深证成指', '399006': '创业板指' };
+      for (const line of lines) {
+        // 格式: v_sh000001="1~上证指数~000001~3681.47~..."
+        const m = line.match(/v_\w+="([^"]+)"/);
+        if (!m) continue;
+        const parts = m[1].split('~');
+        if (parts.length < 38) continue;
+        const code = parts[2] || '';
+        const name = parts[1] || nameMap[code] || code;
+        const changePct = parseFloat(parts[32]) || 0;
+        // 腾讯索引37是成交额(万元)，现有amount口径为元，需*10000统一
+        const amount = (parseFloat(parts[37]) || 0) * 10000;
+        idx.push({ name, changePct, amount });
+      }
+      if (idx.length === 0) return null;
       const avg = idx.reduce((sum, x) => sum + x.changePct, 0) / idx.length;
       const totalAmount = idx.reduce((sum, x) => sum + x.amount, 0);
       const payload = { indexes: idx, avgChange: avg, totalAmount };
       this._cacheSet('marketBreadth', 'marketBreadth', payload);
+      console.log('[大盘情绪] 腾讯指数兜底成功，获取到', idx.length, '个指数');
       return payload;
-    } catch (e) {
-      console.warn('[大盘情绪] 获取失败:', e && e.message);
+    } catch (e2) {
+      console.warn('[大盘情绪] 腾讯指数兜底也失败:', e2 && e2.message);
       return null;
     }
   },
@@ -3170,6 +3244,95 @@ const DataAPI = {
     return false;
   },
 
+  /** v5.6: 新浪全市场排行（按成交额降序），东财clist不可达时的核心兜底源 */
+  async _fetchSinaRanking(topN) {
+    const cacheKey = 'sinaRanking_' + topN;
+    const cached = this._cacheGet(cacheKey, 'topMarketStocks');
+    if (cached) return cached;
+    try {
+      const pages = Math.ceil(topN / 100);
+      let allRows = [];
+      for (let p = 1; p <= pages; p++) {
+        const url = 'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData'
+          + '?page=' + p + '&num=100&sort=amount&asc=0&node=hs_a&symbol=&_s_r_a=page';
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 10000);
+        try {
+          const resp = await fetch(url, {
+            signal: ctrl.signal,
+            headers: { 'Referer': 'https://finance.sina.com.cn' }
+          });
+          clearTimeout(timer);
+          if (!resp.ok) { console.warn('[SinaRanking] page', p, 'HTTP', resp.status); break; }
+          const text = await resp.text();
+          // 新浪接口可能返回非标准JSON（如空时返回null），需容错
+          let rows = null;
+          try { rows = JSON.parse(text); } catch(pe) { console.warn('[SinaRanking] JSON parse error page', p); }
+          if (!Array.isArray(rows) || rows.length === 0) break;
+          allRows = allRows.concat(rows);
+          if (rows.length < 100) break; // 末页
+        } catch(pageErr) {
+          clearTimeout(timer);
+          console.warn('[SinaRanking] page', p, 'error:', pageErr.message);
+          break;
+        }
+        // 页间间隔150ms，避免被限流
+        if (p < pages) await new Promise(r => setTimeout(r, 150));
+      }
+      if (allRows.length === 0) return [];
+      // 按amount降序（接口已排序），slice到topN
+      const sliced = allRows.slice(0, topN);
+      const result = sliced.map(item => {
+        const sym = item.symbol || '';
+        let code = sym;
+        let rawCode = item.code || '';
+        if (!code && rawCode) {
+          // 自行补前缀
+          let prefix = 'sz';
+          if (rawCode.startsWith('6')) prefix = 'sh';
+          else if (rawCode.startsWith('8') || rawCode.startsWith('4')) prefix = 'bj';
+          code = prefix + rawCode;
+        }
+        if (!rawCode) rawCode = code.replace(/^(sh|sz|bj)/, '');
+        const settlement = parseFloat(item.settlement) || 0;
+        const high = parseFloat(item.high) || 0;
+        const low = parseFloat(item.low) || 0;
+        const amplitude = settlement > 0 ? ((high - low) / settlement * 100) : 0;
+        // 行业映射：从 CONFIG.SECTORS 本地映射
+        const sectorInfo = CONFIG.SECTORS[code] || null;
+        const industry = sectorInfo ? sectorInfo.name : '';
+        return {
+          code: code,
+          rawCode: rawCode,
+          name: String(item.name || ''),
+          price: parseFloat(item.trade) || 0,
+          changePct: parseFloat(item.changepercent) || 0,
+          change: parseFloat(item.pricechange) || 0,
+          volume: parseFloat(item.volume) || 0,
+          amount: parseFloat(item.amount) / 10000,  // 元→万元，与fetchMarketRanking口径一致
+          amplitude: amplitude,
+          turnover: parseFloat(item.turnoverratio) || 0,
+          pe: parseFloat(item.per) || 0,
+          pb: parseFloat(item.pb) || 0,
+          marketCap: parseFloat(item.mktcap) / 10000 || 0,  // 万元→亿
+          circCap: parseFloat(item.nmc) / 10000 || 0,       // 万元→亿
+          high: high,
+          low: low,
+          open: parseFloat(item.open) || 0,
+          prevClose: settlement,
+          mainFlow: 0,
+          industry: industry
+        };
+      }).filter(d => d.price > 0 && d.rawCode);
+      this._cacheSet(cacheKey, 'topMarketStocks', result);
+      console.log('[SinaRanking] 获取到', result.length, '只股票');
+      return result;
+    } catch (e) {
+      console.error('[SinaRanking] error:', e);
+      return [];
+    }
+  },
+
   /** 全市场活跃股（按成交额排序）—— 板块API全部失败时的最终降级 */
   async fetchTopMarketStocks(topN = 50) {  // v4.3: 调用方可传更大值（如500）以覆盖自选股行业/资金数据
     const cacheKey = 'topMarketStocks_' + topN;
@@ -3188,7 +3351,21 @@ const DataAPI = {
         merged = merged.concat(json.data.diff);
         if (json.data.diff.length < pageSize) break; // 末页
       }
-      if (merged.length === 0) return [];
+      if (merged.length === 0) {
+        // v5.6: 东财clist不可达时，兜底到新浪排行→腾讯静态池
+        console.warn('[fetchTopMarketStocks] 东财merged为空，尝试新浪兜底');
+        const sina = await this._fetchSinaRanking(topN);
+        if (sina && sina.length > 0) {
+          this._cacheSet(cacheKey, 'topMarketStocks', sina);
+          return sina;
+        }
+        const fb = await this._fetchMarketRankingFallback(topN);
+        if (fb && fb.length > 0) {
+          this._cacheSet(cacheKey, 'topMarketStocks', fb);
+          return fb;
+        }
+        return [];
+      }
       const result = merged.map(item => {
         const rawCode = String(item.f12 || '');
         const price = parseFloat(item.f2);
@@ -5343,6 +5520,7 @@ const Screener = {
     infoEl.textContent = '';
 
     try {
+    await HeavyTaskLock.run('Screener.run', async () => {
     // === 全市场获取：扩大到1500只，覆盖所有类型 ===
     const fetchSize = strategy === 'msci' ? 1500 : 800;
     const marketRanking = await DataAPI.fetchMarketRanking(fetchSize);
@@ -5565,6 +5743,7 @@ const Screener = {
       </div>`;
     }).join('');
 
+    }); // end HeavyTaskLock.run
     } catch (err) {
       // v4.4 P32: 外层兜底，防止任何同步/异步异常导致loading卡死
       console.error('[Screener] run异常:', err);
@@ -6734,6 +6913,7 @@ const NextDayPrediction = {
     };
 
     try {
+      await HeavyTaskLock.run('NextDayPrediction.scan', async () => {
       setStatus('第1步/5：拉取全市场成交额前200只活跃股...');
       const [stocks, breadth, dtMap] = await Promise.all([
         DataAPI.fetchTopMarketStocks(200),
@@ -6966,6 +7146,7 @@ const NextDayPrediction = {
 
       this._renderList(snapshot);
       if (!silent) { Utils.toast ? Utils.toast('已保存 ' + targetDate + ' 预测排名，开盘后可核实') : null; }
+      }); // end HeavyTaskLock.run
     } catch (e) {
       console.error('NextDayPrediction.scan error:', e);
       if (!silent && body) body.innerHTML = '<div class="empty-tip">扫描失败：' + (e.message || e) + '，请稍后重试。</div>';
@@ -9939,36 +10120,52 @@ const AutoVerify = {
     try { if (localStorage.getItem(backfillKey) === '1') { console.log('[AutoVerify] v5.5: 补漏已完成(base=' + base + ')，跳过'); return; } } catch(e) {}
     console.log('[AutoVerify] v5.5: 开始补漏检查，base=' + base);
     const target = (typeof NextDayPrediction !== 'undefined' && NextDayPrediction._nextTradingDayStr) ? NextDayPrediction._nextTradingDayStr(base) : '';
+    // v5.6: 改为条件写入——只有次日榜和短线榜都成功才标记完成，否则下次继续重试
+    let ndOk = true;
+    let stOk = true;
     // 次日榜幂等检查
     try {
       if (typeof NextDayPrediction !== 'undefined') {
         const ndSnaps = NextDayPrediction._loadSnapshots();
         const exists = ndSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === target));
         if (!exists) {
-          console.log('[AutoVerify] v5.5: 次日榜缺失(base=' + base + ')，补生成');
+          console.log('[AutoVerify] v5.6: 次日榜缺失(base=' + base + ')，补生成');
           await NextDayPrediction.scan(true, base);
+          // scan成功后再检查是否真的存在了
+          const ndSnaps2 = NextDayPrediction._loadSnapshots();
+          const nowExists = ndSnaps2.some(s => s.baseDate === base || (!s.baseDate && s.date === target));
+          if (!nowExists) { ndOk = false; console.warn('[AutoVerify] v5.6: 次日榜补生成后仍不存在'); }
         } else {
-          console.log('[AutoVerify] v5.5: 次日榜已存在(base=' + base + ')，跳过');
+          console.log('[AutoVerify] v5.6: 次日榜已存在(base=' + base + ')，跳过');
         }
       }
-    } catch(e) { console.warn('[AutoVerify] v5.5: 次日榜补漏异常:', e); }
+    } catch(e) { ndOk = false; console.warn('[AutoVerify] v5.6: 次日榜补漏异常:', e); }
     // 短线榜幂等检查
     try {
       if (typeof ShortTermLedger !== 'undefined') {
         const stSnaps = ShortTermLedger._loadSnapshots();
         const exists = stSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === base));
         if (!exists) {
-          console.log('[AutoVerify] v5.5: 短线榜缺失(base=' + base + ')，补生成');
+          console.log('[AutoVerify] v5.6: 短线榜缺失(base=' + base + ')，补生成');
           if (typeof App !== 'undefined' && App.loadHotStocks) {
             await App.loadHotStocks({ autoRefresh: true, force: true, baseDate: base });
           }
+          // loadHotStocks成功后再检查是否真的存在了
+          const stSnaps2 = ShortTermLedger._loadSnapshots();
+          const nowExists = stSnaps2.some(s => s.baseDate === base || (!s.baseDate && s.date === base));
+          if (!nowExists) { stOk = false; console.warn('[AutoVerify] v5.6: 短线榜补生成后仍不存在'); }
         } else {
-          console.log('[AutoVerify] v5.5: 短线榜已存在(base=' + base + ')，跳过');
+          console.log('[AutoVerify] v5.6: 短线榜已存在(base=' + base + ')，跳过');
         }
       }
-    } catch(e) { console.warn('[AutoVerify] v5.5: 短线榜补漏异常:', e); }
-    try { localStorage.setItem(backfillKey, '1'); } catch(e) {}
-    console.log('[AutoVerify] v5.5: 补漏完成');
+    } catch(e) { stOk = false; console.warn('[AutoVerify] v5.6: 短线榜补漏异常:', e); }
+    // v5.6: 只有两者都成功才标记完成，否则下次继续重试
+    if (ndOk && stOk) {
+      try { localStorage.setItem(backfillKey, '1'); } catch(e) {}
+      console.log('[AutoVerify] v5.6: 补漏全部完成');
+    } else {
+      console.warn('[AutoVerify] v5.6: 补漏部分失败(ndOk=' + ndOk + ', stOk=' + stOk + ')，不标记，下次重试');
+    }
   },
 
   /** v5.4: 收盘后生成下一交易日预测（次日榜+短线榜），幂等 */
@@ -11287,6 +11484,7 @@ const App = {
     }
 
     try {
+      await HeavyTaskLock.run('App.loadHotStocks', async () => {
       // ====== 第1步：多源获取板块数据（带降级）======
       // 源1：行业板块
       let sectors = await DataAPI.fetchSectorRank(10).catch(e => { console.warn('行业板块失败', e); return []; });
@@ -11520,6 +11718,7 @@ const App = {
       }
       App._lastRefreshTime = new Date();
       App._updateAutoRefreshInfo();
+      }); // end HeavyTaskLock.run
     } catch (e) {
       console.error('[短线TOP10] 整体异常:', e);
       container.innerHTML = `
@@ -16942,6 +17141,7 @@ const ValueScreener = {
     this._scanning = true;
 
     try {
+      await HeavyTaskLock.run('ValueScreener.scan', async () => {
       if (!silent) {
         this._showProgress(true);
         this._updateProgress(0, 80);
@@ -16950,7 +17150,7 @@ const ValueScreener = {
       // 第一步：获取全市场成交额前300
       const topStocks = await DataAPI.fetchTopMarketStocks(300);
       if (!topStocks || topStocks.length === 0) {
-        throw new Error('获取市场数据失败');
+        throw new Error('行情数据源暂不可用（东财/新浪均失败），请稍后点击「重新扫描」');
       }
 
       // 第二步：硬过滤 + PE/PB粗筛
@@ -17048,6 +17248,7 @@ const ValueScreener = {
       }
 
       return result;
+      }); // end HeavyTaskLock.run
     } catch (e) {
       console.error('[ValueScreener] scan error:', e);
       if (!silent) {
@@ -17181,6 +17382,10 @@ const ValueScreener = {
       let hint = '暂无价值投资数据<br><span style="font-size:11px;color:var(--text-muted)">点击下方「重新扫描」生成巴菲特价值TOP20榜单</span>';
       if (data && data.failedCount && data.failRate > 0.5) {
         hint = '价值扫描无结果<br><span style="font-size:11px;color:var(--text-muted)">可能原因：财务接口跨域受限<br>请尝试：1) 切换网络环境 2) 稍后重试<br>接口降级后将自动使用PE/PB估值评分</span>';
+      }
+      // v5.6: 无缓存数据时提示数据源连接异常
+      if (!data) {
+        hint += '<br><span style="font-size:10px;color:var(--text-muted)">若连续多次失败，可能是数据源连接异常，可稍后重试</span>';
       }
       container.innerHTML = '<div class="empty-tip">' + hint + '</div>';
       return;
