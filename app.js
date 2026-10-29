@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.6',
+  VERSION: 'v5.7',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1951,6 +1951,36 @@ const DataAPI = {
         } catch (e2) { continue; } // 该通道失败，切下一通道
       }
 
+      // v5.7: 新浪日K线兑底（腾讯501+东财连接失败时启用）
+      if (!isHK) {
+        try {
+          const sinaCount = count > 250 ? 250 : count;
+          const sinaUrl = 'https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData'
+            + '?symbol=' + code + '&scale=240&ma=no&datalen=' + sinaCount;
+          const sinaCtrl = new AbortController();
+          const sinaTimer = setTimeout(() => sinaCtrl.abort(), 10000);
+          const sinaResp = await fetch(sinaUrl, {
+            signal: sinaCtrl.signal,
+            headers: { 'Referer': 'https://finance.sina.com.cn' }
+          });
+          clearTimeout(sinaTimer);
+          if (sinaResp.ok) {
+            const sinaData = await sinaResp.json();
+            if (Array.isArray(sinaData) && sinaData.length > 0) {
+              console.log('[K线] 新浪兑底成功:', code, sinaData.length, '条');
+              if (count > 250) {
+                console.warn('[K线] 新浪限制250条，请求', count, '条时返回', sinaData.length, '条');
+              }
+              return sinaData.map(k => ({
+                date: k.day, open: +k.open, high: +k.high, low: +k.low, close: +k.close, volume: +k.volume
+              }));
+            }
+          }
+        } catch (sinaErr) {
+          console.warn('[K线] 新浪兑底失败:', code, sinaErr && sinaErr.message);
+        }
+      }
+
       return [];
     } catch (e) {
       console.error('fetchKline error:', e);
@@ -2323,6 +2353,39 @@ const DataAPI = {
           };
         });
         result._source = res.source; // 记录数据来源通道
+      }
+      // v5.7: 新浪资金流兑底
+      if (result.length === 0 && !code.startsWith('hk')) {
+        try {
+          const sinaUrl = 'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs'
+            + '?page=1&num=20&sort=opendate&asc=0&daima=' + code;
+          const sinaCtrl = new AbortController();
+          const sinaTimer = setTimeout(() => sinaCtrl.abort(), 10000);
+          const sinaResp = await fetch(sinaUrl, {
+            signal: sinaCtrl.signal,
+            headers: { 'Referer': 'https://finance.sina.com.cn' }
+          });
+          clearTimeout(sinaTimer);
+          if (sinaResp.ok) {
+            const sinaData = await sinaResp.json();
+            if (Array.isArray(sinaData) && sinaData.length > 0) {
+              console.log('[资金流] 新浪兑底成功:', code, sinaData.length, '条');
+              // 新浪返回按日期降序，转为升序
+              sinaData.reverse();
+              result = sinaData.map(item => ({
+                date: item.opendate,
+                mainIn: parseFloat(item.netamount) || 0,  // 新浪只有主力净流入，映射到mainIn
+                smallIn: 0,
+                medIn: 0,
+                bigIn: 0,
+                superIn: parseFloat(item.netamount) || 0
+              }));
+              result._source = '新浪';
+            }
+          }
+        } catch (sinaErr) {
+          console.warn('[资金流] 新浪兑底失败:', code, sinaErr && sinaErr.message);
+        }
       }
       this._cacheSet(cacheKey, 'capitalFlow', result);
       return result;
@@ -2834,6 +2897,50 @@ const DataAPI = {
     return this._EXCLUDED_BOARD_KEYWORDS.some(kw => name.includes(kw));
   },
 
+  /** v5.7: 板块数据兑底 - 从全市场行情聚合板块排行
+   *  调用 fetchTopMarketStocks(300)（已有新浪兑底），按 industry 分组计算
+   *  返回结构与 fetchSectorRank 一致（code/name/changePct/mainFlow/upCount/downCount/turnoverPct） */
+  async _aggregateSectorsFromStocks(topN = 30) {
+    try {
+      const stocks = await this.fetchTopMarketStocks(300);
+      if (!stocks || stocks.length === 0) return [];
+      // 按 industry 分组
+      const groups = {};
+      for (const s of stocks) {
+        const ind = (s.industry || '').trim();
+        if (!ind) continue; // 无行业标签的跳过
+        if (!groups[ind]) groups[ind] = [];
+        groups[ind].push(s);
+      }
+      // 计算每组统计
+      const sectors = Object.entries(groups).map(([name, members]) => {
+        const changePct = members.reduce((sum, m) => sum + (m.changePct || 0), 0) / members.length;
+        const mainFlow = members.reduce((sum, m) => sum + (m.mainFlow || 0), 0);
+        const amount = members.reduce((sum, m) => sum + (m.amount || 0), 0);
+        const upCount = members.filter(m => (m.changePct || 0) > 0).length;
+        const downCount = members.filter(m => (m.changePct || 0) < 0).length;
+        return {
+          code: '',  // 聚合板块无单一代码
+          name: name,
+          changePct: Math.round(changePct * 100) / 100,
+          mainFlow: Math.round(mainFlow),
+          turnoverPct: 0,
+          upCount: upCount,
+          downCount: downCount,
+          stockCount: members.length,
+          amount: Math.round(amount)
+        };
+      });
+      // 按涨幅降序
+      sectors.sort((a, b) => b.changePct - a.changePct);
+      console.log('[板块兑底] 聚合了', Object.keys(groups).length, '个行业，返回前', Math.min(topN, sectors.length), '个');
+      return sectors.slice(0, topN);
+    } catch (e) {
+      console.warn('[_aggregateSectorsFromStocks] 失败:', e && e.message);
+      return [];
+    }
+  },
+
   /** 获取板块排行（行业板块 m:90+t:2，按涨幅排序） */
   async fetchSectorRank(topN = 10) {
     const cacheKey = 'sectorRank_industry_' + topN;
@@ -2844,7 +2951,12 @@ const DataAPI = {
       const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
       const json = await this._fetchEMClist(queryStr);
       if (!json) {
-        console.warn('fetchSectorRank 所有通道失败');
+        console.warn('fetchSectorRank 所有通道失败，启用行情聚合兑底');
+        const agg = await this._aggregateSectorsFromStocks(topN);
+        if (agg.length > 0) {
+          this._cacheSet(cacheKey, 'sectorRank', agg);
+          return agg;
+        }
         return [];
       }
       const result = json.data.diff.map(item => ({
@@ -2873,7 +2985,16 @@ const DataAPI = {
       const fetchCount = topN + 5;
       const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
       const json = await this._fetchEMClist(queryStr);
-      if (!json) return [];
+      if (!json) {
+        // v5.7: 概念板块无法聚合，降级为行业聚合结果
+        console.warn('fetchConceptSectors 东财失败，降级为行业聚合');
+        const agg = await this._aggregateSectorsFromStocks(topN);
+        if (agg.length > 0) {
+          this._cacheSet(cacheKey, 'sectorRank', agg);
+          return agg;
+        }
+        return [];
+      }
       const result = json.data.diff.map(item => ({
         code: String(item.f12 || ''),
         name: String(item.f14 || ''),
@@ -3456,7 +3577,7 @@ const DataAPI = {
       const secid = (code.startsWith('sh') ? '1.' : '0.') + rawCode;
       const res = await this._fetchEMCapitalKlines(secid, days);
       // 解析每日数据: 日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
-      const flows = (res ? res.klines : []).map(line => {
+      let flows = (res ? res.klines : []).map(line => {
         const parts = line.split(',');
         return {
           date: parts[0],
@@ -3467,12 +3588,45 @@ const DataAPI = {
           superBig: parseFloat(parts[5]) || 0,   // 超大单
         };
       });
+      let flowSource = res ? res.source : null;
+      // v5.7: 新浪资金流兑底
+      if (flows.length === 0 && !code.startsWith('hk')) {
+        try {
+          const sinaUrl = 'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs'
+            + '?page=1&num=' + days + '&sort=opendate&asc=0&daima=' + code;
+          const sinaCtrl = new AbortController();
+          const sinaTimer = setTimeout(() => sinaCtrl.abort(), 10000);
+          const sinaResp = await fetch(sinaUrl, {
+            signal: sinaCtrl.signal,
+            headers: { 'Referer': 'https://finance.sina.com.cn' }
+          });
+          clearTimeout(sinaTimer);
+          if (sinaResp.ok) {
+            const sinaData = await sinaResp.json();
+            if (Array.isArray(sinaData) && sinaData.length > 0) {
+              console.log('[资金流Stock] 新浪兑底成功:', code, sinaData.length, '条');
+              sinaData.reverse(); // 新浪默认降序，转为升序
+              flows = sinaData.map(item => ({
+                date: item.opendate,
+                main: parseFloat(item.netamount) || 0,
+                small: 0,
+                mid: 0,
+                big: 0,
+                superBig: parseFloat(item.netamount) || 0
+              }));
+              flowSource = '新浪';
+            }
+          }
+        } catch (sinaErr) {
+          console.warn('[资金流Stock] 新浪兑底失败:', code, sinaErr && sinaErr.message);
+        }
+      }
       // 计算近2日主力累计
       const recent2 = flows.slice(-2);
       const mainFlowSum2 = recent2.reduce((s, f) => s + f.main, 0);
       // 今日主力/成交额（用行情估算）
       const today = flows.length > 0 ? flows[flows.length - 1] : null;
-      const payload = { flows, mainFlowSum2, today, source: res ? res.source : null };
+      const payload = { flows, mainFlowSum2, today, source: flowSource };
       this._cacheSet(cacheKey, 'capitalFlowStock', payload);
       return payload;
     } catch (e) {
@@ -18283,5 +18437,247 @@ const RiskRadar = {
       }
     } catch (e) { /* ignore */ }
     return null;
+  }
+};
+
+// ============================================================
+// v5.7: SelfCheck - APP内置功能自检面板
+// ============================================================
+const SelfCheck = {
+  _overlay: null,
+  _results: [],
+  _summaryEl: null,
+  _listEl: null,
+  _btnStart: null,
+
+  open() {
+    if (this._overlay) { this._overlay.remove(); this._overlay = null; }
+    const overlay = document.createElement('div');
+    overlay.id = 'selfcheck-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;padding:12px';
+    overlay.innerHTML = `
+      <div class="modal-card" style="width:100%;max-width:520px;max-height:85vh;display:flex;flex-direction:column;background:var(--bg-card,#1a1a2e);border-radius:12px;overflow:hidden">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border-divider,rgba(255,255,255,0.08))">
+          <h3 style="margin:0;font-size:16px;color:var(--text-primary,#e0e0e0)">🔧 功能自检</h3>
+          <button onclick="SelfCheck.close()" style="background:none;border:none;color:var(--text-muted,#888);font-size:20px;cursor:pointer;padding:0 4px">✕</button>
+        </div>
+        <div style="padding:12px 16px;flex:1;overflow-y:auto">
+          <div id="selfcheck-summary" style="font-size:13px;color:var(--text-secondary,#aaa);margin-bottom:10px;text-align:center">点击「开始检测」检查所有数据源和功能模块</div>
+          <div id="selfcheck-list" style="font-size:12px"></div>
+        </div>
+        <div style="padding:10px 16px;border-top:1px solid var(--border-divider,rgba(255,255,255,0.08));display:flex;gap:8px">
+          <button id="selfcheck-btn-start" onclick="SelfCheck.run()" style="flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent,#4a9eff);color:#fff;font-size:13px;cursor:pointer">▶ 开始检测</button>
+          <button onclick="SelfCheck.copyReport()" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border-divider,rgba(255,255,255,0.15));background:transparent;color:var(--text-secondary,#aaa);font-size:13px;cursor:pointer">📋 复制报告</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    this._overlay = overlay;
+    this._summaryEl = overlay.querySelector('#selfcheck-summary');
+    this._listEl = overlay.querySelector('#selfcheck-list');
+    this._btnStart = overlay.querySelector('#selfcheck-btn-start');
+    this._results = [];
+  },
+
+  close() {
+    if (this._overlay) { this._overlay.remove(); this._overlay = null; }
+  },
+
+  _addItem(idx, name, status, timeMs, note) {
+    const icons = { pass: '✅', warn: '⚠️', fail: '❌' };
+    const colors = { pass: '#4caf50', warn: '#ff9800', fail: '#f44336' };
+    const el = document.getElementById('selfcheck-item-' + idx);
+    if (el) {
+      el.innerHTML = `<span style="color:${colors[status]}">${icons[status]}</span> ${name} <span style="color:var(--text-muted,#888);font-size:11px">(${timeMs}ms)</span> ${note ? '<span style="color:var(--text-muted,#888);font-size:11px">— ' + note + '</span>' : ''}`;
+    }
+  },
+
+  _updateSummary() {
+    const pass = this._results.filter(r => r.status === 'pass').length;
+    const warn = this._results.filter(r => r.status === 'warn').length;
+    const fail = this._results.filter(r => r.status === 'fail').length;
+    const total = this._results.length;
+    if (this._summaryEl) {
+      this._summaryEl.innerHTML = `检测完成：<span style="color:#4caf50">${pass}通过</span> / <span style="color:#ff9800">${warn}降级</span> / <span style="color:#f44336">${fail}失败</span>（共${total}项）`;
+    }
+  },
+
+  async _runOne(idx, name, fn, timeoutMs) {
+    timeoutMs = timeoutMs || 30000;
+    // 预渲染占位
+    if (this._listEl) {
+      const div = document.createElement('div');
+      div.id = 'selfcheck-item-' + idx;
+      div.style.cssText = 'padding:6px 0;border-bottom:1px solid var(--border-divider,rgba(255,255,255,0.05))';
+      div.textContent = '⏳ ' + name + ' ...';
+      this._listEl.appendChild(div);
+    }
+    const t0 = Date.now();
+    try {
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('超时' + timeoutMs + 'ms')), timeoutMs));
+      const result = await Promise.race([fn(), timeoutPromise]);
+      const timeMs = Date.now() - t0;
+      this._results.push({ name, status: result.status, timeMs, note: result.note || '' });
+      this._addItem(idx, name, result.status, timeMs, result.note);
+      this._updateSummary();
+    } catch (e) {
+      const timeMs = Date.now() - t0;
+      this._results.push({ name, status: 'fail', timeMs, note: e.message || String(e) });
+      this._addItem(idx, name, 'fail', timeMs, e.message || String(e));
+      this._updateSummary();
+    }
+  },
+
+  async run() {
+    if (this._btnStart) this._btnStart.disabled = true;
+    if (this._listEl) this._listEl.innerHTML = '';
+    if (this._summaryEl) this._summaryEl.textContent = '检测中...';
+    this._results = [];
+
+    // 1. 本地存储读写
+    await this._runOne(0, '本地存储读写', async () => {
+      const key = '__selfcheck_test_' + Date.now();
+      localStorage.setItem(key, 'test');
+      const v = localStorage.getItem(key);
+      localStorage.removeItem(key);
+      if (v === 'test') return { status: 'pass', note: '读写正常' };
+      return { status: 'fail', note: '读取值不匹配' };
+    }, 5000);
+
+    // 2. 腾讯实时行情
+    await this._runOne(1, '腾讯实时行情', async () => {
+      const q = await DataAPI.fetchQuote('sh600519');
+      if (q && q.price > 0) return { status: 'pass', note: 'price=' + q.price };
+      return { status: 'fail', note: 'price无效' };
+    });
+
+    // 3. 日K线
+    await this._runOne(2, '日K线(60日)', async () => {
+      const klines = await DataAPI.fetchKline('sh600519', 60);
+      const len = klines ? klines.length : 0;
+      if (len >= 20) return { status: 'pass', note: len + '条' };
+      if (len > 0) return { status: 'warn', note: '仅' + len + '条(不足20)' };
+      return { status: 'fail', note: '无数据' };
+    });
+
+    // 4. 全市场排行
+    await this._runOne(3, '全市场排行(50)', async () => {
+      const stocks = await DataAPI.fetchTopMarketStocks(50);
+      const len = stocks ? stocks.length : 0;
+      if (len >= 20) return { status: 'pass', note: len + '只' };
+      if (len > 0) return { status: 'warn', note: '仅' + len + '只' };
+      return { status: 'fail', note: '无数据' };
+    });
+
+    // 5. 大盘指数
+    await this._runOne(4, '大盘指数', async () => {
+      const mb = await DataAPI.fetchMarketBreadth();
+      if (mb && mb.indexes && mb.indexes.length > 0) return { status: 'pass', note: mb.indexes.length + '个指数' };
+      return { status: 'fail', note: '无数据' };
+    });
+
+    // 6. 行业板块
+    await this._runOne(5, '行业板块', async () => {
+      const sectors = await DataAPI.fetchSectorRank(10);
+      const len = sectors ? sectors.length : 0;
+      if (len > 0) {
+        const hasAgg = sectors[0] && sectors[0].code === '';
+        return { status: hasAgg ? 'warn' : 'pass', note: len + '个' + (hasAgg ? '(聚合降级)' : '') };
+      }
+      return { status: 'fail', note: '无数据' };
+    });
+
+    // 7. 资金流
+    await this._runOne(6, '资金流(茅台3日)', async () => {
+      const cf = await DataAPI.fetchCapitalFlowStock('sh600519', 3);
+      if (cf && cf.flows && cf.flows.length > 0) return { status: 'pass', note: cf.flows.length + '条,来源:' + (cf.source || '未知') };
+      return { status: 'fail', note: '无数据' };
+    });
+
+    // 8. 次日榜快照
+    await this._runOne(7, '次日榜快照', async () => {
+      const snaps = NextDayPrediction._loadSnapshots();
+      if (snaps.length > 0) {
+        const latest = snaps[0];
+        return { status: 'pass', note: snaps.length + '个,目标日:' + (latest.targetDate || latest.date || '--') + ',基准:' + (latest.baseDate || '--') };
+      }
+      return { status: 'warn', note: '无快照(尚未执行过扫描)' };
+    }, 5000);
+
+    // 9. 短线榜快照
+    await this._runOne(8, '短线榜快照', async () => {
+      const snaps = ShortTermLedger._loadSnapshots();
+      if (snaps.length > 0) {
+        const latest = snaps[0];
+        const baseDate = latest.baseDate || latest.date || '--';
+        const afterClose = latest.afterClose ? '收盘后' : '盘中';
+        return { status: 'pass', note: snaps.length + '个,基准:' + baseDate + ',' + afterClose };
+      }
+      return { status: 'warn', note: '无快照' };
+    }, 5000);
+
+    // 10. 价值榜单缓存
+    await this._runOne(9, '价值榜单缓存', async () => {
+      const cache = ValueScreener.getCache();
+      if (cache) {
+        const scanTime = cache.scanTime ? new Date(cache.scanTime).toLocaleString() : '--';
+        const count = cache.stocks ? cache.stocks.length : 0;
+        return { status: 'pass', note: count + '只,扫描时间:' + scanTime };
+      }
+      return { status: 'warn', note: '无缓存(尚未扫描)' };
+    }, 5000);
+
+    // 11. 预测生成链路(dry-run)
+    await this._runOne(10, '预测链路(dry-run)', async () => {
+      // 只检查关键依赖是否可用，不实际执行scan
+      const stocks = await DataAPI.fetchTopMarketStocks(10);
+      if (!stocks || stocks.length < 5) return { status: 'fail', note: 'fetchTopMarketStocks不可用' };
+      const klines = await DataAPI.fetchKline(stocks[0].code, 10);
+      if (!klines || klines.length < 5) return { status: 'warn', note: 'fetchKline数据不足,预测可能失败' };
+      return { status: 'pass', note: '依赖正常,可执行scan' };
+    });
+
+    if (this._btnStart) {
+      this._btnStart.disabled = false;
+      this._btnStart.textContent = '🔄 重新检测';
+    }
+    this._updateSummary();
+  },
+
+  copyReport() {
+    const ver = (typeof CONFIG !== 'undefined' && CONFIG.VERSION) ? CONFIG.VERSION : 'unknown';
+    const time = new Date().toLocaleString();
+    let text = '=== 智股分析 功能自检报告 ===\n';
+    text += '版本: ' + ver + '\n';
+    text += '时间: ' + time + '\n';
+    text += '---\n';
+    const pass = this._results.filter(r => r.status === 'pass').length;
+    const warn = this._results.filter(r => r.status === 'warn').length;
+    const fail = this._results.filter(r => r.status === 'fail').length;
+    text += '汇总: ' + pass + '通过 / ' + warn + '降级 / ' + fail + '失败 (共' + this._results.length + '项)\n';
+    text += '---\n';
+    const icons = { pass: '✅', warn: '⚠️', fail: '❌' };
+    for (const r of this._results) {
+      text += (icons[r.status] || '?') + ' ' + r.name + ' (' + r.timeMs + 'ms)';
+      if (r.note) text += ' — ' + r.note;
+      text += '\n';
+    }
+    text += '=== END ===';
+    try {
+      navigator.clipboard.writeText(text).then(() => {
+        if (typeof Utils !== 'undefined' && Utils.toast) Utils.toast('报告已复制');
+      }).catch(() => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); if (typeof Utils !== 'undefined' && Utils.toast) Utils.toast('报告已复制'); }
+        catch(e2) { if (typeof Utils !== 'undefined' && Utils.toast) Utils.toast('复制失败'); }
+        document.body.removeChild(ta);
+      });
+    } catch(e) {
+      if (typeof Utils !== 'undefined' && Utils.toast) Utils.toast('复制失败');
+    }
   }
 };
