@@ -22,19 +22,34 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.7',
+  VERSION: 'v5.8',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
   TENCENT_KLINE: 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get',
+  // 腾讯智能搜索API（备用，JSONP方式返回v_hint变量）
+  TENCENT_SEARCH: 'https://smartbox.gtimg.cn/s3/',
   // 东方财富搜索API
   EM_SEARCH: 'https://searchapi.eastmoney.com/api/suggest/get',
+  // 东方财富资金流向API（多通道容灾，按优先级排列）
+  EM_CAPITAL_CHANNELS: [
+    'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
+    'https://82.push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
+    'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get'
+  ],
   // 东方财富资金流向API
   EM_CAPITAL: 'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
   // 东方财富财务数据API
   EM_FINANCE: 'https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get',
   // 东方财富公告API
   EM_NEWS: 'https://np-anotice-stock.eastmoney.com/api/security/ann',
+  // 东方财富实时行情API（北交所备用）
+  EM_QUOTE: 'https://push2.eastmoney.com/api/qt/stock/get',
+  // 东方财富clist系列API多通道（板块/排行/成分股，主域+延时备份域）
+  EM_CLIST_CHANNELS: [
+    'https://push2.eastmoney.com/api/qt/clist/get',
+    'https://push2delay.eastmoney.com/api/qt/clist/get'
+  ],
   // 全球市场指数代码
   GLOBAL_INDICES: [
     { code: 'us.IXIC', name: '纳斯达克' },
@@ -2093,7 +2108,10 @@ const DataAPI = {
 
   /** 多通道请求东方财富clist接口（板块/排行/成分股容灾，主域失败自动切延时备份域，单通道8秒超时） */
   async _fetchEMClist(queryStr) {
-    const channels = CONFIG.EM_CLIST_CHANNELS;
+    const channels = (CONFIG.EM_CLIST_CHANNELS && CONFIG.EM_CLIST_CHANNELS.length)
+      ? CONFIG.EM_CLIST_CHANNELS
+      : ['https://push2.eastmoney.com/api/qt/clist/get','https://push2delay.eastmoney.com/api/qt/clist/get'];
+    try {
     for (let i = 0; i < channels.length; i++) {
       try {
         const controller = new AbortController();
@@ -2109,6 +2127,7 @@ const DataAPI = {
         console.warn('clist通道' + i + '失败:', e.message);
       }
     }
+    } catch (e) { console.warn('_fetchEMClist 异常:', e.message); }
     return null;
   },
 
@@ -2118,10 +2137,10 @@ const DataAPI = {
     const cacheKey = 'ranking_' + topN;
     const cached = this._cacheGet(cacheKey, 'marketRanking');
     if (cached) return cached;
+    let data = null;
     try {
       const queryStr = 'pn=1&pz=' + topN + '&po=1&np=1&fltt=2&invt=2&fid=f6&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f4,f5,f6,f7,f8,f9,f12,f14,f15,f16,f17,f18,f20,f21,f23,f62,f100';
       // 最多重试2次（共3次尝试）
-      let data = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         data = await this._fetchEMClist(queryStr);
         if (data) break;
@@ -2130,7 +2149,11 @@ const DataAPI = {
           await new Promise(r => setTimeout(r, 1000));
         }
       }
-      let result = [];
+    } catch (emErr) {
+      console.warn('[fetchMarketRanking] 东财异常:', emErr.message);
+    }
+    let result = [];
+    try {
       if (data) {
         result = data.data.diff.map(item => {
           const code = item.f12;
@@ -2300,7 +2323,9 @@ const DataAPI = {
     klt = klt || 101;
     const fields1 = 'f1,f2,f3,f7';
     const fields2 = 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65';
-    const channels = CONFIG.EM_CAPITAL_CHANNELS;
+    const channels = (CONFIG.EM_CAPITAL_CHANNELS && CONFIG.EM_CAPITAL_CHANNELS.length)
+      ? CONFIG.EM_CAPITAL_CHANNELS
+      : ['https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get','https://82.push2.eastmoney.com/api/qt/stock/fflow/daykline/get','https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get'];
     const labels = ['主通道', '备用通道1', '备用通道2'];
     let lastErr = null;
 
@@ -2332,14 +2357,19 @@ const DataAPI = {
     const cacheKey = 'capitalFlow_' + code;
     const cached = this._cacheGet(cacheKey, 'capitalFlow');
     if (cached) return cached;
+    let res = null;
     try {
       // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
       let secid;
       if (code.startsWith('hk')) secid = '116.' + code.substring(2);
       else if (code.startsWith('sh')) secid = '1.' + code.substring(2);
       else secid = '0.' + code.substring(2);
-      const res = await this._fetchEMCapitalKlines(secid, 20);
-      let result = [];
+      res = await this._fetchEMCapitalKlines(secid, 20);
+    } catch (emErr) {
+      console.warn('[fetchCapitalFlow] 东财异常:', emErr.message);
+    }
+    let result = [];
+    try {
       if (res) {
         result = res.klines.map(line => {
           const f = line.split(',');
@@ -2946,19 +2976,24 @@ const DataAPI = {
     const cacheKey = 'sectorRank_industry_' + topN;
     const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
+    let json = null;
     try {
       const fetchCount = topN + 5;
       const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:2&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
-      const json = await this._fetchEMClist(queryStr);
-      if (!json) {
-        console.warn('fetchSectorRank 所有通道失败，启用行情聚合兑底');
-        const agg = await this._aggregateSectorsFromStocks(topN);
-        if (agg.length > 0) {
-          this._cacheSet(cacheKey, 'sectorRank', agg);
-          return agg;
-        }
-        return [];
+      json = await this._fetchEMClist(queryStr);
+    } catch (e) {
+      console.warn('[fetchSectorRank] 东财异常:', e.message);
+    }
+    if (!json) {
+      console.warn('fetchSectorRank 东财失败，启用行情聚合兑底');
+      const agg = await this._aggregateSectorsFromStocks(topN);
+      if (agg.length > 0) {
+        this._cacheSet(cacheKey, 'sectorRank', agg);
+        return agg;
       }
+      return [];
+    }
+    try {
       const result = json.data.diff.map(item => ({
         code: String(item.f12 || ''),
         name: String(item.f14 || ''),
@@ -2981,20 +3016,25 @@ const DataAPI = {
     const cacheKey = 'sectorRank_concept_' + topN;
     const cached = this._cacheGet(cacheKey, 'sectorRank');
     if (cached) return cached;
+    let json = null;
     try {
       const fetchCount = topN + 5;
       const queryStr = `fid=f3&po=1&pz=${fetchCount}&pn=1&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:90+t:3&fields=f2,f3,f8,f12,f14,f62,f104,f105`;
-      const json = await this._fetchEMClist(queryStr);
-      if (!json) {
-        // v5.7: 概念板块无法聚合，降级为行业聚合结果
-        console.warn('fetchConceptSectors 东财失败，降级为行业聚合');
-        const agg = await this._aggregateSectorsFromStocks(topN);
-        if (agg.length > 0) {
-          this._cacheSet(cacheKey, 'sectorRank', agg);
-          return agg;
-        }
-        return [];
+      json = await this._fetchEMClist(queryStr);
+    } catch (e) {
+      console.warn('[fetchConceptSectors] 东财异常:', e.message);
+    }
+    if (!json) {
+      // v5.7: 概念板块无法聚合，降级为行业聚合结果
+      console.warn('fetchConceptSectors 东财失败，降级为行业聚合');
+      const agg = await this._aggregateSectorsFromStocks(topN);
+      if (agg.length > 0) {
+        this._cacheSet(cacheKey, 'sectorRank', agg);
+        return agg;
       }
+      return [];
+    }
+    try {
       const result = json.data.diff.map(item => ({
         code: String(item.f12 || ''),
         name: String(item.f14 || ''),
@@ -3459,12 +3499,13 @@ const DataAPI = {
     const cacheKey = 'topMarketStocks_' + topN;
     const cached = this._cacheGet(cacheKey, 'topMarketStocks');
     if (cached) return cached;
+    let merged = [];
+    let emFailed = false;
     try {
       // fs: 沪深A股（主板+创业板+科创板+北交所），双域名容灾
       // clist接口单页最多返回100条，topN>100时分页拉取合并（覆盖中小盘活跃股）
       const pageSize = 100;
       const pages = Math.max(1, Math.ceil(topN / pageSize));
-      let merged = [];
       for (let pn = 1; pn <= pages; pn++) {
         const queryStr = `fid=f6&po=1&pz=${pageSize}&pn=${pn}&np=1&fltt=2&invt=2&ut=b2884a393a59ad64002292a3e90d46a5&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81&fields=f2,f3,f5,f6,f7,f8,f9,f12,f14,f15,f16,f20,f23,f62,f100`;
         const json = await this._fetchEMClist(queryStr);
@@ -3472,21 +3513,26 @@ const DataAPI = {
         merged = merged.concat(json.data.diff);
         if (json.data.diff.length < pageSize) break; // 末页
       }
-      if (merged.length === 0) {
-        // v5.6: 东财clist不可达时，兜底到新浪排行→腾讯静态池
-        console.warn('[fetchTopMarketStocks] 东财merged为空，尝试新浪兜底');
-        const sina = await this._fetchSinaRanking(topN);
-        if (sina && sina.length > 0) {
-          this._cacheSet(cacheKey, 'topMarketStocks', sina);
-          return sina;
-        }
-        const fb = await this._fetchMarketRankingFallback(topN);
-        if (fb && fb.length > 0) {
-          this._cacheSet(cacheKey, 'topMarketStocks', fb);
-          return fb;
-        }
-        return [];
+    } catch (emErr) {
+      console.warn('[fetchTopMarketStocks] 东财异常:', emErr.message);
+      emFailed = true;
+    }
+    if (merged.length === 0 || emFailed) {
+      // v5.6: 东财clist不可达时，兜底到新浪排行→腾讯静态池
+      console.warn('[fetchTopMarketStocks] 东财不可用，尝试新浪兜底');
+      const sina = await this._fetchSinaRanking(topN);
+      if (sina && sina.length > 0) {
+        this._cacheSet(cacheKey, 'topMarketStocks', sina);
+        return sina;
       }
+      const fb = await this._fetchMarketRankingFallback(topN);
+      if (fb && fb.length > 0) {
+        this._cacheSet(cacheKey, 'topMarketStocks', fb);
+        return fb;
+      }
+      return [];
+    }
+    try {
       const result = merged.map(item => {
         const rawCode = String(item.f12 || '');
         const price = parseFloat(item.f2);
@@ -3572,10 +3618,15 @@ const DataAPI = {
     const cacheKey = 'cf_' + code + '_' + days;
     const cached = this._cacheGet(cacheKey, 'capitalFlowStock');
     if (cached) return cached;
+    let res = null;
     try {
       const rawCode = code.replace(/^(sh|sz|bj)/, '');
       const secid = (code.startsWith('sh') ? '1.' : '0.') + rawCode;
-      const res = await this._fetchEMCapitalKlines(secid, days);
+      res = await this._fetchEMCapitalKlines(secid, days);
+    } catch (emErr) {
+      console.warn('[fetchCapitalFlowStock] 东财异常:', emErr.message);
+    }
+    try {
       // 解析每日数据: 日期,主力净流入,小单净流入,中单净流入,大单净流入,超大单净流入,...
       let flows = (res ? res.klines : []).map(line => {
         const parts = line.split(',');
@@ -18636,6 +18687,19 @@ const SelfCheck = {
       if (!klines || klines.length < 5) return { status: 'warn', note: 'fetchKline数据不足,预测可能失败' };
       return { status: 'pass', note: '依赖正常,可执行scan' };
     });
+
+    // 12. CONFIG常量完整性
+    await this._runOne(11, 'CONFIG常量完整性', async () => {
+      const requiredKeys = ['TENCENT_QUOTE','TENCENT_KLINE','TENCENT_SEARCH','EM_QUOTE','EM_CAPITAL','EM_CAPITAL_CHANNELS','EM_CLIST_CHANNELS','EM_SEARCH','EM_FINANCE','EM_NEWS'];
+      const missing = [];
+      for (const k of requiredKeys) {
+        const v = typeof CONFIG !== 'undefined' ? CONFIG[k] : undefined;
+        if (v === undefined || v === null || v === '') { missing.push(k); continue; }
+        if (Array.isArray(v) && v.length === 0) { missing.push(k); }
+      }
+      if (missing.length === 0) return { status: 'pass', note: '全部' + requiredKeys.length + '个常量正常' };
+      return { status: 'fail', note: '缺失: ' + missing.join(',') };
+    }, 5000);
 
     if (this._btnStart) {
       this._btnStart.disabled = false;
