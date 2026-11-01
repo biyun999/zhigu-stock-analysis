@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.8',
+  VERSION: 'v5.9',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -17395,9 +17395,37 @@ const ValueScreener = {
       const failRate = candidates.length > 0 ? (failedCount / candidates.length) : 0;
       console.log('[ValueScreener] 扫描统计：成功', successCount, '失败', failedCount, '失败率', (failRate*100).toFixed(1)+'%');
 
-      // 第四步：排序取TOP20
+      // 第四步：排序取TOP30，做注销式回购校验后重新排序取TOP20
       scored.sort((a, b) => b.score - a.score);
-      const top20 = scored.slice(0, 20);
+      const top30 = scored.slice(0, 30);
+
+      // v5.9: 注销式回购识别 — 5只一批并发校验
+      const bbBonusMap = { strong: 6, done: 4, normal: 3 };
+      try {
+        for (let bi = 0; bi < top30.length; bi += 5) {
+          const batch = top30.slice(bi, bi + 5);
+          const results = await Promise.all(batch.map(function(s) {
+            return Promise.race([
+              ValueScreener._checkBuybackCancel(s.code),
+              new Promise(function(resolve) { setTimeout(function() { resolve({ hit: false }); }, 8000); })
+            ]);
+          }));
+          for (let bj = 0; bj < batch.length; bj++) {
+            const bb = results[bj];
+            if (bb && bb.hit) {
+              batch[bj].buybackCancel = bb;
+              const bonus = bbBonusMap[bb.level] || 3;
+              batch[bj].score = Math.min(100, batch[bj].score + bonus);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[ValueScreener] buyback check failed, using original ranking:', e && e.message);
+      }
+
+      // 加分后重新排序取TOP20
+      top30.sort((a, b) => b.score - a.score);
+      const top20 = top30.slice(0, 20);
 
       // 构建结果
       const today = new Date();
@@ -17430,7 +17458,8 @@ const ValueScreener = {
           pe: s.pe,
           pb: s.pb,
           cashToRevenue: s.cashToRevenue,
-          dims: s.dims
+          dims: s.dims,
+          buybackCancel: s.buybackCancel || null
         }))
       };
 
@@ -17576,6 +17605,81 @@ const ValueScreener = {
     if (text) text.textContent = `扫描中 ${done}/${total}`;
   },
 
+  /** v5.9: 注销式回购识别 — 拉取东财公告，匹配注销式回购标题 */
+  _buybackExcludeKeywords: ['限制性股票', '员工持股', '股权激励', '业绩补偿', '业绩承诺', '法律意见书'],
+
+  async _checkBuybackCancel(code, days) {
+    days = days || 180;
+    // 先查本地缓存（localStorage, 24h TTL）
+    const cacheKey = 'bbcancel_' + code;
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (cached.ts && Date.now() - cached.ts < 24 * 60 * 60 * 1000) {
+          return cached.result;
+        }
+      }
+    } catch(e) {}
+
+    const defaultResult = { hit: false };
+    try {
+      const stockCode = code.substring(2); // 去掉 sh/sz/bj 前缀
+      const url = CONFIG.EM_NEWS + '?sr=-1&page_size=50&page_index=1&ann_type=A&stock_list=' + stockCode + '&f_node=0&s_node=0';
+      const ctrl = new AbortController();
+      const timer = setTimeout(function() { ctrl.abort(); }, 8000);
+      const resp = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const text = await resp.text();
+      const data = DataAPI._parseEastMoneyResp(text);
+
+      if (!data || !data.data || !data.data.list || !Array.isArray(data.data.list)) {
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), result: defaultResult })); } catch(e) {}
+        return defaultResult;
+      }
+
+      const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+      const list = data.data.list;
+      for (let i = 0; i < list.length; i++) {
+        const item = list[i];
+        let title = item.title || '';
+        // 清洗标题：去掉 "公司名:" 或 "公司名：" 前缀
+        title = title.replace(/^[^:：]*[:：]\s*/, '');
+        const noticeDate = item.notice_date || '';
+        // 检查日期是否在范围内
+        if (noticeDate) {
+          const d = new Date(noticeDate.replace(' ', 'T'));
+          if (d.getTime() < cutoff) continue;
+        }
+        // 命中条件：同时包含"回购"和"注销"
+        if (title.indexOf('回购') < 0 || title.indexOf('注销') < 0) continue;
+        // 排除条件：包含干扰关键词
+        let excluded = false;
+        for (let j = 0; j < this._buybackExcludeKeywords.length; j++) {
+          if (title.indexOf(this._buybackExcludeKeywords[j]) >= 0) { excluded = true; break; }
+        }
+        if (excluded) continue;
+        // 分级
+        let level = 'normal';
+        if (title.indexOf('变更') >= 0 && title.indexOf('用途') >= 0 && title.indexOf('注销') >= 0) {
+          level = 'strong';
+        } else if (title.indexOf('注销完成') >= 0 || title.indexOf('股份变动') >= 0) {
+          level = 'done';
+        }
+        const dateOnly = noticeDate ? noticeDate.substring(0, 10) : '';
+        const result = { hit: true, level: level, date: dateOnly, title: title };
+        try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), result: result })); } catch(e) {}
+        return result;
+      }
+      // 无匹配
+      try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), result: defaultResult })); } catch(e) {}
+      return defaultResult;
+    } catch (e) {
+      console.warn('[ValueScreener] _checkBuybackCancel error:', e && e.message);
+      return defaultResult;
+    }
+  },
+
   /** 渲染最新榜单 */
   renderLatest() {
     const container = document.getElementById('valueTopList');
@@ -17615,13 +17719,21 @@ const ValueScreener = {
       html += '<div class="vsc-rank-name">';
       html += '<div class="vsc-rank' + rankClass + '">' + rank + '</div>';
       html += '<div>';
-      html += '<div class="vsc-name">' + s.name + '</div>';
+      html += '<div class="vsc-name">' + s.name;
+      if (s.buybackCancel && s.buybackCancel.hit) {
+        const bbTitle = '注销式回购' + (s.buybackCancel.date ? ' · ' + s.buybackCancel.date : '') + (s.buybackCancel.title ? ' · ' + s.buybackCancel.title : '');
+        html += ' <span class="vs-buyback-badge" title="' + bbTitle.replace(/"/g, '&quot;') + '">🔄</span>';
+      }
+      html += '</div>';
       html += '<div class="vsc-industry">' + (s.industry || '--') + '</div>';
       html += '</div></div>';
       html += '<div class="vsc-score-block">';
       html += '<div class="vsc-score">' + s.score + '</div>';
       html += '<div class="vsc-level">' + s.levelText + '</div>';
       html += '</div></div>';
+      if (s.buybackCancel && s.buybackCancel.hit && (s.buybackCancel.level === 'strong' || s.buybackCancel.level === 'done')) {
+        html += '<div class="vs-buyback-note">注销式回购｜预计增厚EPS</div>';
+      }
       html += '<div class="vsc-metrics">';
       html += '<div class="vsc-metric"><div class="vsc-metric-label">ROE</div><div class="vsc-metric-value">' + roeStr + '</div></div>';
       html += '<div class="vsc-metric"><div class="vsc-metric-label">毛利率</div><div class="vsc-metric-value">' + gmStr + '</div></div>';
@@ -18700,6 +18812,15 @@ const SelfCheck = {
       if (missing.length === 0) return { status: 'pass', note: '全部' + requiredKeys.length + '个常量正常' };
       return { status: 'fail', note: '缺失: ' + missing.join(',') };
     }, 5000);
+
+    // 13. 注销式回购识别
+    await this._runOne(12, '注销式回购识别', async () => {
+      const result = await ValueScreener._checkBuybackCancel('sh688234');
+      if (result && result.hit) {
+        return { status: 'pass', note: '天岳先进命中:' + result.level + ' · ' + (result.date || '') + ' · ' + (result.title || '').substring(0, 30) };
+      }
+      return { status: 'fail', note: '天岳先进未命中注销式回购(hit=' + (result ? result.hit : 'null') + ')' };
+    });
 
     if (this._btnStart) {
       this._btnStart.disabled = false;
