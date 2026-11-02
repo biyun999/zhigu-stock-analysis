@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.9',
+  VERSION: 'v5.10',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1938,6 +1938,43 @@ const DataAPI = {
         console.warn('[K线] 腾讯API超时或失败:', e && e.message);
       }
 
+      // v5.10: 腾讯proxy.finance K线备用通道（CORS ✅，浏览器可用，替代新浪K线兜底）
+      if (!isHK) {
+        try {
+          const proxyUrl = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param='
+            + code + ',day,,,' + count + ',qfq';
+          const proxyCtrl = new AbortController();
+          const proxyTimer = setTimeout(() => proxyCtrl.abort(), 10000);
+          const proxyResp = await fetch(proxyUrl, {
+            signal: proxyCtrl.signal,
+            headers: { 'Referer': 'https://gu.qq.com/' }
+          });
+          clearTimeout(proxyTimer);
+          if (proxyResp.ok) {
+            const proxyData = await proxyResp.json();
+            if (proxyData && proxyData.code === 0 && proxyData.data && proxyData.data[code]) {
+              const pNode = proxyData.data[code];
+              // 兼容 qfqday（前复权）和 day（不复权）两种字段名
+              const pData = pNode.qfqday || pNode.day || [];
+              if (pData.length > 0) {
+                console.log('[K线] 腾讯proxy备用通道成功:', code, pData.length, '条');
+                return pData.map(k => ({
+                  date: k[0],
+                  open: parseFloat(k[1]) || 0,
+                  close: parseFloat(k[2]) || 0,
+                  high: parseFloat(k[3]) || 0,
+                  low: parseFloat(k[4]) || 0,
+                  volume: parseFloat(k[5]) || 0,
+                  amount: parseFloat(k[8]) || 0
+                }));
+              }
+            }
+          }
+        } catch (proxyErr) {
+          console.warn('[K线] 腾讯proxy备用通道失败:', proxyErr && proxyErr.message);
+        }
+      }
+
       // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
       // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
       const emCode = code.substring(2);
@@ -1966,7 +2003,7 @@ const DataAPI = {
         } catch (e2) { continue; } // 该通道失败，切下一通道
       }
 
-      // v5.7: 新浪日K线兑底（腾讯501+东财连接失败时启用）
+      // v5.7: 新浪日K线兑底（腾讯+东财均失败时启用。注意：浏览器端因CORS限制会失败，仅Node环境可用）
       if (!isHK) {
         try {
           const sinaCount = count > 250 ? 250 : count;
@@ -3009,6 +3046,121 @@ const DataAPI = {
       console.error('fetchSectorRank error:', e);
       return [];
     }
+  },
+
+  /** v5.10: 获取新浪行业板块列表（JSONP，49个行业，CORS可用）
+   *  返回按涨跌幅降序排列的数组：{code, name, stockCount, changePct, amount, leaderCode, leaderName, leaderChangePct} */
+  async fetchSinaIndustryList() {
+    const cacheKey = 'sinaIndustryList';
+    const cached = this._cacheGet(cacheKey, 'sinaIndustry');
+    if (cached) return cached;
+    try {
+      // JSONP方式加载（GBK编码），使用已有的_jsonp方法
+      const raw = await this._jsonp(
+        'https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php',
+        'S_Finance_bankuai_sinaindustry',
+        10000
+      );
+      if (!raw || typeof raw !== 'object') {
+        console.warn('[新浪行业] JSONP返回空或非对象');
+        // 清理window上残留的变量
+        try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
+        return [];
+      }
+      const result = [];
+      for (const [nodeCode, valueStr] of Object.entries(raw)) {
+        if (typeof valueStr !== 'string') continue;
+        const parts = valueStr.split(',');
+        if (parts.length < 13) continue;
+        result.push({
+          code: parts[0] || nodeCode,
+          name: parts[1] || '',
+          stockCount: parseInt(parts[2]) || 0,
+          avgPrice: parseFloat(parts[3]) || 0,
+          changeAmt: parseFloat(parts[4]) || 0,
+          changePct: parseFloat(parts[5]) || 0,
+          volume: parseInt(parts[6]) || 0,
+          amount: parseFloat(parts[7]) || 0,
+          leaderCode: parts[8] || '',
+          leaderChangePct: parseFloat(parts[9]) || 0,
+          leaderPrice: parseFloat(parts[10]) || 0,
+          leaderName: parts[12] || ''
+        });
+      }
+      // 清理window上残留的变量
+      try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
+      // 按涨跌幅降序排列
+      result.sort((a, b) => b.changePct - a.changePct);
+      console.log('[新浪行业] 获取成功:', result.length, '个行业');
+      this._cacheSet(cacheKey, 'sinaIndustry', result);
+      return result;
+    } catch (e) {
+      console.warn('[fetchSinaIndustryList] 失败:', e && e.message);
+      try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
+      return [];
+    }
+  },
+
+  /** v5.10: 查询个股所属行业（三层兜底）
+   *  第一层：CONFIG.SECTORS本地映射（立即返回）
+   *  第二层：遍历新浪行业成分股接口匹配（缓存24小时到localStorage）
+   *  第三层：DiagnosticEngine._inferSectorTypeFromName推断
+   *  返回 {name, code, from} 或 null */
+  async fetchStockIndustry(code) {
+    // 第一层：本地映射
+    if (CONFIG.SECTORS[code]) {
+      return { name: CONFIG.SECTORS[code].name, code: code, from: 'local' };
+    }
+    // 第二层：从localStorage缓存读取
+    const cacheKey = 'zhigu_industry_map_' + code;
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.name && (Date.now() - parsed.ts < 86400000)) {
+          return { name: parsed.name, code: code, from: 'cache' };
+        }
+      }
+    } catch (e) { /* ignore */ }
+    // 第三层：遍历新浪行业列表，逐个查成分股匹配
+    try {
+      const industries = await this.fetchSinaIndustryList();
+      if (industries.length === 0) return null;
+      // 按成交额从大到小排序（优先匹配成交额大的行业）
+      const sorted = industries.slice().sort((a, b) => b.amount - a.amount);
+      for (const ind of sorted) {
+        try {
+          const nodeCode = ind.code;
+          const url = 'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData'
+            + '?page=1&num=100&sort=amount&asc=0&node=' + nodeCode;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          const resp = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timer);
+          if (!resp.ok) continue;
+          const stocks = await resp.json();
+          if (!Array.isArray(stocks)) continue;
+          // 匹配：新浪返回的symbol格式为 sh600519 / sz000858
+          const matched = stocks.find(s => {
+            const sym = (s.symbol || '').toLowerCase();
+            return sym === code || (s.code && (code.replace(/^(sh|sz|bj)/, '') === s.code));
+          });
+          if (matched) {
+            // 缓存到localStorage 24小时
+            try {
+              localStorage.setItem(cacheKey, JSON.stringify({ name: ind.name, ts: Date.now() }));
+            } catch(e2) { /* quota exceeded */ }
+            return { name: ind.name, code: code, from: 'sina_component' };
+          }
+        } catch (e2) {
+          // 单个行业查询失败，继续下一个
+          continue;
+        }
+      }
+    } catch (e) {
+      console.warn('[fetchStockIndustry] 新浪行业匹配失败:', e && e.message);
+    }
+    return null;
   },
 
   /** 获取概念板块排行（m:90+t:3，行业板块失败时的降级方案） */
@@ -4633,55 +4785,142 @@ const DiagnosticEngine = {
       html += `<p>政策对${sector.name}行业影响中性，行业更多依赖自身经营能力和市场竞争。</p>`;
     }
 
+    // v5.10: 财报披露期提示条（mod2AsyncData之前）
+    html += '<div id="reportCalendarTip" style="padding:6px 12px;margin:4px 0 6px;border-radius:6px;font-size:12px;background:rgba(255,255,255,0.03)"></div>';
+
     // v4.4 P25: 异步数据占位容器
     html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在加载行业实时数据...</div></div>';
 
     return html;
   },
 
-  /** v4.4 P25+P34: 异步增强模块二行业数据（板块排名+热度评分+个股行业对比+概念共振）
-   *  v4.4 P34: ①AbortController 10秒超时保护 ②修复TechRating→DiagnosticEngine ③股票名称四层兜底 */
+  /** v4.4 P25+P34, v5.10: 异步增强模块二行业数据（板块排名+热度评分+个股行业对比+概念共振）
+   *  v5.10: 优先使用新浪行业列表（CORS可用），东财/聚合链路作为降级方案；渲染适配新浪字段 */
   async _enhanceModule2(quote) {
     const container = document.getElementById('mod2AsyncData');
     if (!container) return;
 
+    // v5.10: 渲染财报披露期提示条
     try {
-      // v4.4 P34: 带 Promise.race 超时保护的 fetchSectorRank（10秒）
-      const fetchWithTimeout = async (limit) => {
-        const timeoutPromise = new Promise((resolve) => {
-          setTimeout(() => resolve([]), 10000);
-        });
-        try {
-          return await Promise.race([
-            DataAPI.fetchSectorRank(limit),
-            timeoutPromise
-          ]);
-        } catch (e) {
-          return [];
+      const calTip = document.getElementById('reportCalendarTip');
+      if (calTip && typeof ReportCalendar !== 'undefined') {
+        const calStatus = ReportCalendar.getStatus(new Date());
+        let calText = '', calColor = '#888';
+        if (calStatus.isInWindow) {
+          calColor = '#ff9800'; // 橙色：披露期内
+          calText = '📅 当前处于' + calStatus.phase + '（' + calStatus.startDate + '~' + calStatus.endDate + '），距截止还有 ' + calStatus.daysLeft + ' 天';
+          if (calStatus.alsoIn) {
+            calText += '（同处' + calStatus.alsoIn + '）';
+          }
+        } else if (calStatus.daysToNext <= 15) {
+          calColor = '#4a9eff'; // 蓝色：临近披露期
+          calText = '📅 距' + calStatus.nextReport + '披露期开始还有 ' + calStatus.daysToNext + ' 天（' + calStatus.nextWindowStart + ' 起）';
+        } else {
+          calColor = '#888'; // 灰色：空窗期
+          calText = '📅 当前为财报空窗期，下一披露期：' + calStatus.nextReport + '（' + calStatus.nextWindowStart + ' 起，还有 ' + calStatus.daysToNext + ' 天）';
         }
-      };
+        calTip.style.color = calColor;
+        calTip.textContent = calText;
+      }
+    } catch (e) {
+      console.warn('[模块2增强] 财报日历渲染失败:', e && e.message);
+    }
 
-      // 并行获取行业板块排名和全市场板块列表（带10秒超时）
-      const [topSectors, allSectors] = await Promise.all([
-        fetchWithTimeout(50),
-        fetchWithTimeout(200)
-      ]);
+    // 10秒超时保护：确保任何情况下容器都不会停在loading状态
+    const timeoutGuard = setTimeout(() => {
+      if (container && container.querySelector && container.querySelector('.loading-pulse')) {
+        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted,#888)">⏳ 行业数据加载超时，请稍后刷新</div>';
+      }
+    }, 10000);
 
-      if (!topSectors.length) {
-        // v4.4 P34: 接口无数据时清空loading
-        container.innerHTML = '';
+    try {
+      // v5.10: 优先使用新浪行业列表（CORS ✅ 浏览器可用）
+      let allSectors = [];
+      let topSectors = [];
+      let useSinaData = false;
+
+      try {
+        const sinaIndustries = await DataAPI.fetchSinaIndustryList();
+        if (sinaIndustries && sinaIndustries.length > 0) {
+          // 将新浪数据映射为与 fetchSectorRank 一致的结构
+          allSectors = sinaIndustries.map((s, idx) => ({
+            code: s.code,
+            name: s.name,
+            changePct: s.changePct,
+            mainFlow: 0,        // 新浪行业列表无主力资金字段
+            turnoverPct: 0,     // 新浪行业列表无换手率字段
+            upCount: 0,         // 新浪行业列表无涨跌家数字段
+            downCount: 0,
+            stockCount: s.stockCount || 0,
+            amount: s.amount || 0,
+            leaderCode: s.leaderCode || '',
+            leaderName: s.leaderName || '',
+            leaderChangePct: s.leaderChangePct || 0,
+            _sinaRank: idx + 1,  // 基于涨跌幅的排名
+            _fromSina: true
+          }));
+          topSectors = allSectors.slice(0, 50);
+          useSinaData = true;
+          console.log('[模块2增强] 使用新浪行业数据:', allSectors.length, '个行业');
+        }
+      } catch (e) {
+        console.warn('[模块2增强] 新浪行业列表失败:', e && e.message);
+      }
+
+      // v5.10: 新浪失败时，回退到原有的东财/聚合链路（保留不删除）
+      if (!useSinaData) {
+        const fetchWithTimeout = async (limit) => {
+          const timeoutPromise = new Promise((resolve) => {
+            setTimeout(() => resolve([]), 10000);
+          });
+          try {
+            return await Promise.race([
+              DataAPI.fetchSectorRank(limit),
+              timeoutPromise
+            ]);
+          } catch (e) {
+            return [];
+          }
+        };
+        const [top1, all1] = await Promise.all([
+          fetchWithTimeout(50),
+          fetchWithTimeout(200)
+        ]);
+        topSectors = top1;
+        allSectors = all1;
+        if (topSectors.length > 0) {
+          console.log('[模块2增强] 回退到东财/聚合链路:', topSectors.length, '个板块');
+        }
+      }
+
+      // v5.10: 彻底无数据时，显示灰色提示而非清空容器
+      if (!topSectors.length && !allSectors.length) {
+        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted,#888)">行业数据源暂不可用（新浪/东财均未响应）</div>';
+        clearTimeout(timeoutGuard);
         return;
       }
 
-      // v4.4 P34: 查找该股所属行业板块（四层兜底）
+      // v5.10: 查找该股所属行业（增强兜底：加入 fetchStockIndustry）
       let sector = CONFIG.SECTORS[quote.code];
       let industryName = sector ? sector.name : '';
-      // 第二层兜底：quote.industry
+      // 第二层：quote.industry
       if (!industryName && quote.industry) {
         industryName = quote.industry;
         if (!sector) {
           const inferredType = DiagnosticEngine._inferSectorType(industryName);
           sector = { name: industryName, type: inferredType, _fromQuote: true };
+        }
+      }
+      // v5.10: 第二层半：fetchStockIndustry（查新浪行业成分股匹配）
+      if (!industryName) {
+        try {
+          const indResult = await DataAPI.fetchStockIndustry(quote.code);
+          if (indResult && indResult.name) {
+            industryName = indResult.name;
+            sector = { name: indResult.name, type: DiagnosticEngine._inferSectorType(indResult.name), _fromSina: true };
+          }
+        } catch (e) {
+          console.warn('[模块2增强] fetchStockIndustry失败:', e && e.message);
         }
       }
       // 第三层：模糊匹配全板块列表
@@ -4695,7 +4934,7 @@ const DiagnosticEngine = {
           }
         }
       }
-      // v4.4 P34: 第四层兜底 - 股票名称关键词推断行业名
+      // 第四层：股票名称关键词推断
       if (!industryName && quote.name) {
         const inferred = DiagnosticEngine._inferSectorTypeFromName(quote.name);
         if (inferred) {
@@ -4703,16 +4942,11 @@ const DiagnosticEngine = {
           sector = { name: inferred.name, type: inferred.type, _fromStockName: true };
         }
       }
-      // 所有兜底都失败，清空loading
-      if (!industryName) {
-        container.innerHTML = '';
-        return;
-      }
 
       let matchedSector = null;
       let sectorRank = -1;
 
-      if (industryName) {
+      if (industryName && allSectors.length > 0) {
         for (let i = 0; i < allSectors.length; i++) {
           if (allSectors[i].name.indexOf(industryName) >= 0 || industryName.indexOf(allSectors[i].name) >= 0) {
             matchedSector = allSectors[i];
@@ -4737,26 +4971,54 @@ const DiagnosticEngine = {
 
       // 1) 行业基本面数据
       if (matchedSector) {
+        const isSina = matchedSector._fromSina || useSinaData;
         html += '<div class="mod2-sub-title">📊 行业实时数据</div>';
         html += '<div class="mod2-industry-grid">';
+        // 行业涨幅（两种数据源都有）
         html += `<div class="mod2-ind-item"><span class="mod2-ind-label">行业涨幅</span><span class="mod2-ind-val" style="color:${matchedSector.changePct >= 0 ? '#00e676' : '#ff5252'}">${matchedSector.changePct >= 0 ? '+' : ''}${matchedSector.changePct.toFixed(2)}%</span></div>`;
-        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">主力资金</span><span class="mod2-ind-val" style="color:${matchedSector.mainFlow >= 0 ? '#00e676' : '#ff5252'}">${(matchedSector.mainFlow / 1e8).toFixed(2)}亿</span></div>`;
-        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">换手率</span><span class="mod2-ind-val">${matchedSector.turnoverPct.toFixed(2)}%</span></div>`;
-        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">涨/跌家数</span><span class="mod2-ind-val">${matchedSector.upCount}↑ / ${matchedSector.downCount}↓</span></div>`;
-        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">行业排名</span><span class="mod2-ind-val" style="color:#ffd54f">第${sectorRank}/${allSectors.length}名</span></div>`;
+        // 主力资金（新浪数据无此字段，显示--）
+        if (isSina && !matchedSector.mainFlow) {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">主力资金</span><span class="mod2-ind-val" style="color:var(--text-muted,#888)">--</span></div>`;
+        } else {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">主力资金</span><span class="mod2-ind-val" style="color:${(matchedSector.mainFlow || 0) >= 0 ? '#00e676' : '#ff5252'}">${((matchedSector.mainFlow || 0) / 1e8).toFixed(2)}亿</span></div>`;
+        }
+        // 换手率（新浪数据无此字段，显示--）
+        if (isSina && !matchedSector.turnoverPct) {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">换手率</span><span class="mod2-ind-val" style="color:var(--text-muted,#888)">--</span></div>`;
+        } else {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">换手率</span><span class="mod2-ind-val">${(matchedSector.turnoverPct || 0).toFixed(2)}%</span></div>`;
+        }
+        // 涨跌家数 / 成分股数量
+        if (isSina && matchedSector.stockCount > 0 && !matchedSector.upCount) {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">成分股</span><span class="mod2-ind-val">${matchedSector.stockCount}只</span></div>`;
+        } else {
+          html += `<div class="mod2-ind-item"><span class="mod2-ind-label">涨/跌家数</span><span class="mod2-ind-val">${matchedSector.upCount || 0}↑ / ${matchedSector.downCount || 0}↓</span></div>`;
+        }
+        // 行业排名（新浪数据基于49行业排名）
+        const totalIndustries = allSectors.length || 49;
+        const rankDisplay = matchedSector._sinaRank || sectorRank;
+        html += `<div class="mod2-ind-item"><span class="mod2-ind-label">行业排名</span><span class="mod2-ind-val" style="color:#ffd54f">第${rankDisplay}/${totalIndustries}名</span></div>`;
         html += '</div>';
 
-        // 2) 行业热度三维评分
-        const heatResult = DataAPI.calcSectorHeatScore(matchedSector);
-        if (heatResult && heatResult.totalScore > 0) {
-          html += '<div class="mod2-sub-title" style="margin-top:10px">🔥 行业热度三维评分</div>';
-          const totalCls = heatResult.totalScore >= 70 ? '#00e676' : heatResult.totalScore >= 50 ? '#ffc107' : '#ff5252';
-          html += '<div class="mod2-heat-scores">';
-          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">资金</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.fundScore/40*100}%;background:#00d4ff"></div></div><span class="mod2-heat-val">${heatResult.fundScore}/40</span></div>`;
-          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">情绪</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.sentimentScore/30*100}%;background:#00e676"></div></div><span class="mod2-heat-val">${heatResult.sentimentScore}/30</span></div>`;
-          html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">趋势</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.trendScore/30*100}%;background:#ffd54f"></div></div><span class="mod2-heat-val">${heatResult.trendScore}/30</span></div>`;
-          html += `<div class="mod2-heat-total">综合热度：<span style="color:${totalCls};font-weight:700">${heatResult.totalScore}/100</span></div>`;
-          html += '</div>';
+        // v5.10: 领涨股信息（新浪数据专属）
+        if (isSina && matchedSector.leaderName) {
+          const ldrColor = (matchedSector.leaderChangePct || 0) >= 0 ? '#00e676' : '#ff5252';
+          html += `<div style="padding:4px 0;font-size:12px;color:var(--text-secondary,#aaa)">领涨股：<span style="color:#e0e0e0">${matchedSector.leaderName}</span> <span style="color:${ldrColor}">${(matchedSector.leaderChangePct || 0) >= 0 ? '+' : ''}${(matchedSector.leaderChangePct || 0).toFixed(2)}%</span></div>`;
+        }
+
+        // 2) 行业热度三维评分（仅东财数据有完整字段时展示）
+        if (!isSina) {
+          const heatResult = DataAPI.calcSectorHeatScore(matchedSector);
+          if (heatResult && heatResult.totalScore > 0) {
+            html += '<div class="mod2-sub-title" style="margin-top:10px">🔥 行业热度三维评分</div>';
+            const totalCls = heatResult.totalScore >= 70 ? '#00e676' : heatResult.totalScore >= 50 ? '#ffc107' : '#ff5252';
+            html += '<div class="mod2-heat-scores">';
+            html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">资金</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.fundScore/40*100}%;background:#00d4ff"></div></div><span class="mod2-heat-val">${heatResult.fundScore}/40</span></div>`;
+            html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">情绪</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.sentimentScore/30*100}%;background:#00e676"></div></div><span class="mod2-heat-val">${heatResult.sentimentScore}/30</span></div>`;
+            html += `<div class="mod2-heat-bar"><span class="mod2-heat-label">趋势</span><div class="mod2-heat-track"><div class="mod2-heat-fill" style="width:${heatResult.trendScore/30*100}%;background:#ffd54f"></div></div><span class="mod2-heat-val">${heatResult.trendScore}/30</span></div>`;
+            html += `<div class="mod2-heat-total">综合热度：<span style="color:${totalCls};font-weight:700">${heatResult.totalScore}/100</span></div>`;
+            html += '</div>';
+          }
         }
       }
 
@@ -4773,9 +5035,10 @@ const DiagnosticEngine = {
         html += `<div style="padding:8px 12px;background:rgba(255,255,255,0.03);border-radius:8px;font-size:13px;color:${positionColor}">${positionIcon} ${positionLabel}</div>`;
       }
 
-      // 4) 相关概念板块共振（取前5热门概念）
-      if (topSectors.length >= 5) {
-        const hotConcepts = topSectors.slice(0, 5);
+      // 4) 相关概念板块共振（取前5热门板块）
+      const displaySectors = useSinaData ? allSectors : topSectors;
+      if (displaySectors.length >= 5) {
+        const hotConcepts = displaySectors.slice(0, 5);
         html += '<div class="mod2-sub-title" style="margin-top:10px">🔗 热门板块共振</div>';
         html += '<div class="mod2-concept-row">';
         hotConcepts.forEach(s => {
@@ -4787,10 +5050,12 @@ const DiagnosticEngine = {
 
       html += '</div>';
       container.innerHTML = html;
+      clearTimeout(timeoutGuard);
 
     } catch (e) {
+      clearTimeout(timeoutGuard);
       console.warn('[模块2增强] 异步加载失败:', e);
-      // v4.4 P34: 降级显示（含股票名称兜底推断）
+      // v5.10: 降级显示（含股票名称兜底推断），不再清空容器
       const sector = CONFIG.SECTORS[quote.code];
       let fallbackName = sector ? sector.name : (quote.industry || '');
       if (!fallbackName && quote.name) {
@@ -4800,7 +5065,7 @@ const DiagnosticEngine = {
       if (fallbackName) {
         container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">📊 行业：' + fallbackName + '（暂无更多行业数据）</div>';
       } else {
-        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">暂无行业数据，建议查阅公司年报</div>';
+        container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">行业数据源暂不可用（新浪/东财均未响应）</div>';
       }
     }
   },
@@ -18604,6 +18869,136 @@ const RiskRadar = {
 };
 
 // ============================================================
+// v5.10: ReportCalendar - 财报披露期日历（A股法定披露期）
+// ============================================================
+const ReportCalendar = {
+  // A股法定披露期规则
+  _WINDOWS: [
+    { key: 'annual',   name: '年报',   startMonth: 1,  startDay: 1,  endMonth: 4,  endDay: 30 },
+    { key: 'q1',       name: '一季报', startMonth: 4,  startDay: 1,  endMonth: 4,  endDay: 30 },
+    { key: 'semi',     name: '半年报', startMonth: 7,  startDay: 1,  endMonth: 8,  endDay: 31 },
+    { key: 'q3',       name: '三季报', startMonth: 10, startDay: 1,  endMonth: 10, endDay: 31 }
+  ],
+
+  /** 辅助：计算距某月某日的自然天数（可为负） */
+  _daysTo(month, day, fromDate) {
+    const y = fromDate.getFullYear();
+    let target = new Date(y, month - 1, day);
+    // 如果今年已过该日期，推到明年
+    if (target < new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate())) {
+      target = new Date(y + 1, month - 1, day);
+    }
+    const diff = target - new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate());
+    return Math.round(diff / 86400000);
+  },
+
+  /** 辅助：检查 date 是否在某披露窗口内 */
+  _isInWindow(win, date) {
+    const m = date.getMonth() + 1;
+    const d = date.getDate();
+    const startVal = m * 100 + d;
+    const winStart = win.startMonth * 100 + win.startDay;
+    const winEnd = win.endMonth * 100 + win.endDay;
+    return startVal >= winStart && startVal <= winEnd;
+  },
+
+  /** 辅助：计算披露窗口内距截止日的天数 */
+  _daysLeftInWindow(win, date) {
+    const y = date.getFullYear();
+    const endDate = new Date(y, win.endMonth - 1, win.endDay);
+    const today = new Date(y, date.getMonth(), date.getDate());
+    return Math.max(0, Math.round((endDate - today) / 86400000));
+  },
+
+  /** 获取当前财报日历状态
+   *  返回：{ phase, startDate, endDate, daysLeft, isInWindow, alsoIn, nextReport, nextWindowStart, daysToNext } */
+  getStatus(date) {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) {
+      date = new Date();
+    }
+
+    // 找出当前处于哪些披露窗口
+    const activeWindows = this._WINDOWS.filter(w => this._isInWindow(w, date));
+
+    // 披露期重叠时（1-4月年报+一季报），优先显示年报
+    let primary = null;
+    let alsoIn = null;
+    if (activeWindows.length > 0) {
+      // 优先级：年报 > 一季报 > 半年报 > 三季报
+      const priority = { annual: 4, q1: 3, semi: 2, q3: 1 };
+      activeWindows.sort((a, b) => (priority[b.key] || 0) - (priority[a.key] || 0));
+      primary = activeWindows[0];
+      if (activeWindows.length > 1) {
+        alsoIn = activeWindows[1].name;
+      }
+    }
+
+    if (primary) {
+      const startStr = primary.startMonth + '/' + primary.startDay;
+      const endStr = primary.endMonth + '/' + primary.endDay;
+      const daysLeft = this._daysLeftInWindow(primary, date);
+      // 计算下一个披露期
+      const nextInfo = this._findNextWindow(date);
+      return {
+        phase: primary.name + '披露期',
+        startDate: startStr,
+        endDate: endStr,
+        daysLeft: daysLeft,
+        isInWindow: true,
+        alsoIn: alsoIn,
+        nextReport: nextInfo.name,
+        nextWindowStart: nextInfo.startStr,
+        daysToNext: nextInfo.daysToNext
+      };
+    }
+
+    // 不在披露期内
+    const nextInfo = this._findNextWindow(date);
+    return {
+      phase: '披露期外',
+      startDate: '',
+      endDate: '',
+      daysLeft: 0,
+      isInWindow: false,
+      alsoIn: null,
+      nextReport: nextInfo.name,
+      nextWindowStart: nextInfo.startStr,
+      daysToNext: nextInfo.daysToNext
+    };
+  },
+
+  /** 查找距当前日期最近的下一个披露窗口 */
+  _findNextWindow(date) {
+    let minDays = Infinity;
+    let nearest = this._WINDOWS[0]; // 默认年报
+    for (const win of this._WINDOWS) {
+      const d = this._daysTo(win.startMonth, win.startDay, date);
+      // 如果当前就在窗口内，跳过（应已由 primary 处理）
+      if (this._isInWindow(win, date)) continue;
+      if (d > 0 && d < minDays) {
+        minDays = d;
+        nearest = win;
+      }
+    }
+    // 如果所有窗口都在今年已过（12月），返回明年最近的
+    if (minDays === Infinity) {
+      for (const win of this._WINDOWS) {
+        const d = this._daysTo(win.startMonth, win.startDay, date);
+        if (d < minDays) {
+          minDays = d;
+          nearest = win;
+        }
+      }
+    }
+    return {
+      name: nearest.name,
+      startStr: nearest.startMonth + '/' + nearest.startDay,
+      daysToNext: minDays
+    };
+  }
+};
+
+// ============================================================
 // v5.7: SelfCheck - APP内置功能自检面板
 // ============================================================
 const SelfCheck = {
@@ -18821,6 +19216,22 @@ const SelfCheck = {
       }
       return { status: 'fail', note: '天岳先进未命中注销式回购(hit=' + (result ? result.hit : 'null') + ')' };
     });
+
+    // 14. v5.10: 财报日历
+    await this._runOne(13, '财报日历', async () => {
+      const status = ReportCalendar.getStatus(new Date());
+      if (!status || !status.phase) return { status: 'fail', note: '返回结构不完整' };
+      if (typeof status.daysLeft !== 'number' || status.daysLeft < 0) return { status: 'fail', note: 'daysLeft无效:' + status.daysLeft };
+      if (typeof status.daysToNext !== 'number' || status.daysToNext < 0) return { status: 'fail', note: 'daysToNext无效:' + status.daysToNext };
+      let note = status.phase;
+      if (status.isInWindow) {
+        note += ' 截止' + status.endDate + ' 剩' + status.daysLeft + '天';
+        if (status.alsoIn) note += ' (同处' + status.alsoIn + ')';
+      } else {
+        note += ' 下一:' + status.nextReport + '(' + status.nextWindowStart + '起 还有' + status.daysToNext + '天)';
+      }
+      return { status: 'pass', note: note };
+    }, 5000);
 
     if (this._btnStart) {
       this._btnStart.disabled = false;
