@@ -4671,7 +4671,7 @@ const DiagnosticEngine = {
     const name = industryName;
     const techKW = ['半导体','芯片','电子','软件','计算机','通信','AI','人工智能','算力','信创','信息技术','互联网','数字经济','集成电路','元器件','消费电子','安防','数据','通信','5G','光纤','光缆','光电','显示','面板'];
     const financeKW = ['银行','证券','保险','金融','信托','期货','租赁'];
-    const consumeKW = ['白酒','食品','饮料','家电','服装','纺织','零售','百货','超市','餐饮','旅游','酒店','美容','化妆品','日用品','消费品'];
+    const consumeKW = ['白酒','酿酒','食品','饮料','家电','服装','纺织','零售','百货','超市','餐饮','旅游','酒店','美容','化妆品','日用品','消费品'];
     const newEnergyKW = ['光伏','风电','锂电','储能','氢能','碳中和','新能源','电池','逆变','太阳能','风力'];
     const medicalKW = ['医药','医疗','生物','制药','疫苗','基因','CXO','CRO','CDMO','医疗器械','中药','保健','药业','药品'];
     const cycleKW = ['化工','钢铁','有色','水泥','建材','造纸','玻璃','钛白粉','稀土','矿'];
@@ -4955,14 +4955,58 @@ const DiagnosticEngine = {
           }
         }
       }
-      // 若未匹配到，用相似度匹配
+      // v5.10: 若未匹配到，先按行业类型推断匹配（更准确），同类型时取名称最相似的
+      if (!matchedSector && sector && sector.type && allSectors.length > 0) {
+        // v5.10: 名称别名映射（CONFIG.SECTORS名称 → 新浪行业名称）
+        const _nameAlias = {
+          '白酒': '酿酒行业', '券商': '证券行业', '乳制品': '食品行业',
+          '石油石化': '石油行业', '煤化工': '化工行业', '锂矿': '矿产行业',
+          '消费电子': '电子器件', '互联网金融': '电子信息'
+        };
+        const aliasName = _nameAlias[industryName];
+        if (aliasName) {
+          for (let i = 0; i < allSectors.length; i++) {
+            if (allSectors[i].name === aliasName || allSectors[i].name.indexOf(aliasName) >= 0) {
+              matchedSector = allSectors[i];
+              sectorRank = i + 1;
+              break;
+            }
+          }
+        }
+        // 别名未命中时，按类型推断 + 名称相似度
+        if (!matchedSector) {
+          let bestCandidate = null;
+          let bestRank = -1;
+          let bestSimilarity = 0;
+          for (let i = 0; i < allSectors.length; i++) {
+            const inferred = DiagnosticEngine._inferSectorType(allSectors[i].name);
+            if (inferred === sector.type) {
+              let sim = 0;
+              if (industryName) {
+                for (const ch of industryName) { if (allSectors[i].name.indexOf(ch) >= 0) sim++; }
+              }
+              if (!bestCandidate || sim > bestSimilarity) {
+                bestCandidate = allSectors[i];
+                bestRank = i + 1;
+                bestSimilarity = sim;
+              }
+            }
+          }
+          if (bestCandidate) {
+            matchedSector = bestCandidate;
+            sectorRank = bestRank;
+          }
+        }
+      }
+      // v5.10: 最后兜底 - 增强模糊匹配（短名称允许1个共同字符，长名称仍需2个）
       if (!matchedSector && industryName && allSectors.length > 0) {
+        const minCommon = industryName.length <= 2 ? 1 : 2;
         for (let i = 0; i < allSectors.length; i++) {
           const sName = allSectors[i].name;
           if (sName.length >= 2 && industryName.length >= 2) {
             let common = 0;
             for (const ch of industryName) { if (sName.indexOf(ch) >= 0) common++; }
-            if (common >= 2) { matchedSector = allSectors[i]; sectorRank = i + 1; break; }
+            if (common >= minCommon) { matchedSector = allSectors[i]; sectorRank = i + 1; break; }
           }
         }
       }
