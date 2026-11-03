@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.10',
+  VERSION: 'v5.11',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -4720,12 +4720,11 @@ const DiagnosticEngine = {
     return null;
   },
 
-  /** 模块2：行业政策与成长性评估（v4.4 P34：四层兜底+超时保护+即时渲染） */
+  /** 模块2：行业政策与成长性评估（v5.11：重构为始终输出reportCalendarTip+mod2PolicyBox+mod2AsyncData） */
   module2_Industry({ quote }) {
     // v4.4 P34: 四层兜底 - ①CONFIG.SECTORS ②quote.industry ③股票名称推断 ④异步增强
     let sector = CONFIG.SECTORS[quote.code] || null;
     let html = '';
-    let conclusion = '';
 
     // 第二层兜底：使用腾讯quote接口返回的industry字段
     if (!sector && quote.industry) {
@@ -4741,15 +4740,24 @@ const DiagnosticEngine = {
       }
     }
 
-    if (!sector) {
-      // 完全无法推断行业，显示提示
-      conclusion = '📊 暂无行业数据，建议查阅公司年报';
-      html += `<div class="conclusion">${conclusion}</div>`;
-      html += '<div id="mod2AsyncData" class="mod2-async-placeholder"></div>';
-      return html;
+    // v5.11: 财报披露期提示条始终输出（移至最前）
+    html += '<div id="reportCalendarTip" style="padding:6px 12px;margin:4px 0 6px;border-radius:6px;font-size:12px;background:rgba(255,255,255,0.03)"></div>';
+
+    // v5.11: 政策评估区域（有sector时渲染真实政策，无sector时显示识别中）
+    if (sector) {
+      html += '<div id="mod2PolicyBox">' + this._renderIndustryPolicy(sector.name, sector.type) + '</div>';
+    } else {
+      html += '<div id="mod2PolicyBox"><div class="conclusion">📊 行业归属识别中…</div></div>';
     }
 
-    // 行业政策评估
+    // v4.4 P25: 异步数据占位容器（始终输出）
+    html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在加载行业实时数据...</div></div>';
+
+    return html;
+  },
+
+  /** v5.11: 独立渲染行业政策评估（返回HTML字符串），供 module2_Industry 和 _enhanceModule2 共用 */
+  _renderIndustryPolicy(sectorName, sectorType) {
     const policyMap = {
       '消费': { policy: '正面', desc: '促消费政策持续发力，内需扩容政策利好消费龙头。', ceiling: '行业天花板较高，消费升级趋势明确。', fit: '高' },
       '金融': { policy: '中性', desc: '利率市场化推进中，金融监管趋严，但稳增长政策利好信贷。', ceiling: '增长平稳，主要看息差和资产质量。', fit: '中' },
@@ -4764,33 +4772,22 @@ const DiagnosticEngine = {
       '农业': { policy: '正面', desc: '种业振兴、粮食安全政策加码。', ceiling: '受周期和天气影响大。', fit: '中' },
       '基建': { policy: '正面', desc: '稳增长政策发力，基建投资加速。', ceiling: '受财政空间和地方债务约束。', fit: '中高' }
     };
-
-    const info = policyMap[sector.type] || { policy: '中性', desc: '行业政策环境一般。', ceiling: '行业增长趋稳。', fit: '中' };
-
-    conclusion = `${info.policy === '强正面' ? '✅' : info.policy === '正面' ? '✅' : info.policy.includes('负') ? '⚠️' : '📊'} 行业政策环境：${info.policy}。产业政策契合度：${info.fit}。`;
-    html += `<div class="conclusion">${conclusion}</div>`;
-
+    const info = policyMap[sectorType] || { policy: '中性', desc: '行业政策环境一般。', ceiling: '行业增长趋稳。', fit: '中' };
+    let html = '';
+    const conclusion = info.policy === '强正面' ? '✅' : info.policy === '正面' ? '✅' : info.policy.includes('负') ? '⚠️' : '📊';
+    html += '<div class="conclusion">' + conclusion + ' 行业政策环境：' + info.policy + '。产业政策契合度：' + info.fit + '。</div>';
     html += '<p><strong>【产业政策影响】</strong></p>';
-    html += `<p>${info.desc}</p>`;
-
+    html += '<p>' + info.desc + '</p>';
     html += '<p><strong>【行业天花板】</strong></p>';
-    html += `<p>${info.ceiling}</p>`;
-
+    html += '<p>' + info.ceiling + '</p>';
     html += '<p><strong>【正/反向影响判断】</strong></p>';
     if (info.policy === '强正面' || info.policy === '正面') {
-      html += `<p>当前产业政策对${sector.name}行业构成正向支撑，中长期发展逻辑清晰。但需关注政策执行力度和行业竞争格局变化。</p>`;
+      html += '<p>当前产业政策对' + sectorName + '行业构成正向支撑，中长期发展逻辑清晰。但需关注政策执行力度和行业竞争格局变化。</p>';
     } else if (info.policy.includes('负')) {
-      html += `<p>当前政策环境对${sector.name}行业构成反向压力，行业面临转型阵痛。建议密切关注政策边际变化。</p>`;
+      html += '<p>当前政策环境对' + sectorName + '行业构成反向压力，行业面临转型阵痛。建议密切关注政策边际变化。</p>';
     } else {
-      html += `<p>政策对${sector.name}行业影响中性，行业更多依赖自身经营能力和市场竞争。</p>`;
+      html += '<p>政策对' + sectorName + '行业影响中性，行业更多依赖自身经营能力和市场竞争。</p>';
     }
-
-    // v5.10: 财报披露期提示条（mod2AsyncData之前）
-    html += '<div id="reportCalendarTip" style="padding:6px 12px;margin:4px 0 6px;border-radius:6px;font-size:12px;background:rgba(255,255,255,0.03)"></div>';
-
-    // v4.4 P25: 异步数据占位容器
-    html += '<div id="mod2AsyncData" class="mod2-async-placeholder"><div class="loading-pulse" style="padding:8px;font-size:12px">正在加载行业实时数据...</div></div>';
-
     return html;
   },
 
@@ -4807,18 +4804,21 @@ const DiagnosticEngine = {
         const calStatus = ReportCalendar.getStatus(new Date());
         let calText = '', calColor = '#888';
         if (calStatus.isInWindow) {
-          calColor = '#ff9800'; // 橙色：披露期内
+          calColor = '#ff9800';
           calText = '📅 当前处于' + calStatus.phase + '（' + calStatus.startDate + '~' + calStatus.endDate + '），距截止还有 ' + calStatus.daysLeft + ' 天';
           if (calStatus.alsoIn) {
             calText += '（同处' + calStatus.alsoIn + '）';
           }
         } else if (calStatus.daysToNext <= 15) {
-          calColor = '#4a9eff'; // 蓝色：临近披露期
+          calColor = '#4a9eff';
           calText = '📅 距' + calStatus.nextReport + '披露期开始还有 ' + calStatus.daysToNext + ' 天（' + calStatus.nextWindowStart + ' 起）';
         } else {
-          calColor = '#888'; // 灰色：空窗期
+          calColor = '#888';
           calText = '📅 当前为财报空窗期，下一披露期：' + calStatus.nextReport + '（' + calStatus.nextWindowStart + ' 起，还有 ' + calStatus.daysToNext + ' 天）';
         }
+        // v5.11: 追加最近报告期信息
+        const _reportDate = (quote && quote.REPORTDATE) || '';
+        calText += ' · 最近报告期 ' + (_reportDate || '待获取');
         calTip.style.color = calColor;
         calTip.textContent = calText;
       }
@@ -4940,6 +4940,18 @@ const DiagnosticEngine = {
         if (inferred) {
           industryName = inferred.name;
           sector = { name: inferred.name, type: inferred.type, _fromStockName: true };
+        }
+      }
+
+      // v5.11: 回填 mod2PolicyBox（如果仍处于「识别中」状态）
+      if (sector && sector.name) {
+        const policyBox = document.getElementById('mod2PolicyBox');
+        if (policyBox && policyBox.querySelector && policyBox.querySelector('.conclusion') &&
+            policyBox.textContent.indexOf('识别中') >= 0) {
+          const _fillType = sector.type || (typeof DiagnosticEngine !== 'undefined' && DiagnosticEngine._inferSectorType ? DiagnosticEngine._inferSectorType(sector.name) : '服务');
+          policyBox.innerHTML = (typeof DiagnosticEngine !== 'undefined' && DiagnosticEngine._renderIndustryPolicy)
+            ? DiagnosticEngine._renderIndustryPolicy(sector.name, _fillType)
+            : '<div class="conclusion">📊 ' + sector.name + '</div>';
         }
       }
 
@@ -5094,6 +5106,13 @@ const DiagnosticEngine = {
 
       html += '</div>';
       container.innerHTML = html;
+      // v5.11: 若 mod2PolicyBox 仍在「识别中」且最终 sector 确定，回填
+      if (!sector && !industryName) {
+        const policyBox = document.getElementById('mod2PolicyBox');
+        if (policyBox && policyBox.textContent.indexOf('识别中') >= 0) {
+          policyBox.innerHTML = '<div class="conclusion">📊 暂无法识别行业归属，建议查阅公司年报</div>';
+        }
+      }
       clearTimeout(timeoutGuard);
 
     } catch (e) {
@@ -5106,10 +5125,21 @@ const DiagnosticEngine = {
         const inferred = DiagnosticEngine._inferSectorTypeFromName(quote.name);
         if (inferred) fallbackName = inferred.name;
       }
+      // v5.11: 回填 mod2PolicyBox（异步降级路径）
       if (fallbackName) {
         container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">📊 行业：' + fallbackName + '（暂无更多行业数据）</div>';
+        const policyBox = document.getElementById('mod2PolicyBox');
+        if (policyBox && policyBox.textContent.indexOf('识别中') >= 0) {
+          const _fbType = (typeof DiagnosticEngine !== 'undefined' && DiagnosticEngine._inferSectorType) ? DiagnosticEngine._inferSectorType(fallbackName) : '服务';
+          policyBox.innerHTML = DiagnosticEngine._renderIndustryPolicy(fallbackName, _fbType);
+        }
       } else {
         container.innerHTML = '<div style="padding:8px;font-size:12px;color:var(--text-muted)">行业数据源暂不可用（新浪/东财均未响应）</div>';
+        // v5.11: 异步也拿不到行业 → mod2PolicyBox 最终提示
+        const policyBox = document.getElementById('mod2PolicyBox');
+        if (policyBox && policyBox.textContent.indexOf('识别中') >= 0) {
+          policyBox.innerHTML = '<div class="conclusion">📊 暂无法识别行业归属，建议查阅公司年报</div>';
+        }
       }
     }
   },
@@ -9017,13 +9047,25 @@ const NextDayPrediction = {
     body.innerHTML = '<div class="loading-pulse">正在拉取最新行情核实昨日排名...</div>';
 
     const today = this._todayStr();
-    let target = snaps.find(x => x.verified !== true && x.date < today);
+    let target = snaps.find(x => x.verified !== true && x.date <= today);  // v5.11: <= to include today
     if (!target) {
       this._renderList(snaps[0]);
-      Utils.toast ? Utils.toast('暂无待核实的排名（今日快照需等下一交易日）') : null;
+      // v5.11: 带原因提示
+      const unverified = snaps.filter(x => x.verified !== true);
+      const futureSnaps = unverified.filter(x => x.date > today);
+      if (futureSnaps.length > 0) {
+        const nearest = futureSnaps.sort((a,b) => a.date.localeCompare(b.date))[0];
+        Utils.toast ? Utils.toast('有 ' + futureSnaps.length + ' 个快照目标日未到（最近：' + (nearest.baseDate||'?') + '→' + nearest.date + '）') : null;
+      } else {
+        Utils.toast ? Utils.toast('暂无待核实的排名（今日快照需等下一交易日）') : null;
+      }
       return;
     }
 
+    // v5.11: 动态K线条数（按baseDate与今天的日差计算）
+    const _vaBaseDate = target.baseDate || target.date;
+    const _vaDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vaBaseDate)) / 86400000));
+    const _vaKCount = Math.min(60, Math.max(10, Math.ceil(_vaDayDiff * 0.75) + 5));
     let hit = 0, resolved = 0;
     const batchSize = 10;
     const list = target.stocks;
@@ -9031,19 +9073,18 @@ const NextDayPrediction = {
       const batch = list.slice(i, i + batchSize);
       await Promise.all(batch.map(async (s) => {
         try {
-          const klines = await DataAPI.fetchKline(s.code, 5);
+          const klines = await DataAPI.fetchKline(s.code, _vaKCount);
           if (klines && klines.length > 0) {
-            // v4.4 P31: 标准化K线日期格式
             for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-            const next = klines.find(k => k.date > target.date);
-            if (next) {
-              const base = klines.filter(k => k.date <= target.date).pop();
-              if (base) {
-                s.nextChangePct = (next.close - base.close) / base.close * 100;
-                s.verified = true;
-                resolved++;
-                if (s.nextChangePct > 0) hit++;
-              }
+            // v5.11: 统一用 baseDate 之后第一根K线计算次日涨跌（新旧格式兼容）
+            const baseKline = klines.find(k => k.date === _vaBaseDate) || klines.filter(k => k.date <= _vaBaseDate).pop();
+            if (!baseKline || !(baseKline.close > 0)) return;
+            const nextKline = klines.find(k => k.date > baseKline.date);
+            if (nextKline && nextKline.close > 0) {
+              s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
+              s.verified = true;
+              resolved++;
+              if (s.nextChangePct > 0) hit++;
             }
           }
         } catch (e) { /* 单只失败不影响整体 */ }
@@ -9051,7 +9092,10 @@ const NextDayPrediction = {
     }
 
     if (resolved === 0) {
-      body.innerHTML = '<div class="empty-tip">次日行情尚未更新（非交易时间或数据延迟），请在交易时段或收盘后再核实。<br><br>最近一次排名基准日：' + target.date + '</div>';
+      // v5.11: 打印诊断信息到控制台
+      const _vaSampleKlines = await (async () => { try { const kl = await DataAPI.fetchKline((list[0]||{}).code||'sh000001', 5); return kl||[]; } catch(e) { return []; } })();
+      console.warn('[verifyAll] resolved=0, 基准日:' + _vaBaseDate + ', 目标日:' + target.date + ', 系统日期:' + today + ', K线条数:' + _vaKCount + ', K线日期范围:' + (_vaSampleKlines.length > 0 ? _vaSampleKlines[0].date + '~' + _vaSampleKlines[_vaSampleKlines.length-1].date : '空'));
+      body.innerHTML = '<div class="empty-tip">次日行情尚未更新（非交易时间或数据延迟），请在交易时段或收盘后再核实。<br><br>最近一次排名基准日：' + _vaBaseDate + '（目标日 ' + target.date + '）</div>';
       return;
     }
 
@@ -9076,7 +9120,20 @@ const NextDayPrediction = {
       return true; // 旧格式快照全部可核实
     });
     if (pending.length === 0) {
-      Utils.toast ? Utils.toast('所有排名都已核实，或尚无到期可核实的榜单') : null;
+      // v5.11: 带原因提示
+      const unverified = snaps.filter(s => s.verified !== true);
+      const futureSnaps = unverified.filter(s => {
+        if (s.baseDate) return s.date > today;
+        return s.date > today;
+      });
+      if (futureSnaps.length > 0) {
+        const nearest = futureSnaps.sort((a,b) => a.date.localeCompare(b.date))[0];
+        Utils.toast ? Utils.toast('有 ' + futureSnaps.length + ' 个快照目标日未到（最近：' + (nearest.baseDate||'?') + '→' + nearest.date + '）') : null;
+      } else if (unverified.length > 0) {
+        Utils.toast ? Utils.toast('有 ' + unverified.length + ' 个快照已到期但K线数据可能缺失') : null;
+      } else {
+        Utils.toast ? Utils.toast('所有排名都已核实') : null;
+      }
       return;
     }
     // 关闭弹窗
@@ -9096,32 +9153,23 @@ const NextDayPrediction = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const klines = await DataAPI.fetchKline(s.code, 10);
+            // v5.11: 动态K线条数
+            const _vapBaseDate = target.baseDate || target.date;
+            const _vapDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vapBaseDate)) / 86400000));
+            const _vapKCount = Math.min(60, Math.max(10, Math.ceil(_vapDayDiff * 0.75) + 5));
+            const klines = await DataAPI.fetchKline(s.code, _vapKCount);
             if (klines && klines.length > 0) {
-              // v4.4 P31: 标准化K线日期格式
               for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              if (target.baseDate) {
-                // v4.4 P27 新格式：比较 baseDate 和 date
-                const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
-                const targetKline = klines.find(k => k.date === target.date) || klines.filter(k => k.date <= target.date).pop();
-                if (baseKline && targetKline && baseKline.close > 0 && targetKline.date === target.date) {
-                  s.nextChangePct = (targetKline.close - baseKline.close) / baseKline.close * 100;
-                  s.verified = true;
-                  resolved++;
-                  if (s.nextChangePct > 0) hit++;
-                }
-              } else {
-                // 旧格式兼容
-                const next = klines.find(k => k.date > target.date);
-                if (next) {
-                  const base = klines.filter(k => k.date <= target.date).pop();
-                  if (base) {
-                    s.nextChangePct = (next.close - base.close) / base.close * 100;
-                    s.verified = true;
-                    resolved++;
-                    if (s.nextChangePct > 0) hit++;
-                  }
-                }
+              // v5.11: 统一使用 baseDate→下一交易日 逻辑（不再要求 target.date 精确匹配）
+              const _vapBase = target.baseDate || target.date;
+              const baseKline = klines.find(k => k.date === _vapBase) || klines.filter(k => k.date <= _vapBase).pop();
+              if (!baseKline || !(baseKline.close > 0)) return;
+              const nextKline = klines.find(k => k.date > baseKline.date);
+              if (nextKline && nextKline.close > 0) {
+                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
+                s.verified = true;
+                resolved++;
+                if (s.nextChangePct > 0) hit++;
               }
             }
           } catch (e) { /* 单只失败不影响 */ }
@@ -9143,6 +9191,10 @@ const NextDayPrediction = {
     this._renderList(updated[0] || { stocks: [] });
     this.showLedger();
     if (totalResolved === 0 && pending.length > 0) {
+      // v5.11: 打印诊断
+      const _vapDiag = pending[0];
+      const _vapDiagBase = _vapDiag.baseDate || _vapDiag.date;
+      console.warn('[verifyAllPending] resolved=0, 系统日期:' + today + ', 快照基准日:' + _vapDiagBase + ', 目标日:' + _vapDiag.date + ', 快照数:' + pending.length);
       Utils.toast ? Utils.toast('核实未成功：K线数据获取异常，请稍后重试') : null;
     } else {
       Utils.toast ? Utils.toast('批量核实完成：共' + totalHit + '/' + totalResolved + '只收涨') : null;
@@ -10378,11 +10430,26 @@ const ShortTermLedger = {
     const pending = snaps.filter(s => {
       if (s.verified === true) return false;
       const td = this._getTargetDate(s);
-      if (td) return td < today;
-      return s.date < today; // 旧快照兜底
+      if (td) return td <= today;  // v5.11: <= to include today
+      return s.date <= today; // 旧快照兜底 v5.11: <=
     });
     if (pending.length === 0) {
-      Utils.toast ? Utils.toast('暂无待核实的快照') : null;
+      // v5.11: 带原因提示
+      const unverified = snaps.filter(s => s.verified !== true);
+      if (unverified.length > 0) {
+        const futureSnaps = unverified.filter(s => {
+          const td = this._getTargetDate(s);
+          return (td || s.date) > today;
+        });
+        if (futureSnaps.length > 0) {
+          const nearest = futureSnaps.sort((a,b) => (a.date||'').localeCompare(b.date||''))[0];
+          Utils.toast ? Utils.toast('有 ' + futureSnaps.length + ' 个快照目标日未到（最近：' + (nearest.baseDate||nearest.date) + '→' + (this._getTargetDate(nearest)||'?') + '）') : null;
+        } else {
+          Utils.toast ? Utils.toast('有 ' + unverified.length + ' 个快照已到期但K线数据可能缺失') : null;
+        }
+      } else {
+        Utils.toast ? Utils.toast('暂无待核实的快照') : null;
+      }
       return;
     }
     this.closeLedger();
@@ -10404,27 +10471,20 @@ const ShortTermLedger = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            // 用K线取下一交易日收盘价计算涨跌幅
             if (typeof DataAPI !== 'undefined' && DataAPI.fetchKline) {
-              const klines = await DataAPI.fetchKline(s.code, 10);
+              // v5.11: 动态K线条数
+              const _stlBase = this._getBaseDate(target) || target.date;
+              const _stlDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_stlBase)) / 86400000));
+              const _stlKCount = Math.min(60, Math.max(10, Math.ceil(_stlDayDiff * 0.75) + 5));
+              const klines = await DataAPI.fetchKline(s.code, _stlKCount);
               if (klines && klines.length > 0) {
-                // v4.4 P31: 标准化K线日期格式
                 for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-                // v5.1: 优先精确匹配目标日，回退到 >baseDate 逻辑
-                const baseDate = this._getBaseDate(target) || target.date;
-                const targetDate = this._getTargetDate(target);
-                let next, base;
-                if (targetDate) {
-                  next = klines.find(k => k.date === targetDate);
-                  base = klines.find(k => k.date === baseDate) || klines.filter(k => k.date <= baseDate).pop();
-                }
-                if (!next) {
-                  // 回退：找 baseDate 之后的第一根K线
-                  next = klines.find(k => k.date > baseDate);
-                  base = base || klines.filter(k => k.date <= baseDate).pop();
-                }
-                if (next && base && base.close > 0) {
-                  s.nextChangePct = (next.close - base.close) / base.close * 100;
+                // v5.11: 统一使用 baseDate→下一交易日 逻辑
+                const baseKline = klines.find(k => k.date === _stlBase) || klines.filter(k => k.date <= _stlBase).pop();
+                if (!baseKline || !(baseKline.close > 0)) return;
+                const nextKline = klines.find(k => k.date > baseKline.date);
+                if (nextKline && nextKline.close > 0) {
+                  s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
                   s.verified = true;
                   resolved++;
                   if (s.nextChangePct > 0) hit++;
@@ -11021,32 +11081,22 @@ const AutoVerify = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const klines = await DataAPI.fetchKline(s.code, 10);
+            // v5.11: 动态K线条数（按基准日与今天的日差计算）
+            const _vndBase = target.baseDate || target.date;
+            const _vndDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vndBase)) / 86400000));
+            const _vndKCount = Math.min(60, Math.max(10, Math.ceil(_vndDayDiff * 0.75) + 5));
+            const klines = await DataAPI.fetchKline(s.code, _vndKCount);
             if (klines && klines.length > 0) {
-              // v4.4 P31: 标准化K线日期格式，确保与快照日期一致
               for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              if (target.baseDate) {
-                // v4.4 P27 新格式：比较 baseDate（扫描日/数据基准日）的收盘价 和 date（预测目标日）的收盘价
-                const baseKline = klines.find(k => k.date === target.baseDate) || klines.filter(k => k.date <= target.baseDate).pop();
-                const targetKline = klines.find(k => k.date === target.date) || klines.filter(k => k.date <= target.date).pop();
-                if (baseKline && targetKline && baseKline.close > 0 && targetKline.date === target.date) {
-                  s.nextChangePct = (targetKline.close - baseKline.close) / baseKline.close * 100;
-                  s.verified = true;
-                  resolved++;
-                  if (s.nextChangePct > 0) hit++;
-                }
-              } else {
-                // 旧格式兼容：找 date 之后第一天的涨跌
-                const next = klines.find(k => k.date > target.date);
-                if (next) {
-                  const base = klines.filter(k => k.date <= target.date).pop();
-                  if (base && base.close > 0) {
-                    s.nextChangePct = (next.close - base.close) / base.close * 100;
-                    s.verified = true;
-                    resolved++;
-                    if (s.nextChangePct > 0) hit++;
-                  }
-                }
+              // v5.11: 统一使用 baseDate→下一交易日 逻辑
+              const baseKline = klines.find(k => k.date === _vndBase) || klines.filter(k => k.date <= _vndBase).pop();
+              if (!baseKline || !(baseKline.close > 0)) return;
+              const nextKline = klines.find(k => k.date > baseKline.date);
+              if (nextKline && nextKline.close > 0) {
+                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
+                s.verified = true;
+                resolved++;
+                if (s.nextChangePct > 0) hit++;
               }
             }
           } catch (e) { console.warn('[AutoVerify] 次日榜核实单股异常:', s.code, e && e.message); }
@@ -11073,7 +11123,7 @@ const AutoVerify = {
     const today = ShortTermLedger._todayStr();
     console.log('[AutoVerify][P35] _verifyShortTerm 开始，快照总数:' + snaps.length + ', today:' + today);
     const pending = snaps.filter(s => {
-      if (s.date >= today) return false;
+      if (s.date > today) return false;  // v5.11: > instead of >= to allow today's target
       if (!s.verified) return true;
       // v4.4 P32: 当天核实过的允许重新核实（盘中→收盘数据更新）
       if (s.verifyDate === today) return true;
@@ -11092,23 +11142,27 @@ const AutoVerify = {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            const klines = await DataAPI.fetchKline(s.code, 10);
+            // v5.11: 动态K线条数
+            const _vstBase = target.baseDate || target.date;
+            const _vstDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vstBase)) / 86400000));
+            const _vstKCount = Math.min(60, Math.max(10, Math.ceil(_vstDayDiff * 0.75) + 5));
+            const klines = await DataAPI.fetchKline(s.code, _vstKCount);
             if (klines && klines.length > 0) {
-              // v4.4 P31: 标准化K线日期格式，确保与快照日期一致
               for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              const next = klines.find(k => k.date > target.date);
-              if (next) {
-                const base = klines.filter(k => k.date <= target.date).pop();
-                if (base && base.close > 0) {
-                  s.nextChangePct = (next.close - base.close) / base.close * 100;
-                  s.verified = true;
-                  resolved++;
-                  if (s.nextChangePct > 0) hit++;
-                } else {
-                  console.warn('[AutoVerify][P35] K线base缺失:', s.code, 'base:', base ? 'close=' + base.close : 'null');
-                }
+              // v5.11: 统一使用 baseDate→下一交易日 逻辑
+              const baseKline = klines.find(k => k.date === _vstBase) || klines.filter(k => k.date <= _vstBase).pop();
+              if (!baseKline || !(baseKline.close > 0)) {
+                console.warn('[AutoVerify][P35] K线base缺失:', s.code, 'baseDate:' + _vstBase);
+                return;
+              }
+              const nextKline = klines.find(k => k.date > baseKline.date);
+              if (nextKline && nextKline.close > 0) {
+                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
+                s.verified = true;
+                resolved++;
+                if (s.nextChangePct > 0) hit++;
               } else {
-                console.warn('[AutoVerify][P35] K线next日期不匹配:', s.code, 'target:' + target.date, 'klineDates:' + klines.map(k => k.date).join(','));
+                console.warn('[AutoVerify][P35] K线next缺失:', s.code, 'baseDate:' + _vstBase, 'klineDates:' + klines.map(k => k.date).join(','));
               }
             } else {
               console.warn('[AutoVerify][P35] K线为空:', s.code);
