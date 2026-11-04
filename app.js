@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.11',
+  VERSION: 'v5.12',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -31,6 +31,8 @@ const CONFIG = {
   TENCENT_SEARCH: 'https://smartbox.gtimg.cn/s3/',
   // 东方财富搜索API
   EM_SEARCH: 'https://searchapi.eastmoney.com/api/suggest/get',
+  // 新浪搜索建议API（JSONP方式，支持北交所，GBK编码）
+  SINA_SUGGEST: 'https://suggest3.sinajs.cn/suggest/type=&key=',
   // 东方财富资金流向API（多通道容灾，按优先级排列）
   EM_CAPITAL_CHANNELS: [
     'https://push2.eastmoney.com/api/qt/stock/fflow/daykline/get',
@@ -428,28 +430,28 @@ const STOCK_MAP = {
   '嘉实京东仓储REIT': 'sh508098', '中金厦门安居REIT': 'sh508058',
   '红土深圳安居REIT': 'sz180501', '华夏北京保障房REIT': 'sh508068',
 
-  // ===== 北交所/新三板扩充（50+只）=====
-  '每日互动': 'bj832727', '贝特瑞': 'bj835185', '连城数控': 'bj835368',
-  '创远仪器': 'bj831961', '同辉信息': 'bj430047', '佳先股份': 'bj430489',
-  '球冠电缆': 'bj834682', '广道高新': 'bj839680', '永顺生物': 'bj839729',
-  '吉冈精密': 'bj836720', '虹安电子': 'bj832566', '流金科技': 'bj832571',
-  '秉扬科技': 'bj836675', '中设咨询': 'bj836871', '德众汽车': 'bj838030',
-  '利通科技': 'bj832225', '富士达': 'bj835640', '同力股份': 'bj834599',
-  '长虹能源': 'bj836247', '恒光股份': 'bj301118',
-  '云创数据': 'bj835305', '艾融软件': 'bj830799', '殷图网联': 'bj835515',
-  '中航机电': 'bj833171', '鑫磊股份': 'bj301317', '天纺标': 'bj871753',
-  '海达尔': 'bj836699', '明阳科技': 'bj837663',
+  // ===== 北交所/新三板扩充（50+只）===== v5.12: 全部更新为920新代码段
+  '每日互动': 'sz300766', '贝特瑞': 'bj920185', '连城数控': 'bj920368',
+  '创远仪器': 'bj920961', '同辉信息': 'bj920090', '佳先股份': 'bj920489',
+  '球冠电缆': 'bj920682', '广道高新': 'bj920680', '永顺生物': 'bj920729',
+  '吉冈精密': 'bj920720', '虹安电子': 'bj920566', '流金科技': 'bj920021',
+  '秉扬科技': 'bj920675', '中设咨询': 'bj920873', '德众汽车': 'bj920030',
+  '利通科技': 'bj920225', '富士达': 'bj920640', '同力股份': 'bj920599',
+  '长虹能源': 'bj920239', '恒光股份': 'sz301118',
+  '云创数据': 'bj920305', '艾融软件': 'bj920799', '殷图网联': 'bj920508',
+  '中航机电': 'sz002013', '鑫磊股份': 'sz301317', '天纺标': 'bj920753',
+  '海达尔': 'bj920699', '明阳科技': 'bj920663',
   // 北交所扩充
-  '锦波生物': 'bj832982', '曙光数创': 'bj872808', '民士达': 'bj833394',
-  '华岭股份': 'bj430139', '诺思兰德': 'bj430047', '吉林碳谷': 'bj836077',
-  '硅烷科技': 'bj838402', '惠丰钻石': 'bj839725', '科达自控': 'bj831305',
-  '利君股份': 'bj430030', '恒合股份': 'bj837152', '朗鸿科技': 'bj836395',
-  '丰光精密': 'bj430510', '志晟信息': 'bj835640', '三祥科技': 'bj837220',
-  '华密新材': 'bj836221', '润农节水': 'bj834021', '长虹美菱': 'bj200832',
-  '凯德石英': 'bj835185', '吉林敖东': 'bj000776', '中裕科技': 'bj871692',
-  '雅葆轩': 'bj870688', '卓兆点胶': 'bj871642', '万源通': 'bj873833',
-  '苏轴股份': 'bj430418', '格利尔': 'bj831641', '天马新材': 'bj838971',
-  '泰鹏智能': 'bj872668', '康乐卫士': 'bj833575', '艾融软件': 'bj830799',
+  '锦波生物': 'bj920982', '曙光数创': 'bj920808', '民士达': 'bj920394',
+  '华岭股份': 'bj920139', '诺思兰德': 'bj920047', '吉林碳谷': 'bj920077',
+  '硅烷科技': 'bj920402', '惠丰钻石': 'bj920725', '科达自控': 'bj920932',
+  '利君股份': 'sz002651', '恒合股份': 'bj920145', '朗鸿科技': 'bj920395',
+  '丰光精密': 'bj920510', '志晟信息': 'bj920171', '三祥科技': 'bj920195',
+  '华密新材': 'bj920247', '润农节水': 'bj920964', '长虹美菱': 'sz000521',
+  '凯德石英': 'bj920179', '吉林敖东': 'sz000623', '中裕科技': 'bj920694',
+  '雅葆轩': 'bj920357', '卓兆点胶': 'bj920026', '万源通': 'bj920060',
+  '苏轴股份': 'bj920418', '格利尔': 'bj920641', '天马新材': 'bj920971',
+  '泰鹏智能': 'bj920132', '康乐卫士': 'bj920575',
 
 
   // 常用A股扩充（交通运输/航空/旅游）
@@ -1754,6 +1756,119 @@ const DataAPI = {
     });
   },
 
+  /** JSONP回调模式（用于东财搜索等返回函数调用的API） */
+  _jsonpCallback(url, cbName, timeout) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('JSONP callback timeout'));
+      }, timeout || 8000);
+      function cleanup() {
+        clearTimeout(timer);
+        if (script.parentNode) script.parentNode.removeChild(script);
+        try { delete window[cbName]; } catch(e) { window[cbName] = undefined; }
+      }
+      window[cbName] = (data) => {
+        cleanup();
+        resolve(data);
+      };
+      script.onerror = () => { cleanup(); reject(new Error('JSONP callback load error')); };
+      script.src = url;
+      document.head.appendChild(script);
+    });
+  },
+
+  /** 新浪suggest3搜索（JSONP，支持北交所，主搜索源） */
+  async _searchSinaSuggest(keyword) {
+    const url = `${CONFIG.SINA_SUGGEST}${encodeURIComponent(keyword)}`;
+    // 使用JSONP方式加载，绕过CORS限制
+    const raw = await this._jsonp(url, 'suggestvalue', 8000);
+    if (!raw || typeof raw !== 'string' || raw === 'N' || raw.trim() === '') return [];
+    // 解析格式: "名称,类型,代码,完整代码,名称,...;..."
+    return raw.split(';').map(entry => {
+      const fields = entry.split(',');
+      if (fields.length < 4) return null;
+      const name = fields[0];
+      const type = fields[1]; // 11=A股/北交所, 31=港股, 41/42=美股, 201=基金
+      const code = fields[2];
+      const fullCode = fields[3]; // 已含市场前缀: bj920627, sh600519, sz300750
+      // 过滤非股票类型（基金/债券/指数等）
+      if (type === '201' || type === '202' || type === '13' || type === '14') return null;
+      // 确定市场
+      let market;
+      if (fullCode.startsWith('bj')) market = 'bj';
+      else if (fullCode.startsWith('sh')) market = 'sh';
+      else if (fullCode.startsWith('sz')) market = 'sz';
+      else if (fullCode.startsWith('hk')) market = 'hk';
+      else if (/^[A-Za-z]/.test(fullCode)) market = 'us';
+      else {
+        // 无前缀时按代码规则推断
+        if (/^\d{6}$/.test(code)) {
+          if (code.startsWith('6')) market = 'sh';
+          else if (code.startsWith('0') || code.startsWith('3')) market = 'sz';
+          else if (code.startsWith('8') || code.startsWith('4') || code.startsWith('9')) market = 'bj';
+          else market = 'sz';
+        } else return null;
+      }
+      // A股/北交所必须是6位数字
+      if ((market === 'sh' || market === 'sz' || market === 'bj') && !/^\d{6}$/.test(code)) return null;
+      // 港股4-5位数字
+      if (market === 'hk' && !/^\d{4,5}$/.test(code)) return null;
+      const finalCode = market === 'hk' ? code.padStart(5, '0') : code;
+      const finalFullCode = market === 'hk' ? 'hk' + finalCode : (market === 'us' ? fullCode : fullCode);
+      return {
+        name: name || code,
+        code: finalCode,
+        market: market,
+        fullName: `${name || code}(${finalCode})`,
+        fullCode: finalFullCode
+      };
+    }).filter(Boolean);
+  },
+
+  /** 东财搜索JSONP模式（次搜索源，绕过CORS） */
+  async _searchEmJsonp(keyword) {
+    const cbName = 'zhiguEmSearchCb_' + Date.now();
+    const url = `${CONFIG.EM_SEARCH}?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20&cb=${cbName}`;
+    const data = await this._jsonpCallback(url, cbName, 8000);
+    if (!data || !data.QuotationCodeTable || !data.QuotationCodeTable.Data) return [];
+    return data.QuotationCodeTable.Data
+      .filter(item => {
+        const c = item.Code || '';
+        return /^\d{5,6}$/.test(c) || /^\d{4}$/.test(c) || /^[A-Za-z.]{1,10}$/.test(c);
+      })
+      .map(item => {
+        const code = item.Code;
+        let prefix;
+        const mkt = String(item.MktNum);
+        const jys = String(item.JYS || '');
+        const cls = String(item.Classify || '');
+        if (mkt === '116' || jys === 'HK' || cls === 'HK') {
+          prefix = 'hk';
+        } else if (jys === 'US' || cls === 'US' || /^[A-Za-z.]{1,10}$/.test(code)) {
+          prefix = 'us';
+        } else if (mkt === '1') {
+          prefix = 'sh';
+        } else if (mkt === '0') {
+          if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
+          else prefix = 'sz';
+        } else {
+          if (code.startsWith('6') || code.startsWith('5') || code.startsWith('11') || code.startsWith('9')) prefix = 'sh';
+          else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
+          else prefix = 'sz';
+        }
+        const fullCode = prefix === 'us' ? code : prefix + code;
+        return {
+          name: item.Name || code,
+          code: code,
+          market: prefix,
+          fullName: `${item.Name || code}(${code})`,
+          fullCode: fullCode
+        };
+      });
+  },
+
   /** 获取腾讯实时行情（支持批量） */
   async fetchQuotes(codes) {
     try {
@@ -2040,84 +2155,59 @@ const DataAPI = {
     }
   },
 
-  /** 搜索股票 - 东方财富主源 + 腾讯smartbox备用源，支持全类型股票 */
+  /** 搜索股票 - 三源串联：新浪suggest3(主) → 东财JSONP(次) → 腾讯smartbox(末位兜底) */
   async searchStock(keyword) {
-    // 主源：东方财富
+    const srcStatus = { sina: '未尝试', em: '未尝试', tencent: '未尝试' };
+    // 源一：新浪suggest3（JSONP，支持北交所，主搜索源）
     try {
-      const url = `${CONFIG.EM_SEARCH}?input=${encodeURIComponent(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=20`;
-      const resp = await fetch(url);
-      const data = await resp.json();
-      if (data && data.QuotationCodeTable && data.QuotationCodeTable.Data) {
-        const results = data.QuotationCodeTable.Data
-          .filter(item => {
-            const c = item.Code || '';
-            // A股/ETF/北交所：6位数字；港股：4-5位数字；美股：1-10位字母
-            return /^\d{5,6}$/.test(c) || /^\d{4}$/.test(c) || /^[A-Za-z.]{1,10}$/.test(c);
-          })
-          .map(item => {
-            const code = item.Code;
-            let prefix;
-            const mkt = String(item.MktNum);
-            const jys = String(item.JYS || '');
-            const cls = String(item.Classify || '');
-            if (mkt === '116' || jys === 'HK' || cls === 'HK') {
-              prefix = 'hk'; // 港股
-            } else if (jys === 'US' || cls === 'US' || /^[A-Za-z.]{1,10}$/.test(code)) {
-              prefix = 'us'; // 美股
-            } else if (mkt === '1') {
-              prefix = 'sh';
-            } else if (mkt === '0') {
-              if (code.startsWith('8') || code.startsWith('9') || code.startsWith('43') || code.startsWith('4')) prefix = 'bj';
-              else prefix = 'sz';
-            } else {
-              if (code.startsWith('6') || code.startsWith('5') || code.startsWith('11') || code.startsWith('9')) prefix = 'sh';
-              else if (code.startsWith('8') || code.startsWith('4')) prefix = 'bj';
-              else prefix = 'sz';
-            }
-            const fullCode = prefix === 'us' ? code : prefix + code;
-            return {
-              name: item.Name || code,
-              code: code,
-              market: prefix,
-              fullName: `${item.Name || code}(${code})`,
-              fullCode: fullCode
-            };
-          });
-        if (results.length > 0) return results;
+      const results = await this._searchSinaSuggest(keyword);
+      if (results.length > 0) {
+        srcStatus.sina = `成功(${results.length}条)`;
+        console.log('[searchStock] 新浪suggest3命中:', results.length, '条');
+        return results;
       }
+      srcStatus.sina = '无结果';
     } catch (e) {
-      console.warn('东方财富搜索失败，尝试腾讯备用源:', e.message);
+      srcStatus.sina = `失败:${e.message}`;
+      console.warn('[searchStock] 新浪suggest3失败:', e.message);
     }
-    // 备用源：腾讯smartbox（JSONP方式）
+    // 源二：东财搜索JSONP模式（绕过CORS，数据完整性好）
+    try {
+      const results = await this._searchEmJsonp(keyword);
+      if (results.length > 0) {
+        srcStatus.em = `成功(${results.length}条)`;
+        console.log('[searchStock] 东财JSONP命中:', results.length, '条');
+        return results;
+      }
+      srcStatus.em = '无结果';
+    } catch (e) {
+      srcStatus.em = `失败:${e.message}`;
+      console.warn('[searchStock] 东财JSONP失败:', e.message);
+    }
+    // 源三：腾讯smartbox（JSONP方式，末位兜底，不支持北交所）
     try {
       const url = `${CONFIG.TENCENT_SEARCH}?t=all&q=${encodeURIComponent(keyword)}`;
       const raw = await this._jsonp(url, 'v_hint', 6000);
-      // 格式: v_hint="sh~600519~贵州茅台~gzmt~GP-A^sz~000858~五粮液~wly~GP-A^..."
-      if (raw && typeof raw === 'string') {
-        return raw.split('^').map(line => {
+      if (raw && typeof raw === 'string' && raw !== 'N') {
+        const results = raw.split('^').map(line => {
           const parts = line.split('~');
           if (parts.length < 3) return null;
-          const market = String(parts[0] || '').toLowerCase(); // sh/sz/bj/hk/us/jj(基金)
+          const market = String(parts[0] || '').toLowerCase();
           const code = parts[1];
           const name = parts[2];
-          // 基金/理财等非股票标的跳过（jj前缀全部排除，沪深股票前缀均为sh/sz/bj）
           if (market === 'jj' || market === 'hkjj' || market === 'of') return null;
-          // 港股：hk前缀 + 4-5位数字
           if (market === 'hk') {
             if (!/^\d{4,5}$/.test(code)) return null;
             const hkCode = code.padStart(5, '0');
             return { name: name || hkCode, code: hkCode, market: 'hk',
               fullName: `${name || hkCode}(${hkCode})`, fullCode: 'hk' + hkCode };
           }
-          // 美股：us前缀 + 字母代码
           if (market === 'us') {
             if (!/^[A-Za-z.]{1,10}$/.test(code)) return null;
             return { name: name || code, code: code, market: 'us',
               fullName: `${name || code}(${code})`, fullCode: code };
           }
-          // A股/ETF/北交所：6位数字
           if (!/^\d{6}$/.test(code)) return null;
-          // 腾讯市场前缀标准化
           let prefix = market;
           if (market === 'sh' || market === 'sz' || market === 'bj') {
             // ok
@@ -2136,10 +2226,21 @@ const DataAPI = {
             fullCode: prefix + code
           };
         }).filter(Boolean);
+        if (results.length > 0) {
+          srcStatus.tencent = `成功(${results.length}条)`;
+          console.log('[searchStock] 腾讯smartbox命中:', results.length, '条');
+          return results;
+        }
+        srcStatus.tencent = '无结果';
+      } else {
+        srcStatus.tencent = raw === 'N' ? '无匹配(N)' : '空响应';
       }
     } catch (e2) {
-      console.error('腾讯搜索备用源也失败:', e2.message);
+      srcStatus.tencent = `失败:${e2.message}`;
+      console.warn('[searchStock] 腾讯smartbox失败:', e2.message);
     }
+    // 三源均无结果，打印诊断信息
+    console.warn('[searchStock] 三源均无结果:', JSON.stringify(srcStatus), 'keyword:', keyword);
     return [];
   },
 
@@ -3852,11 +3953,13 @@ const DataAPI = {
     // 支持直接输入代码搜索（A股6位 / 港股5位或hk前缀 / us前缀，统一走normalizeCode）
     const normCode = /^[a-z]{2}\d{4,6}$/.test(kw) || /^\d{4,6}$/.test(kw) || /^us[a-z]+$/i.test(kw)
       ? Utils.normalizeCode(kw) : null;
+    let normCodeVerified = false;
     if (normCode) {
       if (CODE_TO_NAME[normCode]) {
         const prefix = normCode.substring(0, 2);
         let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
         localResults.push({ name: CODE_TO_NAME[normCode], code: normCode, market, fullCode: normCode });
+        normCodeVerified = true;
       }
       // 本地没有，直接按规范化代码拉行情验证
       if (!CODE_TO_NAME[normCode]) {
@@ -3871,7 +3974,21 @@ const DataAPI = {
               const prefix = normCode.substring(0, 2);
               let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
               localResults.push({ name: parsed.name, code: normCode, market, fullCode: normCode });
+              normCodeVerified = true;
             }
+          }
+        } catch(e) {}
+      }
+      // v5.12: normalizeCode结果行情验证失败时，用三源搜索纠正（尤其北交所代码可能被normalizeCode猜错市场前缀）
+      if (!normCodeVerified && /^\d{6}$/.test(kw)) {
+        try {
+          const searchResults = await this.searchStock(kw);
+          const matched = searchResults.find(r => r.code === kw || r.fullCode.endsWith(kw));
+          if (matched) {
+            const prefix = matched.fullCode.substring(0, 2);
+            let market = prefix === 'sh' ? '上证' : prefix === 'sz' ? '深证' : prefix === 'bj' ? '北交所' : prefix === 'hk' ? '港股' : '美股';
+            localResults.push({ name: matched.name, code: matched.code, market, fullCode: matched.fullCode });
+            normCodeVerified = true;
           }
         } catch(e) {}
       }
@@ -4225,7 +4342,10 @@ const Search = {
     }
 
     if (results.length === 0) {
-      container.innerHTML = '<div class="empty-tip">未找到匹配股票</div>';
+      console.warn('[searchUI] 搜索无结果:', keyword, '| 三源诊断:', JSON.stringify({
+        keyword, isCodeLike, normalized: isCodeLike ? Utils.normalizeCode(keyword) : null
+      }));
+      container.innerHTML = '<div class="empty-tip">未找到匹配股票<br><span style="font-size:12px;color:var(--text-secondary)">请检查股票名称/代码是否正确，或尝试拼音搜索</span></div>';
       return;
     }
 
