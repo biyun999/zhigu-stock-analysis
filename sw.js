@@ -1,5 +1,5 @@
 // 智股分析 Service Worker - PWA离线缓存 v4.4 P30
-const CACHE_NAME = 'zhigu-v5.12';
+const CACHE_NAME = 'zhigu-v5.13';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -18,7 +18,12 @@ const API_TTL = {
   'web.ifzq.gtimg.cn': 60 * 1000,   // K线60秒
   'searchapi.eastmoney.com': 120 * 1000, // 搜索2分钟
   'np-anotice-stock.eastmoney.com': 120 * 1000, // 新闻2分钟
-  'smartbox.gtimg.cn': 120 * 1000
+  'smartbox.gtimg.cn': 120 * 1000,
+  // v5.13: 新增域名TTL（原先未登记，落到默认60秒；proxy/sina此前甚至被误判为非API）
+  'proxy.finance.qq.com': 60 * 1000,   // 腾讯K线proxy 60秒
+  'finance.qq.com': 60 * 1000,         // 腾讯财经 60秒
+  'sinajs.cn': 120 * 1000,             // 新浪JSONP 2分钟
+  'sina.com.cn': 120 * 1000            // 新浪财经JSONP 2分钟
 };
 
 // 安装时缓存所有静态资源（含本地化ECharts）
@@ -47,8 +52,16 @@ self.addEventListener('activate', event => {
 });
 
 // 判断是否为API请求
+// v5.13: 补全 proxy.finance.qq.com / sinajs.cn / sina.com.cn / finance.qq.com
+// 修复：proxy.finance.qq.com 不含 gtimg.cn，此前被判为非API → 走静态cache-first → K线永久缓存不更新
 function isAPI(url) {
-  return url.includes('gtimg.cn') || url.includes('eastmoney.com') || url.includes('push2');
+  return url.includes('gtimg.cn')
+    || url.includes('eastmoney.com')
+    || url.includes('push2')
+    || url.includes('proxy.finance.qq.com')
+    || url.includes('sinajs.cn')
+    || url.includes('sina.com.cn')
+    || url.includes('finance.qq.com');
 }
 
 // 获取API的TTL
@@ -71,7 +84,9 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   
   // 静态资源：cache-first（ECharts/HTML/CSS/JS）
-  if (!isAPI(url) && (url.includes(self.location.origin) || url.startsWith('http'))) {
+  // v5.13: 去掉 `|| url.startsWith('http')`，只缓存同源静态资源。
+  // 跨域非API请求（如新浪JSONP脚本）不拦截、不缓存，交给浏览器原生处理。
+  if (!isAPI(url) && url.startsWith(self.location.origin)) {
     event.respondWith(
       caches.match(event.request).then(cached => {
         if (cached) {
@@ -105,7 +120,7 @@ self.addEventListener('fetch', event => {
   if (isAPI(url)) {
     event.respondWith(
       caches.open(CACHE_NAME).then(async cache => {
-        const cachedResponse = await cache.match(event.request);
+        let cachedResponse = await cache.match(event.request);
         const now = Date.now();
         const ttl = getTTL(url);
         
@@ -132,6 +147,12 @@ self.addEventListener('fetch', event => {
           }
         };
         
+        // v5.13: 缓存状态校验——缓存里若存过 503/异常响应，直接删掉走网络，不再返回坏数据
+        if (cachedResponse && cachedResponse.status !== 200) {
+          try { await cache.delete(event.request); } catch (eDel) {}
+          cachedResponse = null;
+        }
+
         if (cachedResponse) {
           const cacheTime = parseInt(cachedResponse.headers.get('x-sw-cache-time') || '0');
           const age = now - cacheTime;

@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.12',
+  VERSION: 'v5.13',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1879,27 +1879,52 @@ const DataAPI = {
       const otherCodes = codes.filter(c => !c.startsWith('bj'));
       const results = {};
 
-      // 腾讯API获取非北交所股票
-      if (otherCodes.length > 0) {
-        const url = CONFIG.TENCENT_QUOTE + otherCodes.join(',');
-        const quoteCtrl = new AbortController();
-        const quoteTimer = setTimeout(() => quoteCtrl.abort(), 8000);
+      // v5.13: 腾讯行情单次请求封装（URL追加时间戳防SW/浏览器缓存 + 8s AbortController超时）
+      const _fetchTencentBatch = async (codeList) => {
+        const url = CONFIG.TENCENT_QUOTE + codeList.join(',') + '&_t=' + Date.now();
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const resp = await fetch(url, { signal: quoteCtrl.signal });
-          clearTimeout(quoteTimer);
+          const resp = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timer);
           const buffer = await resp.arrayBuffer();
           const text = Utils.gbkToUtf8(buffer);
           const lines = text.split(';').filter(l => l.includes('v_'));
+          const out = {};
           lines.forEach(line => {
             const codeMatch = line.match(/v_([a-z]{2}\d+)=/);
             if (codeMatch) {
               const parsed = Utils.parseTencentQuote(line);
-              if (parsed) results[codeMatch[1]] = parsed;
+              if (parsed) out[codeMatch[1]] = parsed;
             }
           });
+          return out;
         } catch (e) {
-          clearTimeout(quoteTimer);
+          clearTimeout(timer);
           console.warn('[行情] 腾讯API超时或失败:', e && e.message);
+          return null;
+        }
+      };
+
+      // 腾讯API获取非北交所股票
+      if (otherCodes.length > 0) {
+        const batch = await _fetchTencentBatch(otherCodes);
+        if (batch) Object.assign(results, batch);
+        // v5.13: 批量失败/部分缺失时，对缺失股票逐只重试一次（单只URL+新时间戳）
+        const missing = otherCodes.filter(c => {
+          const r = results[c];
+          return !r || !(r.price > 0 || r.prevClose > 0);
+        });
+        if (missing.length > 0) {
+          console.warn('[行情] 腾讯批量缺失', missing.length, '只，逐只重试:', missing.join(','));
+          for (const mc of missing) {
+            const single = await _fetchTencentBatch([mc]);
+            if (single && single[mc]) {
+              const sp = single[mc];
+              if (!(sp.price > 0) && sp.prevClose > 0) sp.price = sp.prevClose;
+              results[mc] = sp;
+            }
+          }
         }
       }
 
@@ -1948,29 +1973,60 @@ const DataAPI = {
         }
       }
 
-      // 北交所股票：先尝试腾讯，失败则用东方财富备用API
-      for (const code of bjCodes) {
+      // v5.13: 北交所腾讯行情单次请求（时间戳防缓存 + 8s超时）
+      const _fetchTencentSingleBJ = async (bjCode) => {
+        const url = CONFIG.TENCENT_QUOTE + bjCode + '&_t=' + Date.now();
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 8000);
         try {
-          const url = CONFIG.TENCENT_QUOTE + code;
-          const resp = await fetch(url);
+          const resp = await fetch(url, { signal: ctrl.signal });
+          clearTimeout(timer);
           const buffer = await resp.arrayBuffer();
           const text = Utils.gbkToUtf8(buffer);
           if (text.includes('~') && !text.includes('pv_none_match')) {
             const parsed = Utils.parseTencentQuote(text);
-            if (parsed && parsed.price > 0) {
-              parsed.code = code;
-              results[code] = parsed;
-              continue;
+            // v5.13: 停牌/未开盘时 price 可能为 0，用 prevClose 兜底采纳
+            if (parsed && (parsed.price > 0 || parsed.prevClose > 0)) {
+              if (!(parsed.price > 0) && parsed.prevClose > 0) parsed.price = parsed.prevClose;
+              parsed.code = bjCode;
+              return parsed;
             }
           }
-        } catch(e) { console.warn('[fetchQuotes] 腾讯API获取北交所失败:', code, e.message); }
+          return null;
+        } catch (e) {
+          clearTimeout(timer);
+          console.warn('[fetchQuotes] 腾讯API获取北交所失败:', bjCode, e && e.message);
+          return null;
+        }
+      };
+
+      // 北交所股票：先尝试腾讯（失败重试一次），仍失败则用东方财富备用API
+      for (const code of bjCodes) {
+        let bjParsed = await _fetchTencentSingleBJ(code);
+        if (!bjParsed) {
+          // v5.13: 重试一次（换新时间戳）
+          bjParsed = await _fetchTencentSingleBJ(code);
+        }
+        if (bjParsed) {
+          results[code] = bjParsed;
+          continue;
+        }
 
         // 东方财富备用API
         try {
           const emCode = code.substring(2);
           const secid = '0.' + emCode;
-          const emUrl = CONFIG.EM_QUOTE + '?secid=' + secid + '&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f60,f116,f117,f162,f167,f170,f171';
-          const resp = await fetch(emUrl);
+          const emUrl = CONFIG.EM_QUOTE + '?secid=' + secid + '&fields=f43,f44,f45,f46,f47,f48,f50,f51,f52,f55,f57,f58,f60,f116,f117,f162,f167,f170,f171&_t=' + Date.now();
+          const emCtrl = new AbortController();
+          const emTimer = setTimeout(() => emCtrl.abort(), 8000);
+          let resp;
+          try {
+            resp = await fetch(emUrl, { signal: emCtrl.signal });
+            clearTimeout(emTimer);
+          } catch (emErr) {
+            clearTimeout(emTimer);
+            throw emErr;
+          }
           const data = await resp.json();
           if (data && data.data) {
             const d = data.data;
@@ -2019,6 +2075,8 @@ const DataAPI = {
       // 设置marketCap单位为亿
       if (q.marketCap > 0 && q.marketCap < 1000) q.marketCap = q.marketCap; // 已经是亿
     }
+    // v5.13: 失败时打印诊断日志，便于定位是哪一环（网络/SW缓存/接口变更）出问题
+    if (!q) console.error('[fetchQuote] 行情为空:', code);
     return q || null;
   },
 
@@ -3149,6 +3207,28 @@ const DataAPI = {
     }
   },
 
+  /** v5.13: 行业列表 localStorage 兜底缓存（写入） */
+  _saveIndustryCacheLS(list) {
+    try {
+      if (!list || !list.length) return;
+      localStorage.setItem('zhigu_industry_cache_v1', JSON.stringify({ ts: Date.now(), data: list }));
+    } catch (e) { /* 配额/隐私模式忽略 */ }
+  },
+
+  /** v5.13: 行业列表 localStorage 兜底缓存（读取，即使过期也返回） */
+  _loadIndustryCacheLS() {
+    try {
+      const raw = localStorage.getItem('zhigu_industry_cache_v1');
+      if (!raw) return [];
+      const obj = JSON.parse(raw);
+      if (obj && Array.isArray(obj.data) && obj.data.length > 0) {
+        console.log('[新浪行业] localStorage兜底命中:', obj.data.length, '个, 缓存时间:', new Date(obj.ts).toLocaleString());
+        return obj.data;
+      }
+    } catch (e) { /* ignore */ }
+    return [];
+  },
+
   /** v5.10: 获取新浪行业板块列表（JSONP，49个行业，CORS可用）
    *  返回按涨跌幅降序排列的数组：{code, name, stockCount, changePct, amount, leaderCode, leaderName, leaderChangePct} */
   async fetchSinaIndustryList() {
@@ -3166,6 +3246,12 @@ const DataAPI = {
         console.warn('[新浪行业] JSONP返回空或非对象');
         // 清理window上残留的变量
         try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
+        // v5.13: localStorage兜底
+        const lsCacheEmpty = this._loadIndustryCacheLS();
+        if (lsCacheEmpty.length > 0) {
+          this._cacheSet(cacheKey, 'sinaIndustry', lsCacheEmpty);
+          return lsCacheEmpty;
+        }
         return [];
       }
       const result = [];
@@ -3194,10 +3280,18 @@ const DataAPI = {
       result.sort((a, b) => b.changePct - a.changePct);
       console.log('[新浪行业] 获取成功:', result.length, '个行业');
       this._cacheSet(cacheKey, 'sinaIndustry', result);
+      // v5.13: 成功后持久化到localStorage，避免单次JSONP失败导致模块二长期空白
+      this._saveIndustryCacheLS(result);
       return result;
     } catch (e) {
       console.warn('[fetchSinaIndustryList] 失败:', e && e.message);
       try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
+      // v5.13: localStorage兜底（即使过期也返回）
+      const lsCacheFail = this._loadIndustryCacheLS();
+      if (lsCacheFail.length > 0) {
+        this._cacheSet(cacheKey, 'sinaIndustry', lsCacheFail);
+        return lsCacheFail;
+      }
       return [];
     }
   },
@@ -13623,7 +13717,7 @@ const App = {
 
     try {
       // 并行获取数据（所有请求加 .catch 兜底，防止单个接口异常阻塞整个分析）
-      const [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
+      let [quote, klines, capitalFlow, news, financials, dragonTiger] = await Promise.all([
         DataAPI.fetchQuote(code).catch(e => { console.warn('[分析] fetchQuote异常:', e && e.message); return null; }),
         DataAPI.fetchKline(code, 300).catch(e => { console.warn('[分析] fetchKline异常:', e && e.message); return []; }),
         DataAPI.fetchCapitalFlow(code).catch(e => { console.warn('[分析] fetchCapitalFlow异常:', e && e.message); return []; }),
@@ -13632,8 +13726,15 @@ const App = {
         DataAPI.fetchDragonTiger(code).catch(() => null)
       ]);
 
+      // v5.13: 首次行情为空时同步重试一次（缓存/网络抖动兜底）
       if (!quote) {
-        Utils.toast('获取行情数据失败');
+        console.warn('[分析] 首次行情为空，同步重试一次:', code);
+        quote = await DataAPI.fetchQuote(code).catch(() => null);
+      }
+
+      if (!quote) {
+        console.error('[分析] 行情为空:', code);
+        Utils.toast('获取行情失败[' + code + ']，请下拉重试');
         return;
       }
 
@@ -19225,6 +19326,7 @@ const SelfCheck = {
   _summaryEl: null,
   _listEl: null,
   _btnStart: null,
+  _btnDiag: null,
 
   open() {
     if (this._overlay) { this._overlay.remove(); this._overlay = null; }
@@ -19241,9 +19343,10 @@ const SelfCheck = {
           <div id="selfcheck-summary" style="font-size:13px;color:var(--text-secondary,#aaa);margin-bottom:10px;text-align:center">点击「开始检测」检查所有数据源和功能模块</div>
           <div id="selfcheck-list" style="font-size:12px"></div>
         </div>
-        <div style="padding:10px 16px;border-top:1px solid var(--border-divider,rgba(255,255,255,0.08));display:flex;gap:8px">
+        <div style="padding:10px 16px;border-top:1px solid var(--border-divider,rgba(255,255,255,0.08));display:flex;gap:8px;flex-wrap:wrap">
           <button id="selfcheck-btn-start" onclick="SelfCheck.run()" style="flex:1;padding:8px;border-radius:8px;border:none;background:var(--accent,#4a9eff);color:#fff;font-size:13px;cursor:pointer">▶ 开始检测</button>
           <button onclick="SelfCheck.copyReport()" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border-divider,rgba(255,255,255,0.15));background:transparent;color:var(--text-secondary,#aaa);font-size:13px;cursor:pointer">📋 复制报告</button>
+          <button id="selfcheck-btn-diag" onclick="SelfCheck.diagnoseQuoteChain()" style="flex:1 0 100%;padding:8px;border-radius:8px;border:1px solid var(--border-divider,rgba(255,255,255,0.15));background:transparent;color:var(--text-secondary,#aaa);font-size:13px;cursor:pointer">🩺 行情链路诊断</button>
         </div>
       </div>
     `;
@@ -19252,6 +19355,7 @@ const SelfCheck = {
     this._summaryEl = overlay.querySelector('#selfcheck-summary');
     this._listEl = overlay.querySelector('#selfcheck-list');
     this._btnStart = overlay.querySelector('#selfcheck-btn-start');
+    this._btnDiag = overlay.querySelector('#selfcheck-btn-diag');
     this._results = [];
   },
 
@@ -19456,6 +19560,196 @@ const SelfCheck = {
       this._btnStart.textContent = '🔄 重新检测';
     }
     this._updateSummary();
+  },
+
+  /**
+   * v5.13: 行情链路诊断 —— 逐环实测，一眼定位是哪一环失败
+   * 7 项探测，每项 Promise.race 8 秒超时，任一项失败不影响其他项
+   */
+  async diagnoseQuoteChain() {
+    const T = 8000;       // 每项总超时
+    const T_INNER = 7000; // 内部请求超时（略小于总超时，便于暴露真实错误信息）
+
+    if (this._btnDiag) this._btnDiag.disabled = true;
+    if (this._btnStart) this._btnStart.disabled = true;
+    if (this._listEl) this._listEl.innerHTML = '';
+    this._results = [];
+    if (this._summaryEl) this._summaryEl.textContent = '🩺 行情链路诊断中，请稍候...';
+
+    // 探测用代码：优先自选股第一只非港股，否则茅台
+    let probeCode = 'sh600519';
+    try {
+      const wl = (typeof Watchlist !== 'undefined' && Watchlist.getList) ? Watchlist.getList() : [];
+      const first = (wl || []).find(c => c && !String(c).startsWith('hk'));
+      if (first) probeCode = String(first);
+    } catch (e) { /* 用默认 */ }
+
+    const _short = (s, n) => {
+      s = String(s == null ? '' : s);
+      return s.length > (n || 80) ? s.substring(0, n || 80) + '…' : s;
+    };
+
+    // ① 腾讯行情（普通A股）
+    await this._runOne(0, '① 腾讯行情 qt.gtimg.cn (' + probeCode + ')', async () => {
+      const url = CONFIG.TENCENT_QUOTE + probeCode + '&_t=' + Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), T_INNER);
+      let resp;
+      try {
+        resp = await fetch(url, { signal: ctrl.signal });
+      } catch (e) {
+        clearTimeout(timer);
+        throw new Error('请求异常/超时: ' + (e && e.message ? e.message : e));
+      }
+      clearTimeout(timer);
+      const buf = await resp.arrayBuffer();
+      const text = Utils.gbkToUtf8(buf);
+      if (!text || text.indexOf('~') < 0) {
+        return { status: 'fail', note: 'HTTP' + resp.status + ' 无有效字段(长度' + (text ? text.length : 0) + ') ' + _short(text, 60) };
+      }
+      const parsed = Utils.parseTencentQuote(text);
+      if (parsed && (parsed.price > 0 || parsed.prevClose > 0)) {
+        return { status: 'pass', note: 'HTTP' + resp.status + ' ' + (parsed.name || '') + ' price=' + parsed.price + ' prev=' + parsed.prevClose };
+      }
+      return { status: 'fail', note: 'HTTP' + resp.status + ' 解析后 price/prevClose 均为0' };
+    }, T);
+
+    // ② 腾讯行情（北交所）
+    await this._runOne(1, '② 腾讯行情 北交所 (bj920627 力王股份)', async () => {
+      const url = CONFIG.TENCENT_QUOTE + 'bj920627&_t=' + Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), T_INNER);
+      let resp;
+      try {
+        resp = await fetch(url, { signal: ctrl.signal });
+      } catch (e) {
+        clearTimeout(timer);
+        throw new Error('请求异常/超时: ' + (e && e.message ? e.message : e));
+      }
+      clearTimeout(timer);
+      const buf = await resp.arrayBuffer();
+      const text = Utils.gbkToUtf8(buf);
+      if (!text || text.indexOf('~') < 0 || text.indexOf('pv_none_match') >= 0) {
+        return { status: 'fail', note: 'HTTP' + resp.status + ' 北交所无有效字段 ' + _short(text, 60) };
+      }
+      const parsed = Utils.parseTencentQuote(text);
+      if (parsed && (parsed.price > 0 || parsed.prevClose > 0)) {
+        return { status: 'pass', note: 'HTTP' + resp.status + ' ' + (parsed.name || '') + ' price=' + parsed.price + ' prev=' + parsed.prevClose };
+      }
+      return { status: 'fail', note: 'HTTP' + resp.status + ' 解析后 price/prevClose 均为0' };
+    }, T);
+
+    // ③ 腾讯K线 proxy
+    await this._runOne(2, '③ 腾讯K线 proxy.finance.qq.com (sh600519)', async () => {
+      const url = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=sh600519,day,,,5,qfq&_t=' + Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), T_INNER);
+      let resp;
+      try {
+        resp = await fetch(url, { signal: ctrl.signal, headers: { 'Referer': 'https://gu.qq.com/' } });
+      } catch (e) {
+        clearTimeout(timer);
+        throw new Error('请求异常/超时: ' + (e && e.message ? e.message : e));
+      }
+      clearTimeout(timer);
+      if (!resp.ok) return { status: 'fail', note: 'HTTP' + resp.status };
+      let data = null;
+      try { data = await resp.json(); } catch (e2) { return { status: 'fail', note: 'HTTP' + resp.status + ' 非JSON: ' + _short(e2.message, 50) }; }
+      const node = data && data.data && data.data['sh600519'];
+      const arr = node ? (node.qfqday || node.day || []) : [];
+      if (arr.length > 0) return { status: 'pass', note: 'HTTP' + resp.status + ' ' + arr.length + '条 最新' + (arr[arr.length - 1] && arr[arr.length - 1][0]) };
+      return { status: 'fail', note: 'HTTP' + resp.status + ' 无K线数据 code=' + (data && data.code) };
+    }, T);
+
+    // ④ 东财搜索 JSONP
+    await this._runOne(3, '④ 东财搜索JSONP searchapi.eastmoney.com', async () => {
+      const cbName = 'zhiguDiagCb_' + Date.now();
+      const url = CONFIG.EM_SEARCH + '?input=' + encodeURIComponent('力王股份') + '&type=14&token=D43BF722C8E33BDC906FB84D85E326E8&count=5&cb=' + cbName;
+      let data;
+      try {
+        data = await DataAPI._jsonpCallback(url, cbName, T_INNER);
+      } catch (e) {
+        throw new Error('JSONP失败: ' + (e && e.message ? e.message : e));
+      }
+      const arr = data && data.QuotationCodeTable && data.QuotationCodeTable.Data;
+      if (Array.isArray(arr) && arr.length > 0) {
+        const hit = arr.find(x => String(x.Code) === '920627') || arr[0];
+        return { status: 'pass', note: arr.length + '条 首条=' + (hit.Name || '') + '/' + (hit.Code || '') + '/' + (hit.SecurityTypeName || '') };
+      }
+      return { status: 'fail', note: '无QuotationCodeTable.Data: ' + _short(JSON.stringify(data), 60) };
+    }, T);
+
+    // ⑤ 新浪 suggest3 JSONP
+    await this._runOne(4, '⑤ 新浪搜索JSONP suggest3.sinajs.cn', async () => {
+      const url = 'https://suggest3.sinajs.cn/suggest/type=&key=' + encodeURIComponent('力王股份') + '&_t=' + Date.now();
+      let raw;
+      try {
+        raw = await DataAPI._jsonp(url, 'suggestvalue', T_INNER);
+      } catch (e) {
+        throw new Error('JSONP失败: ' + (e && e.message ? e.message : e));
+      }
+      if (!raw || typeof raw !== 'string' || raw.trim() === '' || raw.trim() === 'N') {
+        return { status: 'fail', note: '返回空/N: ' + _short(raw, 40) };
+      }
+      const hit = raw.split(';').find(x => x.indexOf('920627') >= 0);
+      return { status: 'pass', note: '长度' + raw.length + (hit ? ' 命中920627: ' + _short(hit, 40) : ' 未含920627') };
+    }, T);
+
+    // ⑥ 新浪行业 JSONP
+    await this._runOne(5, '⑥ 新浪行业JSONP newSinaHy.php', async () => {
+      const url = 'https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php?_t=' + Date.now();
+      let raw;
+      try {
+        raw = await DataAPI._jsonp(url, 'S_Finance_bankuai_sinaindustry', T_INNER);
+      } catch (e) {
+        try { delete window.S_Finance_bankuai_sinaindustry; } catch (e3) {}
+        throw new Error('JSONP失败: ' + (e && e.message ? e.message : e));
+      }
+      let count = 0;
+      try { count = (raw && typeof raw === 'object') ? Object.keys(raw).length : 0; } catch (e4) {}
+      try { delete window.S_Finance_bankuai_sinaindustry; } catch (e5) {}
+      if (count > 0) return { status: 'pass', note: count + '个行业' };
+      return { status: 'fail', note: '返回空或非对象: ' + _short(raw, 40) };
+    }, T);
+
+    // ⑦ 新浪行业成分股
+    await this._runOne(6, '⑦ 新浪行业成分股 getHQNodeData(new_blhy)', async () => {
+      const url = 'https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData'
+        + '?page=1&num=5&sort=amount&asc=0&node=new_blhy&_t=' + Date.now();
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), T_INNER);
+      let resp;
+      try {
+        resp = await fetch(url, { signal: ctrl.signal });
+      } catch (e) {
+        clearTimeout(timer);
+        throw new Error('请求异常/超时: ' + (e && e.message ? e.message : e));
+      }
+      clearTimeout(timer);
+      if (!resp.ok) return { status: 'fail', note: 'HTTP' + resp.status };
+      const buf = await resp.arrayBuffer();
+      const text = Utils.gbkToUtf8(buf);
+      let arr = null;
+      try { arr = JSON.parse(text); } catch (e6) { arr = null; }
+      if (Array.isArray(arr) && arr.length > 0) {
+        return { status: 'pass', note: arr.length + '只 首只=' + (arr[0].name || '') + '/' + (arr[0].symbol || '') };
+      }
+      return { status: 'fail', note: 'HTTP' + resp.status + ' 非数组或空: ' + _short(text, 60) };
+    }, T);
+
+    // 汇总
+    const pass = this._results.filter(r => r.status === 'pass').length;
+    const fail = this._results.filter(r => r.status === 'fail').length;
+    const warn = this._results.filter(r => r.status === 'warn').length;
+    if (this._summaryEl) {
+      const head = fail === 0
+        ? '<span style="color:#4caf50">✅ 行情链路全部正常</span>'
+        : '<span style="color:#f44336">❌ 有 ' + fail + ' 项失败，见下方标记</span>';
+      this._summaryEl.innerHTML = head + '<br><span style="font-size:12px;color:var(--text-muted,#888)">' + pass + '通过 / ' + warn + '降级 / ' + fail + '失败（共' + this._results.length + '项） · ' + new Date().toLocaleTimeString() + '</span>';
+    }
+    if (this._btnDiag) { this._btnDiag.disabled = false; this._btnDiag.textContent = '🔄 重新诊断行情链路'; }
+    if (this._btnStart) this._btnStart.disabled = false;
+    return this._results;
   },
 
   copyReport() {
