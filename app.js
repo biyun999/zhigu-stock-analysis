@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.14',
+  VERSION: 'v5.15',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1665,12 +1665,34 @@ const Utils = {
     return Math.max(0, Math.min(100, s));
   },
 
-  /** v5.14: 统计快照内尚未核实（verified !== true）的股票数量，用于"补漏核实"判断 */
+  /** v5.14: 统计快照内尚未核实（verified !== true）的股票数量，用于"补漏核实"判断
+   *  v5.15: 排除已停止重试（verifyGaveUp）的股票——只统计真正还会重试的 */
   countPendingStocks(snap) {
     try {
       if (!snap || !Array.isArray(snap.stocks)) return 0;
-      return snap.stocks.filter(st => st && st.verified !== true).length;
+      return snap.stocks.filter(st => st && st.verified !== true && st.verifyGaveUp !== true).length;
     } catch (e) { return 0; }
+  },
+
+  /** v5.15: 统计已停止重试（数据永久缺失：退市/长期停牌/代码错误）的股票数量 */
+  countGaveUpStocks(snap) {
+    try {
+      if (!snap || !Array.isArray(snap.stocks)) return 0;
+      return snap.stocks.filter(st => st && st.verified !== true && st.verifyGaveUp === true).length;
+    } catch (e) { return 0; }
+  },
+
+  /** v5.15: 补漏止损——本轮真正尝试过但仍未核实才记一次失败，累计 5 次即放弃重试
+   *  被跳过的（已核实/已放弃）不计数 */
+  markVerifyFail(s) {
+    try {
+      if (!s || s.verified === true || s.verifyGaveUp === true) return;
+      s._vtries = (s._vtries || 0) + 1;
+      if (s._vtries >= 5) {
+        s.verifyGaveUp = true;
+        console.log('[核实止损] 放弃', s.code, '已重试', s._vtries, '次');
+      }
+    } catch (e) { /* 止损统计失败不影响核实主流程 */ }
   },
 
   /** v5.14: 计算 baseDate 之后第一根K线相对 baseDate 收盘价的涨跌幅（%）
@@ -9412,9 +9434,13 @@ const NextDayPrediction = {
     const body = document.getElementById('nextDayBody');
     // v5.14: 股票级待补核实数量
     const _ndPendingCnt = Utils.countPendingStocks(snapshot);
-    const _ndPendingBadge = _ndPendingCnt > 0
+    // v5.15: 数据永久缺失、已停止重试的股票数量
+    const _ndGaveUpCnt = Utils.countGaveUpStocks(snapshot);
+    const _ndPendingBadge = (_ndPendingCnt > 0
       ? ' <span style="color:#ff9800;font-size:12px;font-weight:600">⚠️ ' + _ndPendingCnt + ' 只待补核实</span>'
-      : '';
+      : '') + (_ndGaveUpCnt > 0
+      ? ' <span style="color:#8a8e9b;font-size:11px">（另有 ' + _ndGaveUpCnt + ' 只数据缺失，已停止重试）</span>'
+      : '');
     const verifyBadge = snapshot.verified != null
       ? (snapshot.verified
         ? '<span style="color:#00e676;font-size:12px">✅ 已核实：' + snapshot.hitCount + '/' + (snapshot.resolvedCount || snapshot.stocks.length) + ' 只次日收涨（胜率' + snapshot.winRate + '%）</span>' + _ndPendingBadge
@@ -9667,10 +9693,13 @@ const NextDayPrediction = {
       await Promise.all(batch.map(async (s) => {
         try {
           // v5.14: 已核实股票不再重复请求（补漏模式只对未核实的发请求）
-          if (!s || s.verified === true) return;
+          // v5.15: 已放弃重试的股票直接跳过（不再发请求）
+          if (!s || s.verified === true || s.verifyGaveUp === true) return;
           const pct = await Utils.resolveNextChange(s.code, _vaBaseDate, _vaKCount);
           if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
         } catch (e) { /* 单只失败不影响整体 */ }
+        // v5.15: 补漏止损——尝试后仍未核实则累计失败次数
+        Utils.markVerifyFail(s);
       }));
     }
 
@@ -9754,10 +9783,13 @@ const NextDayPrediction = {
         await Promise.all(batch.map(async (s) => {
           try {
             // v5.14: 已核实股票不再重复请求
-            if (!s || s.verified === true) return;
+            // v5.15: 已放弃重试的股票直接跳过
+            if (!s || s.verified === true || s.verifyGaveUp === true) return;
             const pct = await Utils.resolveNextChange(s.code, _vapBase, _vapKCount);
             if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
           } catch (e) { /* 单只失败不影响 */ }
+          // v5.15: 补漏止损
+          Utils.markVerifyFail(s);
         }));
       }
       // v5.14: 按全量已核实股票重算统计
@@ -9902,18 +9934,23 @@ const NextDayPrediction = {
     });
     html += '</div>';
 
-    // 待核实提示 + 批量核实按钮（v5.14: 增加"股票级补漏"统计）
+    // 待核实提示 + 批量核实按钮（v5.14: 增加"股票级补漏"统计；v5.15: 区分已停止重试）
     const pending = snaps.filter(s => s.verified !== true);
     const _ndTopUpSnaps = snaps.filter(s => s.verified === true && Utils.countPendingStocks(s) > 0);
     const _ndTopUpCount = _ndTopUpSnaps.reduce((a, s) => a + Utils.countPendingStocks(s), 0);
-    if (pending.length > 0 || _ndTopUpCount > 0) {
+    const _ndGaveUpCount = snaps.reduce((a, s) => a + Utils.countGaveUpStocks(s), 0);
+    if (pending.length > 0 || _ndTopUpCount > 0 || _ndGaveUpCount > 0) {
+      const _ndTips = [];
+      if (pending.length > 0) _ndTips.push(pending.length + '个交易日待核实');
+      if (_ndTopUpCount > 0) _ndTips.push('<span style="color:#ff9800">' + _ndTopUpSnaps.length + '个快照含' + _ndTopUpCount + '只待补核实</span>');
+      if (_ndGaveUpCount > 0) _ndTips.push('<span style="color:#8a8e9b">' + _ndGaveUpCount + ' 只数据缺失，已停止重试</span>');
       html += '<div style="margin:8px 0 12px;display:flex;gap:8px;align-items:center">';
-      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实'
-        + (_ndTopUpCount > 0 ? ' · <span style="color:#ff9800">' + _ndTopUpSnaps.length + '个快照含' + _ndTopUpCount + '只待补核实</span>' : '')
-        + '</span>';
-      html += '<button onclick="NextDayPrediction.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部'
-        + (_ndTopUpCount > 0 ? '（含 ' + _ndTopUpCount + ' 只补漏）' : '')
-        + '</button>';
+      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + _ndTips.join(' · ') + '</span>';
+      if (pending.length > 0 || _ndTopUpCount > 0) {
+        html += '<button onclick="NextDayPrediction.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部'
+          + (_ndTopUpCount > 0 ? '（含 ' + _ndTopUpCount + ' 只补漏）' : '')
+          + '</button>';
+      }
       html += '</div>';
     }
     // 最近交易日列表
@@ -9939,6 +9976,9 @@ const NextDayPrediction = {
       // v5.14: 待补核实徽标
       const _ndItemPending = Utils.countPendingStocks(s);
       if (_ndItemPending > 0) html += '<span class="ledger-tag" style="color:#ff9800;border-color:rgba(255,152,0,0.45)">⚠️ ' + _ndItemPending + '只待补</span>';
+      // v5.15: 已停止重试徽标
+      const _ndItemGaveUp = Utils.countGaveUpStocks(s);
+      if (_ndItemGaveUp > 0) html += '<span class="ledger-tag" style="color:#8a8e9b;border-color:rgba(138,142,155,0.45)">' + _ndItemGaveUp + '只数据缺失</span>';
       html += '</div>';
       if (isVerified) {
         const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
@@ -10740,18 +10780,23 @@ const ShortTermLedger = {
     html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
     html += '</div>';
 
-    // 待核实提示 + 批量核实按钮（紧凑行，v5.14: 含股票级补漏）
+    // 待核实提示 + 批量核实按钮（紧凑行，v5.14: 含股票级补漏；v5.15: 区分已停止重试）
     const pending = snaps.filter(s => s.verified !== true);
     const _stTopUpSnaps = snaps.filter(s => s.verified === true && Utils.countPendingStocks(s) > 0);
     const _stTopUpCount = _stTopUpSnaps.reduce((a, s) => a + Utils.countPendingStocks(s), 0);
-    if (pending.length > 0 || _stTopUpCount > 0) {
+    const _stGaveUpCount = snaps.reduce((a, s) => a + Utils.countGaveUpStocks(s), 0);
+    if (pending.length > 0 || _stTopUpCount > 0 || _stGaveUpCount > 0) {
+      const _stTips = [];
+      if (pending.length > 0) _stTips.push(pending.length + '个交易日待核实');
+      if (_stTopUpCount > 0) _stTips.push('<span style="color:#ff9800">' + _stTopUpSnaps.length + '个快照含' + _stTopUpCount + '只待补核实</span>');
+      if (_stGaveUpCount > 0) _stTips.push('<span style="color:#8a8e9b">' + _stGaveUpCount + ' 只数据缺失，已停止重试</span>');
       html += '<div class="st-ledger-pending-bar">';
-      html += '<span class="st-ledger-pending-tip">⏳ ' + pending.length + '个交易日待核实'
-        + (_stTopUpCount > 0 ? ' · <span style="color:#ff9800">' + _stTopUpSnaps.length + '个快照含' + _stTopUpCount + '只待补核实</span>' : '')
-        + '</span>';
-      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary st-ledger-verify-btn">一键核实全部'
-        + (_stTopUpCount > 0 ? '（含 ' + _stTopUpCount + ' 只补漏）' : '')
-        + '</button>';
+      html += '<span class="st-ledger-pending-tip">⏳ ' + _stTips.join(' · ') + '</span>';
+      if (pending.length > 0 || _stTopUpCount > 0) {
+        html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary st-ledger-verify-btn">一键核实全部'
+          + (_stTopUpCount > 0 ? '（含 ' + _stTopUpCount + ' 只补漏）' : '')
+          + '</button>';
+      }
       html += '</div>';
     }
 
@@ -10794,6 +10839,9 @@ const ShortTermLedger = {
       // v5.14: 待补核实徽标
       const _stItemPending = Utils.countPendingStocks(s);
       if (_stItemPending > 0) html += '<span class="ledger-tag" style="color:#ff9800;border-color:rgba(255,152,0,0.45)">⚠️ ' + _stItemPending + '只待补</span>';
+      // v5.15: 已停止重试徽标
+      const _stItemGaveUp = Utils.countGaveUpStocks(s);
+      if (_stItemGaveUp > 0) html += '<span class="ledger-tag" style="color:#8a8e9b;border-color:rgba(138,142,155,0.45)">' + _stItemGaveUp + '只数据缺失</span>';
       html += sectorTags;
       html += '</div>';
       if (isVerified) {
@@ -11091,13 +11139,16 @@ const ShortTermLedger = {
         await Promise.all(batch.map(async (s) => {
           try {
             // v5.14: 已核实股票不再重复请求
-            if (!s || s.verified === true) return;
+            // v5.15: 已放弃重试的股票直接跳过
+            if (!s || s.verified === true || s.verifyGaveUp === true) return;
             if (typeof DataAPI !== 'undefined' && DataAPI.fetchKline) {
               // v5.14: K线取不到时换更大条数重试一次
               const pct = await Utils.resolveNextChange(s.code, _stlBase, _stlKCount);
               if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
             }
           } catch (e) { console.warn('[ShortTermLedger] 核实单股异常:', s.code, e && e.message); }
+          // v5.15: 补漏止损
+          Utils.markVerifyFail(s);
         }));
       }
       // v5.14: 按全量已核实股票重算统计
@@ -11731,12 +11782,15 @@ const AutoVerify = {
         await Promise.all(batch.map(async (s) => {
           try {
             // v5.14: 已核实股票不再重复请求（补漏模式只对未核实的发请求）
-            if (!s || s.verified === true) return;
+            // v5.15: 已放弃重试的股票直接跳过
+            if (!s || s.verified === true || s.verifyGaveUp === true) return;
             // v5.14: K线取不到时换更大条数重试一次
             const pct = await Utils.resolveNextChange(s.code, _vndBase, _vndKCount);
             if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
             else { console.warn('[AutoVerify] 次日榜核实失败:', s.code, 'baseDate:' + _vndBase); }
           } catch (e) { console.warn('[AutoVerify] 次日榜核实单股异常:', s.code, e && e.message); }
+          // v5.15: 补漏止损
+          Utils.markVerifyFail(s);
         }));
       }
       // v5.14: 按全量已核实股票重算统计（避免补漏后胜率被漏算股票拉低）
@@ -11796,12 +11850,15 @@ const AutoVerify = {
         await Promise.all(batch.map(async (s) => {
           try {
             // v5.14: 已核实股票不再重复请求
-            if (!s || s.verified === true) return;
+            // v5.15: 已放弃重试的股票直接跳过
+            if (!s || s.verified === true || s.verifyGaveUp === true) return;
             // v5.14: K线取不到时换更大条数重试一次
             const pct = await Utils.resolveNextChange(s.code, _vstBase, _vstKCount);
             if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
             else { console.warn('[AutoVerify][P35] 核实失败(K线base/next缺失):', s.code, 'baseDate:' + _vstBase); }
           } catch (e) { console.warn('[AutoVerify] 短线核实单股异常:', s.code, e && e.message); }
+          // v5.15: 补漏止损
+          Utils.markVerifyFail(s);
         }));
       }
       // v5.14: 按全量已核实股票重算统计
