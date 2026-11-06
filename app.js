@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.13',
+  VERSION: 'v5.14',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -1663,6 +1663,38 @@ const Utils = {
     else if (changePct < -8) s -= 10;                   // 跌停附近
 
     return Math.max(0, Math.min(100, s));
+  },
+
+  /** v5.14: 统计快照内尚未核实（verified !== true）的股票数量，用于"补漏核实"判断 */
+  countPendingStocks(snap) {
+    try {
+      if (!snap || !Array.isArray(snap.stocks)) return 0;
+      return snap.stocks.filter(st => st && st.verified !== true).length;
+    } catch (e) { return 0; }
+  },
+
+  /** v5.14: 计算 baseDate 之后第一根K线相对 baseDate 收盘价的涨跌幅（%）
+   *  K线为空或基准日缺失时自动换更大条数重试一次；仍失败返回 null（不抛异常） */
+  async resolveNextChange(code, baseDate, kCount) {
+    const _try = (klines) => {
+      if (!Array.isArray(klines) || klines.length === 0) return null;
+      for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
+      const baseKline = klines.find(k => k.date === baseDate) || klines.filter(k => k.date <= baseDate).pop();
+      if (!baseKline || !(baseKline.close > 0)) return null;
+      const nextKline = klines.find(k => k.date > baseKline.date);
+      if (!nextKline || !(nextKline.close > 0)) return null;
+      return (nextKline.close - baseKline.close) / baseKline.close * 100;
+    };
+    try {
+      const kc = Math.max(10, Number(kCount) || 30);
+      let pct = _try(await DataAPI.fetchKline(code, kc));
+      if (pct === null) {
+        // v5.14: 首轮取不到（空数据或基准日缺失）→ 换更大条数再试一次
+        const kc2 = Math.min(120, Math.max(kc + 10, kc * 2));
+        pct = _try(await DataAPI.fetchKline(code, kc2));
+      }
+      return pct;
+    } catch (e) { return null; }
   }
 };
 
@@ -1692,6 +1724,249 @@ const HeavyTaskLock = {
       this._runningNames.delete(name);
       console.log('[HeavyLock] 结束:', name);
     }
+  }
+};
+
+// ============================================================
+// 3.6 ChannelManager - 数据通道自动扫描与健康度记忆（v5.14）
+//   职责：只决定"先试哪条通道" + 跳过已知坏通道，不改动任何通道的请求/解析逻辑。
+//   规则：连续失败 3 次 → 冷却 5 分钟；任意一次成功 → 立即恢复。
+//   自身任何异常都必须被吞掉，绝不能因为它让行情/搜索链路失败。
+// ============================================================
+const ChannelManager = {
+  LS_KEY: 'zhigu_channel_health_v1',
+  FAIL_THRESHOLD: 3,
+  COOLDOWN_MS: 5 * 60 * 1000,
+  // 通道注册表（数组顺序 = 默认优先级）
+  CHANNELS: {
+    quote: ['tencent_qt', 'em_push2'],
+    kline: ['tencent_ifzq', 'tencent_proxy', 'em_push2his'],
+    search: ['em_jsonp', 'sina_suggest', 'tencent_smartbox'],
+    industry: ['sina_hy_jsonp', 'local_cache']
+  },
+  _health: null,
+
+  _blank() {
+    return { failStreak: 0, okCount: 0, failCount: 0, lastOkAt: 0, lastFailAt: 0, avgLatency: 0, cooldownUntil: 0 };
+  },
+
+  /** 每次从 localStorage 读取（保证多标签页/外部改动即时生效），失败静默兜底 */
+  _load() {
+    let h = {};
+    try {
+      const raw = (typeof localStorage !== 'undefined') ? localStorage.getItem(this.LS_KEY) : null;
+      if (raw) {
+        const p = JSON.parse(raw);
+        if (p && typeof p === 'object') h = p;
+      }
+    } catch (e) { h = {}; }
+    this._health = h;
+    return h;
+  },
+
+  _save() {
+    try {
+      if (typeof localStorage === 'undefined' || !this._health) return;
+      localStorage.setItem(this.LS_KEY, JSON.stringify(this._health));
+    } catch (e) { /* 静默 */ }
+  },
+
+  /** 强制重新读取健康度（外部改了 localStorage 后调用） */
+  reload() { this._health = null; return this._load(); },
+
+  _entry(domain, name) {
+    const h = this._load();
+    const k = domain + ':' + name;
+    let e = h[k];
+    if (!e || typeof e !== 'object') { e = this._blank(); h[k] = e; }
+    const b = this._blank();
+    for (const f in b) { if (typeof e[f] !== 'number') e[f] = b[f]; }
+    return e;
+  },
+
+  /** 通道当前是否可用（未处于冷却期） */
+  isUsable(domain, name) {
+    try {
+      const h = this._load();
+      const e = h[domain + ':' + name];
+      if (!e) return true;
+      const cd = Number(e.cooldownUntil) || 0;
+      return !(cd > Date.now());
+    } catch (e) { return true; }
+  },
+
+  /** 该域通道尝试顺序：可用通道按注册表顺序在前，冷却中的排到最后（保底仍会尝试） */
+  ordered(domain) {
+    try {
+      const list = (this.CHANNELS[domain] || []).slice();
+      const usable = [], cooled = [];
+      for (const n of list) { (this.isUsable(domain, n) ? usable : cooled).push(n); }
+      return usable.concat(cooled);
+    } catch (e) {
+      return (this.CHANNELS[domain] || []).slice();
+    }
+  },
+
+  /** 返回当前该域首个未冷却通道；全部冷却时返回注册表第一个 */
+  pick(domain) {
+    try {
+      const o = this.ordered(domain);
+      return o.length > 0 ? o[0] : null;
+    } catch (e) { return null; }
+  },
+
+  /** 上报一次通道调用结果，更新健康度并持久化 */
+  report(domain, name, ok, latencyMs) {
+    try {
+      if (!domain || !name) return;
+      const e = this._entry(domain, name);
+      const lat = Math.max(0, Math.round(Number(latencyMs) || 0));
+      const now = Date.now();
+      if (ok) {
+        e.okCount = (e.okCount || 0) + 1;
+        e.failStreak = 0;
+        e.cooldownUntil = 0;
+        e.lastOkAt = now;
+        e.avgLatency = (e.avgLatency > 0) ? Math.round(e.avgLatency * 0.7 + lat * 0.3) : lat;
+      } else {
+        e.failCount = (e.failCount || 0) + 1;
+        e.failStreak = (e.failStreak || 0) + 1;
+        e.lastFailAt = now;
+        if (e.failStreak >= this.FAIL_THRESHOLD) {
+          e.cooldownUntil = now + this.COOLDOWN_MS;
+          console.warn('[ChannelManager] 通道进入冷却:', domain + '/' + name, '连续失败' + e.failStreak + '次');
+        }
+      }
+      this._save();
+    } catch (err) { /* 绝不能影响主链路 */ }
+  },
+
+  /** 完整状态快照（供自检面板展示） */
+  getStatus() {
+    const out = {};
+    try {
+      const h = this._load();
+      const now = Date.now();
+      for (const d of Object.keys(this.CHANNELS)) {
+        out[d] = (this.CHANNELS[d] || []).map(n => {
+          const e = h[d + ':' + n] || this._blank();
+          const cd = Number(e.cooldownUntil) || 0;
+          return {
+            name: n,
+            usable: !(cd > now),
+            failStreak: e.failStreak || 0,
+            okCount: e.okCount || 0,
+            failCount: e.failCount || 0,
+            avgLatency: e.avgLatency || 0,
+            cooldownRemainSec: cd > now ? Math.ceil((cd - now) / 1000) : 0,
+            lastOkAt: e.lastOkAt || 0,
+            lastFailAt: e.lastFailAt || 0
+          };
+        });
+      }
+    } catch (e) { /* 返回空 */ }
+    return out;
+  },
+
+  /** 单通道轻量探测（8 秒超时），返回 true=通 */
+  async _probe(domain, name, timeoutMs) {
+    const T = timeoutMs || 8000;
+    const race = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('probe timeout')), T))]);
+    const _get = async (url, opts) => {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), T);
+      try {
+        const r = await fetch(url, Object.assign({ signal: ctrl.signal }, opts || {}));
+        clearTimeout(timer);
+        return r;
+      } catch (e) { clearTimeout(timer); throw e; }
+    };
+    try {
+      if (domain === 'quote') {
+        if (name === 'tencent_qt') {
+          const r = await _get(CONFIG.TENCENT_QUOTE + 'sh600519&_t=' + Date.now());
+          if (!r || !r.ok) return false;
+          const buf = await r.arrayBuffer();
+          const txt = Utils.gbkToUtf8(buf);
+          return txt.indexOf('~') > 0;
+        }
+        if (name === 'em_push2') {
+          const r = await _get(CONFIG.EM_QUOTE + '?secid=1.600519&fields=f43,f57,f58&_t=' + Date.now());
+          const j = await r.json();
+          return !!(j && j.data && j.data.f43);
+        }
+      }
+      if (domain === 'kline') {
+        if (name === 'tencent_ifzq') {
+          const r = await _get(CONFIG.TENCENT_KLINE + '?param=sh600519,day,,,5,qfq&_t=' + Date.now());
+          const j = await r.json();
+          const n = j && j.data && j.data['sh600519'];
+          const arr = n ? (n.day || n.qfqday || []) : [];
+          return arr.length > 0;
+        }
+        if (name === 'tencent_proxy') {
+          const r = await _get('https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param=sh600519,day,,,5,qfq&_t=' + Date.now(), { headers: { 'Referer': 'https://gu.qq.com/' } });
+          const j = await r.json();
+          const n = j && j.data && j.data['sh600519'];
+          const arr = n ? (n.qfqday || n.day || []) : [];
+          return arr.length > 0;
+        }
+        if (name === 'em_push2his') {
+          const r = await _get('https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58&klt=101&fqt=1&lmt=5&end=20500101&_t=' + Date.now());
+          const j = await r.json();
+          return !!(j && j.data && Array.isArray(j.data.klines) && j.data.klines.length > 0);
+        }
+      }
+      if (domain === 'search') {
+        if (name === 'em_jsonp') {
+          const r = await race(DataAPI._searchEmJsonp('茅台'));
+          return Array.isArray(r) && r.length > 0;
+        }
+        if (name === 'sina_suggest') {
+          const r = await race(DataAPI._searchSinaSuggest('茅台'));
+          return Array.isArray(r) && r.length > 0;
+        }
+        if (name === 'tencent_smartbox') {
+          const url = CONFIG.TENCENT_SEARCH + '?t=all&q=' + encodeURIComponent('茅台');
+          const raw = await race(DataAPI._jsonp(url, 'v_hint', T - 1000));
+          return !!(raw && typeof raw === 'string' && raw !== 'N' && raw.indexOf('~') > 0);
+        }
+      }
+      if (domain === 'industry') {
+        if (name === 'sina_hy_jsonp') {
+          const raw = await race(DataAPI._jsonp('https://vip.stock.finance.sina.com.cn/q/view/newSinaHy.php?_t=' + Date.now(), 'S_Finance_bankuai_sinaindustry', T - 1000));
+          try { delete window.S_Finance_bankuai_sinaindustry; } catch (e2) {}
+          return !!(raw && typeof raw === 'object' && Object.keys(raw).length > 0);
+        }
+        if (name === 'local_cache') {
+          const ls = DataAPI._loadIndustryCacheLS();
+          return Array.isArray(ls) && ls.length > 0;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  },
+
+  /** 启动后异步探测各域首选通道：失败静默，不 toast、不阻塞 UI */
+  async autoScan() {
+    try {
+      const domains = Object.keys(this.CHANNELS);
+      for (const d of domains) {
+        let name = null, ok = false, t0 = Date.now();
+        try {
+          name = this.pick(d);
+          if (!name) continue;
+          t0 = Date.now();
+          ok = await this._probe(d, name);
+        } catch (e) { ok = false; }
+        try {
+          if (name) this.report(d, name, ok, Date.now() - t0);
+          console.log('[ChannelManager] 自动扫描 ' + d + '/' + name + ' → ' + (ok ? 'OK' : 'FAIL') + ' ' + (Date.now() - t0) + 'ms');
+        } catch (e2) {}
+      }
+    } catch (e) { /* 完全静默 */ }
   }
 };
 
@@ -1869,15 +2144,60 @@ const DataAPI = {
       });
   },
 
-  /** 获取腾讯实时行情（支持批量） */
+  /** 获取腾讯实时行情（支持批量）——v5.14: 按通道健康度自动排序，腾讯/东财互为兜底 */
   async fetchQuotes(codes) {
     try {
       // v3.9: 入参统一规范化，兼容历史残留的不规范港股代码（如4位hk0981→hk00981）
-      codes = (codes || []).map(c => Utils.normalizeCode(c) || c);
-      // 分离北交所和其他股票
-      const bjCodes = codes.filter(c => c.startsWith('bj'));
-      const otherCodes = codes.filter(c => !c.startsWith('bj'));
+      codes = (codes || []).map(c => Utils.normalizeCode(c) || c).filter(Boolean);
+      if (codes.length === 0) return {};
       const results = {};
+
+      // v5.14: ChannelManager 决定先试哪条通道（冷却中的通道排到最后，仍会尝试）
+      const order = (typeof ChannelManager !== 'undefined')
+        ? ChannelManager.ordered('quote')
+        : ['tencent_qt', 'em_push2'];
+      const _missing = () => codes.filter(c => {
+        const r = results[c];
+        return !r || !(r.price > 0 || r.prevClose > 0);
+      });
+
+      for (const ch of order) {
+        const todo = _missing();
+        if (todo.length === 0) break;
+        const t0 = Date.now();
+        let got = {};
+        try {
+          if (ch === 'tencent_qt') got = await this._quoteViaTencent(todo);
+          else if (ch === 'em_push2') got = await this._quoteViaEm(todo);
+        } catch (e) {
+          console.warn('[fetchQuotes] 通道' + ch + '异常:', e && e.message);
+          got = {};
+        }
+        const n = got ? Object.keys(got).length : 0;
+        if (typeof ChannelManager !== 'undefined') {
+          try { ChannelManager.report('quote', ch, n > 0, Date.now() - t0); } catch (e2) {}
+        }
+        if (n > 0) Object.assign(results, got);
+      }
+
+      // v5.13: 停牌/未开盘时 price 可能为 0，统一用 prevClose 兜底采纳
+      Object.keys(results).forEach(k => {
+        const r = results[k];
+        if (r && !(r.price > 0) && r.prevClose > 0) r.price = r.prevClose;
+      });
+      return results;
+    } catch (e) {
+      console.error('fetchQuotes error:', e);
+      return {};
+    }
+  },
+
+  /** v5.14: 行情通道①——腾讯 qt.gtimg.cn（批量 + 缺失逐只重试 + 北交所单只重试） */
+  async _quoteViaTencent(codes) {
+    const results = {};
+    // 分离北交所和其他股票
+    const bjCodes = codes.filter(c => c.startsWith('bj'));
+    const otherCodes = codes.filter(c => !c.startsWith('bj'));
 
       // v5.13: 腾讯行情单次请求封装（URL追加时间戳防SW/浏览器缓存 + 8s AbortController超时）
       const _fetchTencentBatch = async (codeList) => {
@@ -1925,51 +2245,6 @@ const DataAPI = {
               results[mc] = sp;
             }
           }
-        }
-      }
-
-      // v3.9: 港股腾讯未返回时，用东方财富备用API兜底（secid=116.xxxxx）
-      for (const code of codes) {
-        if (!code.startsWith('hk')) continue;
-        const exist = results[code];
-        if (exist && exist.price > 0) continue;
-        const emCode = code.substring(2);
-        for (const dom of ['push2.eastmoney.com', '82.push2.eastmoney.com', 'push2his.eastmoney.com']) {
-          try {
-            const emUrl = 'https://' + dom + '/api/qt/stock/get?secid=116.' + emCode +
-              '&fields=f43,f44,f45,f46,f47,f48,f57,f58,f60,f116,f117,f162,f167,f168,f169,f170,f171,f50';
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 8000);
-            const resp = await fetch(emUrl, { signal: ctrl.signal });
-            clearTimeout(timer);
-            const data = await resp.json();
-            if (data && data.data && data.data.f43) {
-              const d = data.data;
-              results[code] = {
-                name: d.f58 || code,
-                code: code,
-                isHK: true,
-                price: d.f43 / 1000,
-                prevClose: (d.f60 || 0) / 1000,
-                open: (d.f46 || 0) / 1000,
-                high: (d.f44 || 0) / 1000,
-                low: (d.f45 || 0) / 1000,
-                volume: d.f47 || 0,
-                volumeShares: d.f47 || 0,
-                amount: d.f48 || 0,
-                change: (d.f171 || 0) / 1000,
-                changePct: (d.f170 || 0) / 100,
-                turnover: (d.f168 || 0) / 100,
-                pe: (d.f162 || 0) / 100,
-                pb: (d.f167 || 0) / 100,
-                marketCap: (d.f116 || 0) / 1e8,
-                circCap: (d.f117 || 0) / 1e8,
-                amplitude: (d.f50 || 0) / 100,
-                time: ''
-              };
-              break;
-            }
-          } catch (e) { continue; }
         }
       }
 
@@ -2058,11 +2333,64 @@ const DataAPI = {
         } catch(e) { console.warn('[fetchQuotes] 东方财富API获取北交所失败:', code, e.message); }
       }
 
-      return results;
-    } catch (e) {
-      console.error('fetchQuotes error:', e);
-      return {};
+    return results;
+  },
+
+  /** v5.14: 行情通道②——东方财富 push2（A股/北交所/港股通用，逐只请求） */
+  async _quoteViaEm(codes) {
+    const results = {};
+    for (const code of codes) {
+      try {
+        const isHK = code.startsWith('hk');
+        const emCode = code.substring(2);
+        let secid;
+        if (isHK) secid = '116.' + emCode;
+        else if (code.startsWith('sh')) secid = '1.' + emCode;
+        else secid = '0.' + emCode;   // sz / bj
+        const scale = isHK ? 1000 : 100;
+        const emUrl = CONFIG.EM_QUOTE + '?secid=' + secid
+          + '&fields=f43,f44,f45,f46,f47,f48,f50,f57,f58,f60,f116,f117,f162,f167,f168,f170,f171&_t=' + Date.now();
+        const emCtrl = new AbortController();
+        const emTimer = setTimeout(() => emCtrl.abort(), 8000);
+        let resp;
+        try {
+          resp = await fetch(emUrl, { signal: emCtrl.signal });
+          clearTimeout(emTimer);
+        } catch (emErr) {
+          clearTimeout(emTimer);
+          throw emErr;
+        }
+        const data = await resp.json();
+        if (!data || !data.data) continue;
+        const d = data.data;
+        if (!d.f43 && !d.f60) continue;
+        results[code] = {
+          name: d.f58 || code,
+          code: code,
+          isHK: isHK,
+          price: (d.f43 || 0) / scale,
+          prevClose: (d.f60 || 0) / scale,
+          open: (d.f46 || 0) / scale,
+          high: (d.f44 || 0) / scale,
+          low: (d.f45 || 0) / scale,
+          volume: d.f47 || 0,
+          volumeShares: d.f47 || 0,
+          amount: (d.f48 || 0) / 10000,
+          change: (d.f171 || 0) / scale,
+          changePct: (d.f170 || 0) / 100,
+          turnover: (d.f168 || 0) / 100,
+          pe: (d.f162 || 0) / 100,
+          pb: (d.f167 || 0) / 100,
+          marketCap: (d.f116 || 0) / 100000000,
+          circCap: (d.f117 || 0) / 100000000,
+          amplitude: (d.f50 || 0) / 100,
+          time: ''
+        };
+      } catch (e) {
+        console.warn('[fetchQuotes] 东财通道失败:', code, e && e.message);
+      }
     }
+    return results;
   },
 
   /** 获取单只股票行情 */
@@ -2080,100 +2408,32 @@ const DataAPI = {
     return q || null;
   },
 
-  /** 获取日K线数据（A股/ETF/北交所/港股全支持，多通道容灾） */
+  /** 获取日K线数据（A股/ETF/北交所/港股全支持，多通道容灾）
+   *  v5.14: 通道顺序由 ChannelManager 决定（腾讯ifzq → 腾讯proxy → 东财push2his），新浪为最后兜底 */
   async fetchKline(code, count = 120) {
     try {
       const isHK = code.startsWith('hk');
-      // 港股腾讯K线接口为 hkfqkline（A股为 fqkline）
-      const klineBase = isHK
-        ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get'
-        : CONFIG.TENCENT_KLINE;
-      const url = `${klineBase}?param=${code},day,,,${count},qfq`;
-      const klineCtrl = new AbortController();
-      const klineTimer = setTimeout(() => klineCtrl.abort(), 8000);
-      let tencentDone = false;
-      try {
-        const resp = await fetch(url, { signal: klineCtrl.signal });
-        clearTimeout(klineTimer);
-        const data = await resp.json();
-        if (data && data.data && data.data[code]) {
-          const node = data.data[code];
-          const kdata = node.day || node.qfqday || node.hkday || [];
-          if (kdata.length > 0) {
-            tencentDone = true;
-            return kdata.map(k => ({
-              date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
-            }));
-          }
-        }
-      } catch (e) {
-        clearTimeout(klineTimer);
-        console.warn('[K线] 腾讯API超时或失败:', e && e.message);
-      }
+      const order = (typeof ChannelManager !== 'undefined')
+        ? ChannelManager.ordered('kline')
+        : ['tencent_ifzq', 'tencent_proxy', 'em_push2his'];
 
-      // v5.10: 腾讯proxy.finance K线备用通道（CORS ✅，浏览器可用，替代新浪K线兜底）
-      if (!isHK) {
+      for (const ch of order) {
+        if (ch === 'tencent_proxy' && isHK) continue;   // 腾讯proxy通道仅适用A股
+        const t0 = Date.now();
+        let rows = null;
         try {
-          const proxyUrl = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param='
-            + code + ',day,,,' + count + ',qfq';
-          const proxyCtrl = new AbortController();
-          const proxyTimer = setTimeout(() => proxyCtrl.abort(), 10000);
-          const proxyResp = await fetch(proxyUrl, {
-            signal: proxyCtrl.signal,
-            headers: { 'Referer': 'https://gu.qq.com/' }
-          });
-          clearTimeout(proxyTimer);
-          if (proxyResp.ok) {
-            const proxyData = await proxyResp.json();
-            if (proxyData && proxyData.code === 0 && proxyData.data && proxyData.data[code]) {
-              const pNode = proxyData.data[code];
-              // 兼容 qfqday（前复权）和 day（不复权）两种字段名
-              const pData = pNode.qfqday || pNode.day || [];
-              if (pData.length > 0) {
-                console.log('[K线] 腾讯proxy备用通道成功:', code, pData.length, '条');
-                return pData.map(k => ({
-                  date: k[0],
-                  open: parseFloat(k[1]) || 0,
-                  close: parseFloat(k[2]) || 0,
-                  high: parseFloat(k[3]) || 0,
-                  low: parseFloat(k[4]) || 0,
-                  volume: parseFloat(k[5]) || 0,
-                  amount: parseFloat(k[8]) || 0
-                }));
-              }
-            }
-          }
-        } catch (proxyErr) {
-          console.warn('[K线] 腾讯proxy备用通道失败:', proxyErr && proxyErr.message);
+          if (ch === 'tencent_ifzq') rows = await this._klineTencentIfzq(code, count, isHK);
+          else if (ch === 'tencent_proxy') rows = await this._klineTencentProxy(code, count);
+          else if (ch === 'em_push2his') rows = await this._klineEm(code, count, isHK);
+        } catch (e) {
+          console.warn('[K线] 通道' + ch + '异常:', e && e.message);
+          rows = null;
         }
-      }
-
-      // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
-      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
-      const emCode = code.substring(2);
-      let secid;
-      if (isHK) secid = '116.' + emCode;
-      else if (code.startsWith('sh')) secid = '1.' + emCode;
-      else secid = '0.' + emCode; // sz / bj
-      const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
-      for (const dom of emDomains) {
-        try {
-          const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 8000);
-          const emResp = await fetch(emUrl, { signal: ctrl.signal });
-          clearTimeout(timer);
-          const emData = await emResp.json();
-          if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
-            return emData.data.klines.map(line => {
-              const f = line.split(',');
-              return {
-                date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
-                volume: +f[5], amount: +f[6]
-              };
-            });
-          }
-        } catch (e2) { continue; } // 该通道失败，切下一通道
+        const ok = Array.isArray(rows) && rows.length > 0;
+        if (typeof ChannelManager !== 'undefined') {
+          try { ChannelManager.report('kline', ch, ok, Date.now() - t0); } catch (e2) {}
+        }
+        if (ok) return rows;
       }
 
       // v5.7: 新浪日K线兑底（腾讯+东财均失败时启用。注意：浏览器端因CORS限制会失败，仅Node环境可用）
@@ -2213,37 +2473,145 @@ const DataAPI = {
     }
   },
 
-  /** 搜索股票 - 三源串联：新浪suggest3(主) → 东财JSONP(次) → 腾讯smartbox(末位兜底) */
+  /** v5.14: K线通道①——腾讯 web.ifzq.gtimg.cn 主通道 */
+  async _klineTencentIfzq(code, count, isHK) {
+      // 港股腾讯K线接口为 hkfqkline（A股为 fqkline）
+      const klineBase = isHK
+        ? 'https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get'
+        : CONFIG.TENCENT_KLINE;
+      const url = `${klineBase}?param=${code},day,,,${count},qfq`;
+      const klineCtrl = new AbortController();
+      const klineTimer = setTimeout(() => klineCtrl.abort(), 8000);
+      try {
+        const resp = await fetch(url, { signal: klineCtrl.signal });
+        clearTimeout(klineTimer);
+        const data = await resp.json();
+        if (data && data.data && data.data[code]) {
+          const node = data.data[code];
+          const kdata = node.day || node.qfqday || node.hkday || [];
+          if (kdata.length > 0) {
+            return kdata.map(k => ({
+              date: k[0], open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5]
+            }));
+          }
+        }
+      } catch (e) {
+        clearTimeout(klineTimer);
+        console.warn('[K线] 腾讯API超时或失败:', e && e.message);
+      }
+      return [];
+    },
+
+  /** v5.14: K线通道②——腾讯 proxy.finance（CORS ✅，浏览器可用） */
+  async _klineTencentProxy(code, count) {
+      // v5.10: 腾讯proxy.finance K线备用通道（CORS ✅，浏览器可用，替代新浪K线兜底）
+      try {
+          const proxyUrl = 'https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param='
+            + code + ',day,,,' + count + ',qfq';
+          const proxyCtrl = new AbortController();
+          const proxyTimer = setTimeout(() => proxyCtrl.abort(), 10000);
+          const proxyResp = await fetch(proxyUrl, {
+            signal: proxyCtrl.signal,
+            headers: { 'Referer': 'https://gu.qq.com/' }
+          });
+          clearTimeout(proxyTimer);
+          if (proxyResp.ok) {
+            const proxyData = await proxyResp.json();
+            if (proxyData && proxyData.code === 0 && proxyData.data && proxyData.data[code]) {
+              const pNode = proxyData.data[code];
+              // 兼容 qfqday（前复权）和 day（不复权）两种字段名
+              const pData = pNode.qfqday || pNode.day || [];
+              if (pData.length > 0) {
+                console.log('[K线] 腾讯proxy备用通道成功:', code, pData.length, '条');
+                return pData.map(k => ({
+                  date: k[0],
+                  open: parseFloat(k[1]) || 0,
+                  close: parseFloat(k[2]) || 0,
+                  high: parseFloat(k[3]) || 0,
+                  low: parseFloat(k[4]) || 0,
+                  volume: parseFloat(k[5]) || 0,
+                  amount: parseFloat(k[8]) || 0
+                }));
+              }
+            }
+          }
+      } catch (proxyErr) {
+        console.warn('[K线] 腾讯proxy备用通道失败:', proxyErr && proxyErr.message);
+      }
+      return [];
+
+    },
+
+  /** v5.14: K线通道③——东方财富 push2his/push2/82.push2 多域容灾 */
+  async _klineEm(code, count, isHK) {
+      // 腾讯无数据时，用东方财富K线多通道备用（push2his主，push2/82.push2备）
+      // 港股 secid=116.xxxxx；沪市 1.xxx；深市/北交所 0.xxx
+      const emCode = code.substring(2);
+      let secid;
+      if (isHK) secid = '116.' + emCode;
+      else if (code.startsWith('sh')) secid = '1.' + emCode;
+      else secid = '0.' + emCode; // sz / bj
+      const emDomains = ['push2his.eastmoney.com', 'push2.eastmoney.com', '82.push2.eastmoney.com'];
+      for (const dom of emDomains) {
+        try {
+          const emUrl = `https://${dom}/api/qt/stock/kline/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61&klt=101&fqt=1&lmt=${count}&end=20500101`;
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 8000);
+          const emResp = await fetch(emUrl, { signal: ctrl.signal });
+          clearTimeout(timer);
+          const emData = await emResp.json();
+          if (emData && emData.data && Array.isArray(emData.data.klines) && emData.data.klines.length > 0) {
+            return emData.data.klines.map(line => {
+              const f = line.split(',');
+              return {
+                date: f[0], open: +f[1], close: +f[2], high: +f[3], low: +f[4],
+                volume: +f[5], amount: +f[6]
+              };
+            });
+          }
+        } catch (e2) { continue; } // 该通道失败，切下一通道
+      }
+
+      return [];
+    },
+
+  /** 搜索股票 - 多通道按健康度排序：东财JSONP / 新浪suggest3 / 腾讯smartbox
+   *  v5.14: 通道顺序由 ChannelManager 决定，任一通道命中即返回，全部失败返回空数组 */
   async searchStock(keyword) {
     const srcStatus = { sina: '未尝试', em: '未尝试', tencent: '未尝试' };
-    // 源一：新浪suggest3（JSONP，支持北交所，主搜索源）
-    try {
-      const results = await this._searchSinaSuggest(keyword);
-      if (results.length > 0) {
-        srcStatus.sina = `成功(${results.length}条)`;
-        console.log('[searchStock] 新浪suggest3命中:', results.length, '条');
+    const order = (typeof ChannelManager !== 'undefined')
+      ? ChannelManager.ordered('search')
+      : ['sina_suggest', 'em_jsonp', 'tencent_smartbox'];
+
+    for (const ch of order) {
+      const t0 = Date.now();
+      let results = [];
+      try {
+        if (ch === 'em_jsonp') results = await this._searchEmJsonp(keyword);
+        else if (ch === 'sina_suggest') results = await this._searchSinaSuggest(keyword);
+        else if (ch === 'tencent_smartbox') results = await this._searchTencentSmartbox(keyword);
+      } catch (e) {
+        results = [];
+        console.warn('[searchStock] 通道' + ch + '失败:', e && e.message);
+      }
+      const ok = Array.isArray(results) && results.length > 0;
+      if (ch === 'em_jsonp') srcStatus.em = ok ? ('成功(' + results.length + '条)') : '无结果';
+      else if (ch === 'sina_suggest') srcStatus.sina = ok ? ('成功(' + results.length + '条)') : '无结果';
+      else if (ch === 'tencent_smartbox') srcStatus.tencent = ok ? ('成功(' + results.length + '条)') : '无结果';
+      if (typeof ChannelManager !== 'undefined') {
+        try { ChannelManager.report('search', ch, ok, Date.now() - t0); } catch (e2) {}
+      }
+      if (ok) {
+        console.log('[searchStock] 通道' + ch + '命中:', results.length, '条');
         return results;
       }
-      srcStatus.sina = '无结果';
-    } catch (e) {
-      srcStatus.sina = `失败:${e.message}`;
-      console.warn('[searchStock] 新浪suggest3失败:', e.message);
     }
-    // 源二：东财搜索JSONP模式（绕过CORS，数据完整性好）
-    try {
-      const results = await this._searchEmJsonp(keyword);
-      if (results.length > 0) {
-        srcStatus.em = `成功(${results.length}条)`;
-        console.log('[searchStock] 东财JSONP命中:', results.length, '条');
-        return results;
-      }
-      srcStatus.em = '无结果';
-    } catch (e) {
-      srcStatus.em = `失败:${e.message}`;
-      console.warn('[searchStock] 东财JSONP失败:', e.message);
-    }
-    // 源三：腾讯smartbox（JSONP方式，末位兜底，不支持北交所）
-    try {
+    console.warn('[searchStock] 全部通道无结果:', JSON.stringify(srcStatus), 'keyword:', keyword);
+    return [];
+  },
+
+  /** v5.14: 搜索通道③——腾讯smartbox（JSONP方式，末位兜底，不支持北交所） */
+  async _searchTencentSmartbox(keyword) {
       const url = `${CONFIG.TENCENT_SEARCH}?t=all&q=${encodeURIComponent(keyword)}`;
       const raw = await this._jsonp(url, 'v_hint', 6000);
       if (raw && typeof raw === 'string' && raw !== 'N') {
@@ -2284,22 +2652,9 @@ const DataAPI = {
             fullCode: prefix + code
           };
         }).filter(Boolean);
-        if (results.length > 0) {
-          srcStatus.tencent = `成功(${results.length}条)`;
-          console.log('[searchStock] 腾讯smartbox命中:', results.length, '条');
-          return results;
-        }
-        srcStatus.tencent = '无结果';
-      } else {
-        srcStatus.tencent = raw === 'N' ? '无匹配(N)' : '空响应';
+        if (results.length > 0) return results;
       }
-    } catch (e2) {
-      srcStatus.tencent = `失败:${e2.message}`;
-      console.warn('[searchStock] 腾讯smartbox失败:', e2.message);
-    }
-    // 三源均无结果，打印诊断信息
-    console.warn('[searchStock] 三源均无结果:', JSON.stringify(srcStatus), 'keyword:', keyword);
-    return [];
+      return [];
   },
 
   /** 多通道请求东方财富clist接口（板块/排行/成分股容灾，主域失败自动切延时备份域，单通道8秒超时） */
@@ -3235,6 +3590,17 @@ const DataAPI = {
     const cacheKey = 'sinaIndustryList';
     const cached = this._cacheGet(cacheKey, 'sinaIndustry');
     if (cached) return cached;
+    const _indT0 = Date.now();
+    // v5.14: 通道健康度——sina_hy_jsonp 冷却期内直接走本地缓存，不再白等 10 秒超时
+    if (typeof ChannelManager !== 'undefined' && !ChannelManager.isUsable('industry', 'sina_hy_jsonp')) {
+      const lsCd = this._loadIndustryCacheLS();
+      if (lsCd.length > 0) {
+        console.log('[新浪行业] v5.14: sina_hy_jsonp 冷却中，直接使用localStorage缓存', lsCd.length, '个行业');
+        try { ChannelManager.report('industry', 'local_cache', true, 0); } catch (e0) {}
+        this._cacheSet(cacheKey, 'sinaIndustry', lsCd);
+        return lsCd;
+      }
+    }
     try {
       // JSONP方式加载（GBK编码），使用已有的_jsonp方法
       const raw = await this._jsonp(
@@ -3244,6 +3610,7 @@ const DataAPI = {
       );
       if (!raw || typeof raw !== 'object') {
         console.warn('[新浪行业] JSONP返回空或非对象');
+        if (typeof ChannelManager !== 'undefined') { try { ChannelManager.report('industry', 'sina_hy_jsonp', false, Date.now() - _indT0); } catch (e0) {} }
         // 清理window上残留的变量
         try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
         // v5.13: localStorage兜底
@@ -3279,12 +3646,14 @@ const DataAPI = {
       // 按涨跌幅降序排列
       result.sort((a, b) => b.changePct - a.changePct);
       console.log('[新浪行业] 获取成功:', result.length, '个行业');
+      if (typeof ChannelManager !== 'undefined') { try { ChannelManager.report('industry', 'sina_hy_jsonp', result.length > 0, Date.now() - _indT0); } catch (e0) {} }
       this._cacheSet(cacheKey, 'sinaIndustry', result);
       // v5.13: 成功后持久化到localStorage，避免单次JSONP失败导致模块二长期空白
       this._saveIndustryCacheLS(result);
       return result;
     } catch (e) {
       console.warn('[fetchSinaIndustryList] 失败:', e && e.message);
+      if (typeof ChannelManager !== 'undefined') { try { ChannelManager.report('industry', 'sina_hy_jsonp', false, Date.now() - _indT0); } catch (e0) {} }
       try { delete window.S_Finance_bankuai_sinaindustry; } catch(e2) {}
       // v5.13: localStorage兜底（即使过期也返回）
       const lsCacheFail = this._loadIndustryCacheLS();
@@ -9041,10 +9410,15 @@ const NextDayPrediction = {
   // ---------- 渲染 ----------
   _renderList(snapshot) {
     const body = document.getElementById('nextDayBody');
+    // v5.14: 股票级待补核实数量
+    const _ndPendingCnt = Utils.countPendingStocks(snapshot);
+    const _ndPendingBadge = _ndPendingCnt > 0
+      ? ' <span style="color:#ff9800;font-size:12px;font-weight:600">⚠️ ' + _ndPendingCnt + ' 只待补核实</span>'
+      : '';
     const verifyBadge = snapshot.verified != null
       ? (snapshot.verified
-        ? '<span style="color:#00e676;font-size:12px">✅ 已核实：' + snapshot.hitCount + '/' + snapshot.stocks.length + ' 只次日收涨（胜率' + snapshot.winRate + '%）</span>'
-        : '<span style="color:#8a8e9b;font-size:12px">⏳ 次日尚未开盘/数据未更新，开盘后可核实</span>')
+        ? '<span style="color:#00e676;font-size:12px">✅ 已核实：' + snapshot.hitCount + '/' + (snapshot.resolvedCount || snapshot.stocks.length) + ' 只次日收涨（胜率' + snapshot.winRate + '%）</span>' + _ndPendingBadge
+        : '<span style="color:#8a8e9b;font-size:12px">⏳ 次日尚未开盘/数据未更新，开盘后可核实</span>' + _ndPendingBadge)
       : '';
     const mktLine = snapshot.marketTag
       ? '<div style="font-size:11px;color:var(--text-secondary);margin:2px 0 8px">🌡️ 大盘情绪：' + snapshot.marketTag
@@ -9059,9 +9433,11 @@ const NextDayPrediction = {
     html += '<div class="hot-stocks-list">';
     snapshot.stocks.forEach((s, idx) => {
       const rankCls = idx < 3 ? 'rank-top3' : 'rank-normal';
-      const chgColor = s.verified === true ? (s.nextChangePct >= 0 ? '#ff4757' : '#00e676') : (s.changePct >= 0 ? '#ff4757' : '#00e676');
-      const verify = s.verified === true
-        ? '<div style="font-size:11px;color:' + (s.nextChangePct >= 0 ? '#ff4757' : '#00e676') + '">次日实际：' + (s.nextChangePct >= 0 ? '+' : '') + s.nextChangePct.toFixed(2) + '%</div>'
+      // v5.14: 防御性处理——已标记verified但缺 nextChangePct 的历史脏数据不再导致渲染崩溃
+      const _ndChgVal = (s.nextChangePct == null || isNaN(s.nextChangePct)) ? null : s.nextChangePct;
+      const chgColor = (s.verified === true && _ndChgVal !== null) ? (_ndChgVal >= 0 ? '#ff4757' : '#00e676') : (s.changePct >= 0 ? '#ff4757' : '#00e676');
+      const verify = (s.verified === true && _ndChgVal !== null)
+        ? '<div style="font-size:11px;color:' + (_ndChgVal >= 0 ? '#ff4757' : '#00e676') + '">次日实际：' + (_ndChgVal >= 0 ? '+' : '') + _ndChgVal.toFixed(2) + '%</div>'
         : '';
       const factorLine = (s.factors && s.factors.length)
         ? '<div style="font-size:10px;color:#ffd54f;margin-top:2px">🔑 ' + s.factors.join(' · ') + '</div>'
@@ -9261,7 +9637,8 @@ const NextDayPrediction = {
     body.innerHTML = '<div class="loading-pulse">正在拉取最新行情核实昨日排名...</div>';
 
     const today = this._todayStr();
-    let target = snaps.find(x => x.verified !== true && x.date <= today);  // v5.11: <= to include today
+    // v5.14: 优先未核实快照；已核实但存在"股票级漏核实"的，作为补漏快照重新选中
+    let target = snaps.find(x => x.date <= today && (x.verified !== true || Utils.countPendingStocks(x) > 0));
     if (!target) {
       this._renderList(snaps[0]);
       // v5.11: 带原因提示
@@ -9276,34 +9653,31 @@ const NextDayPrediction = {
       return;
     }
 
+    // v5.14: 补漏模式标记（快照级已核实，仅补齐个别未核实股票）
+    const _isTopUp = (target.verified === true);
     // v5.11: 动态K线条数（按baseDate与今天的日差计算）
     const _vaBaseDate = target.baseDate || target.date;
     const _vaDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vaBaseDate)) / 86400000));
     const _vaKCount = Math.min(60, Math.max(10, Math.ceil(_vaDayDiff * 0.75) + 5));
-    let hit = 0, resolved = 0;
+    const list = target.stocks || [];
+    const _vaPendingBefore = Utils.countPendingStocks(target);
     const batchSize = 10;
-    const list = target.stocks;
     for (let i = 0; i < list.length; i += batchSize) {
       const batch = list.slice(i, i + batchSize);
       await Promise.all(batch.map(async (s) => {
         try {
-          const klines = await DataAPI.fetchKline(s.code, _vaKCount);
-          if (klines && klines.length > 0) {
-            for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-            // v5.11: 统一用 baseDate 之后第一根K线计算次日涨跌（新旧格式兼容）
-            const baseKline = klines.find(k => k.date === _vaBaseDate) || klines.filter(k => k.date <= _vaBaseDate).pop();
-            if (!baseKline || !(baseKline.close > 0)) return;
-            const nextKline = klines.find(k => k.date > baseKline.date);
-            if (nextKline && nextKline.close > 0) {
-              s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
-              s.verified = true;
-              resolved++;
-              if (s.nextChangePct > 0) hit++;
-            }
-          }
+          // v5.14: 已核实股票不再重复请求（补漏模式只对未核实的发请求）
+          if (!s || s.verified === true) return;
+          const pct = await Utils.resolveNextChange(s.code, _vaBaseDate, _vaKCount);
+          if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
         } catch (e) { /* 单只失败不影响整体 */ }
       }));
     }
+
+    // v5.14: hit/resolved 按全量已核实股票重算（补漏后统计不会被漏算股票拉低）
+    const _vaDone = list.filter(st => st && st.verified === true);
+    const hit = _vaDone.filter(st => (st.nextChangePct || 0) > 0).length;
+    const resolved = _vaDone.length;
 
     if (resolved === 0) {
       // v5.11: 打印诊断信息到控制台
@@ -9318,20 +9692,27 @@ const NextDayPrediction = {
     target.resolvedCount = resolved;
     target.winRate = Math.round(hit / resolved * 100);
     target.verifyDate = this._todayStr();
+    target.pendingCount = Utils.countPendingStocks(target);   // v5.14: 供UI显示待补核实数
     this._saveSnapshots(snaps);
     this._renderList(target);
-    Utils.toast ? Utils.toast('核实完成：' + hit + '/' + resolved + ' 只次日收涨，胜率' + target.winRate + '%') : null;
+    if (_isTopUp) {
+      console.log('[核实补漏] 快照', _vaBaseDate, '补核', Math.max(0, _vaPendingBefore - target.pendingCount), '只');
+      Utils.toast ? Utils.toast('补漏核实完成：已补齐' + Math.max(0, _vaPendingBefore - target.pendingCount) + '只，仍剩' + target.pendingCount + '只待补核实') : null;
+    } else {
+      Utils.toast ? Utils.toast('核实完成：' + hit + '/' + resolved + ' 只次日收涨，胜率' + target.winRate + '%') : null;
+    }
   },
 
   // ---------- v4.4 P4: 历史验证台账 ----------
   async verifyAllPending() {
     const snaps = this._loadSnapshots();
     const today = this._todayStr();
-    // v4.4 P27: 只核实目标日已过的快照（新格式用 baseDate 判断，旧格式用 date 判断）
+    // v4.4 P27 / v5.14: 目标日已过才可核实；快照级已核实但存在股票级漏核实的，纳入补漏队列
     const pending = snaps.filter(s => {
-      if (s.verified === true) return false;
-      if (s.baseDate) return s.date <= today;
-      return true; // 旧格式快照全部可核实
+      const due = s.baseDate ? (s.date <= today) : true;
+      if (!due) return false;
+      if (s.verified !== true) return true;
+      return Utils.countPendingStocks(s) > 0;
     });
     if (pending.length === 0) {
       // v5.11: 带原因提示
@@ -9355,48 +9736,48 @@ const NextDayPrediction = {
     const body = document.getElementById('nextDayBody');
     body.innerHTML = '<div class="loading-pulse">正在批量核实 ' + pending.length + ' 个交易日的排名...</div>';
 
-    let totalHit = 0, totalResolved = 0;
+    let totalHit = 0, totalResolved = 0, topUpStocks = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
       const displayDate = target.baseDate ? target.baseDate + '→' + target.date : ('→' + target.date);
       body.innerHTML = '<div class="loading-pulse">核实中：' + displayDate + '（' + (si + 1) + '/' + pending.length + '）</div>';
-      let hit = 0, resolved = 0;
-      const batchSize = 10;
+      const _isTopUp = (target.verified === true);
+      const _pendingBefore = Utils.countPendingStocks(target);
+      // v5.11: 动态K线条数
+      const _vapBase = target.baseDate || target.date;
+      const _vapDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vapBase)) / 86400000));
+      const _vapKCount = Math.min(60, Math.max(10, Math.ceil(_vapDayDiff * 0.75) + 5));
       const list = target.stocks || [];
+      const batchSize = 10;
       for (let i = 0; i < list.length; i += batchSize) {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            // v5.11: 动态K线条数
-            const _vapBaseDate = target.baseDate || target.date;
-            const _vapDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vapBaseDate)) / 86400000));
-            const _vapKCount = Math.min(60, Math.max(10, Math.ceil(_vapDayDiff * 0.75) + 5));
-            const klines = await DataAPI.fetchKline(s.code, _vapKCount);
-            if (klines && klines.length > 0) {
-              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              // v5.11: 统一使用 baseDate→下一交易日 逻辑（不再要求 target.date 精确匹配）
-              const _vapBase = target.baseDate || target.date;
-              const baseKline = klines.find(k => k.date === _vapBase) || klines.filter(k => k.date <= _vapBase).pop();
-              if (!baseKline || !(baseKline.close > 0)) return;
-              const nextKline = klines.find(k => k.date > baseKline.date);
-              if (nextKline && nextKline.close > 0) {
-                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
-                s.verified = true;
-                resolved++;
-                if (s.nextChangePct > 0) hit++;
-              }
-            }
+            // v5.14: 已核实股票不再重复请求
+            if (!s || s.verified === true) return;
+            const pct = await Utils.resolveNextChange(s.code, _vapBase, _vapKCount);
+            if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
           } catch (e) { /* 单只失败不影响 */ }
         }));
       }
+      // v5.14: 按全量已核实股票重算统计
+      const _vapDone = list.filter(st => st && st.verified === true);
+      const hit = _vapDone.filter(st => (st.nextChangePct || 0) > 0).length;
+      const resolved = _vapDone.length;
       if (resolved > 0) {
         target.verified = true;
         target.hitCount = hit;
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = this._todayStr();
+        target.pendingCount = Utils.countPendingStocks(target);
         totalHit += hit;
         totalResolved += resolved;
+        if (_isTopUp) {
+          const _fixed = Math.max(0, _pendingBefore - target.pendingCount);
+          topUpStocks += _fixed;
+          console.log('[核实补漏] 快照', _vapBase, '补核', _fixed, '只');
+        }
       }
     }
     this._saveSnapshots(snaps);
@@ -9521,12 +9902,18 @@ const NextDayPrediction = {
     });
     html += '</div>';
 
-    // 待核实提示 + 批量核实按钮
+    // 待核实提示 + 批量核实按钮（v5.14: 增加"股票级补漏"统计）
     const pending = snaps.filter(s => s.verified !== true);
-    if (pending.length > 0) {
+    const _ndTopUpSnaps = snaps.filter(s => s.verified === true && Utils.countPendingStocks(s) > 0);
+    const _ndTopUpCount = _ndTopUpSnaps.reduce((a, s) => a + Utils.countPendingStocks(s), 0);
+    if (pending.length > 0 || _ndTopUpCount > 0) {
       html += '<div style="margin:8px 0 12px;display:flex;gap:8px;align-items:center">';
-      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实</span>';
-      html += '<button onclick="NextDayPrediction.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部</button>';
+      html += '<span style="font-size:11px;color:var(--text-muted)">⏳ ' + pending.length + '个交易日待核实'
+        + (_ndTopUpCount > 0 ? ' · <span style="color:#ff9800">' + _ndTopUpSnaps.length + '个快照含' + _ndTopUpCount + '只待补核实</span>' : '')
+        + '</span>';
+      html += '<button onclick="NextDayPrediction.verifyAllPending()" class="btn-primary" style="flex:1;padding:8px 12px;font-size:12px;background:rgba(0,230,118,0.15);border:1px solid rgba(0,230,118,0.4);color:#00e676">一键核实全部'
+        + (_ndTopUpCount > 0 ? '（含 ' + _ndTopUpCount + ' 只补漏）' : '')
+        + '</button>';
       html += '</div>';
     }
     // 最近交易日列表
@@ -9549,6 +9936,9 @@ const NextDayPrediction = {
       html += '<div class="ledger-info">';
       html += '<span class="ledger-count">' + (s.stocks ? s.stocks.length : 0) + '只</span>';
       if (s.marketTag) html += '<span class="ledger-tag">🌡 ' + s.marketTag + '</span>';
+      // v5.14: 待补核实徽标
+      const _ndItemPending = Utils.countPendingStocks(s);
+      if (_ndItemPending > 0) html += '<span class="ledger-tag" style="color:#ff9800;border-color:rgba(255,152,0,0.45)">⚠️ ' + _ndItemPending + '只待补</span>';
       html += '</div>';
       if (isVerified) {
         const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
@@ -10350,12 +10740,18 @@ const ShortTermLedger = {
     html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
     html += '</div>';
 
-    // 待核实提示 + 批量核实按钮（紧凑行）
+    // 待核实提示 + 批量核实按钮（紧凑行，v5.14: 含股票级补漏）
     const pending = snaps.filter(s => s.verified !== true);
-    if (pending.length > 0) {
+    const _stTopUpSnaps = snaps.filter(s => s.verified === true && Utils.countPendingStocks(s) > 0);
+    const _stTopUpCount = _stTopUpSnaps.reduce((a, s) => a + Utils.countPendingStocks(s), 0);
+    if (pending.length > 0 || _stTopUpCount > 0) {
       html += '<div class="st-ledger-pending-bar">';
-      html += '<span class="st-ledger-pending-tip">⏳ ' + pending.length + '个交易日待核实</span>';
-      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary st-ledger-verify-btn">一键核实全部</button>';
+      html += '<span class="st-ledger-pending-tip">⏳ ' + pending.length + '个交易日待核实'
+        + (_stTopUpCount > 0 ? ' · <span style="color:#ff9800">' + _stTopUpSnaps.length + '个快照含' + _stTopUpCount + '只待补核实</span>' : '')
+        + '</span>';
+      html += '<button onclick="ShortTermLedger.verifyAllPending()" class="btn-primary st-ledger-verify-btn">一键核实全部'
+        + (_stTopUpCount > 0 ? '（含 ' + _stTopUpCount + ' 只补漏）' : '')
+        + '</button>';
       html += '</div>';
     }
 
@@ -10395,6 +10791,9 @@ const ShortTermLedger = {
         const modeTag = { concept: '🟡 概念', market: '🟠 全市场', static: '⚪ 静态' }[s.fallbackMode] || '';
         if (modeTag) html += '<span class="ledger-tag">' + modeTag + '</span>';
       }
+      // v5.14: 待补核实徽标
+      const _stItemPending = Utils.countPendingStocks(s);
+      if (_stItemPending > 0) html += '<span class="ledger-tag" style="color:#ff9800;border-color:rgba(255,152,0,0.45)">⚠️ ' + _stItemPending + '只待补</span>';
       html += sectorTags;
       html += '</div>';
       if (isVerified) {
@@ -10640,12 +11039,13 @@ const ShortTermLedger = {
   async verifyAllPending() {
     const snaps = this._loadSnapshots();
     const today = this._todayStr();
-    // v5.1: 基于目标日判断是否可核实（目标日未到则不核实）
+    // v5.1 / v5.14: 目标日已到才可核实；快照级已核实但存在股票级漏核实的，纳入补漏队列
     const pending = snaps.filter(s => {
-      if (s.verified === true) return false;
       const td = this._getTargetDate(s);
-      if (td) return td <= today;  // v5.11: <= to include today
-      return s.date <= today; // 旧快照兜底 v5.11: <=
+      const due = td ? (td <= today) : (s.date <= today);
+      if (!due) return false;
+      if (s.verified !== true) return true;
+      return Utils.countPendingStocks(s) > 0;
     });
     if (pending.length === 0) {
       // v5.11: 带原因提示
@@ -10670,7 +11070,7 @@ const ShortTermLedger = {
     const container = document.getElementById('hotStocks');
     if (container) container.innerHTML = '<div class="loading-pulse">正在批量核实 ' + pending.length + ' 个交易日的短线榜...</div>';
 
-    let totalHit = 0, totalResolved = 0, failDays = 0;
+    let totalHit = 0, totalResolved = 0, failDays = 0, topUpStocks = 0;
     for (let si = 0; si < pending.length; si++) {
       const target = pending[si];
       // v5.1: 显示基准→目标日期
@@ -10678,44 +11078,46 @@ const ShortTermLedger = {
       const _vTarget = this._getTargetDate(target);
       const _vLabel = _vTarget ? (_vBase + '→' + _vTarget) : target.date;
       if (container) container.innerHTML = '<div class="loading-pulse">核实中：' + _vLabel + '（' + (si + 1) + '/' + pending.length + '）</div>';
-      let hit = 0, resolved = 0;
+      // v5.14: 补漏模式
+      const _isTopUp = (target.verified === true);
+      const _pendingBefore = Utils.countPendingStocks(target);
       const list = target.stocks || [];
+      const _stlBase = this._getBaseDate(target) || target.date;
+      const _stlDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_stlBase)) / 86400000));
+      const _stlKCount = Math.min(60, Math.max(10, Math.ceil(_stlDayDiff * 0.75) + 5));
       const batchSize = 8;
       for (let i = 0; i < list.length; i += batchSize) {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
+            // v5.14: 已核实股票不再重复请求
+            if (!s || s.verified === true) return;
             if (typeof DataAPI !== 'undefined' && DataAPI.fetchKline) {
-              // v5.11: 动态K线条数
-              const _stlBase = this._getBaseDate(target) || target.date;
-              const _stlDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_stlBase)) / 86400000));
-              const _stlKCount = Math.min(60, Math.max(10, Math.ceil(_stlDayDiff * 0.75) + 5));
-              const klines = await DataAPI.fetchKline(s.code, _stlKCount);
-              if (klines && klines.length > 0) {
-                for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-                // v5.11: 统一使用 baseDate→下一交易日 逻辑
-                const baseKline = klines.find(k => k.date === _stlBase) || klines.filter(k => k.date <= _stlBase).pop();
-                if (!baseKline || !(baseKline.close > 0)) return;
-                const nextKline = klines.find(k => k.date > baseKline.date);
-                if (nextKline && nextKline.close > 0) {
-                  s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
-                  s.verified = true;
-                  resolved++;
-                  if (s.nextChangePct > 0) hit++;
-                }
-              }
+              // v5.14: K线取不到时换更大条数重试一次
+              const pct = await Utils.resolveNextChange(s.code, _stlBase, _stlKCount);
+              if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
             }
           } catch (e) { console.warn('[ShortTermLedger] 核实单股异常:', s.code, e && e.message); }
         }));
       }
+      // v5.14: 按全量已核实股票重算统计
+      const _stlDone = list.filter(st => st && st.verified === true);
+      const hit = _stlDone.filter(st => (st.nextChangePct || 0) > 0).length;
+      const resolved = _stlDone.length;
       if (resolved > 0) {
         target.verified = true;
         target.hitCount = hit;
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = this._todayStr();
+        target.pendingCount = Utils.countPendingStocks(target);   // v5.14
         totalHit += hit;
         totalResolved += resolved;
+        if (_isTopUp) {
+          const _fixed = Math.max(0, _pendingBefore - target.pendingCount);
+          topUpStocks += _fixed;
+          console.log('[核实补漏] 快照', _stlBase, '补核', _fixed, '只');
+        }
       } else {
         failDays++;
       }
@@ -10847,6 +11249,29 @@ const AutoVerify = {
     const today = new Date().toISOString().slice(0, 10);
     if (last.verifyDate !== today) return false;
     return !!last.finalVerified;
+  },
+
+  /** v5.14: 是否存在"快照级已核实但股票级仍有漏核实"的补漏任务 */
+  _hasTopUpPending() {
+    try {
+      const today = NextDayPrediction._todayStr();
+      const nd = (NextDayPrediction._loadSnapshots() || []).filter(s => {
+        if (s.verified !== true) return false;
+        if (s.baseDate) { if (s.date > today) return false; }
+        else { if (s.date >= today) return false; }
+        return Utils.countPendingStocks(s) > 0;
+      });
+      const st = (ShortTermLedger._loadSnapshots() || []).filter(s => {
+        if (s.verified !== true) return false;
+        if (s.date > today) return false;
+        return Utils.countPendingStocks(s) > 0;
+      });
+      if (nd.length + st.length > 0) {
+        console.log('[AutoVerify] v5.14 补漏任务：次日榜' + nd.length + '个快照, 短线榜' + st.length + '个快照');
+        return true;
+      }
+      return false;
+    } catch (e) { return false; }
   },
 
   /** v4.4 P41: APP初始化/调度器入口——按时段分流预测生成与收盘核实 */
@@ -11001,11 +11426,15 @@ const AutoVerify = {
   /** v4.4 P41: 收盘后台账核实（15:00-23:00调用） */
   async runCloseVerification() {
     if (this._alreadyVerifiedToday()) {
-      console.log('[AutoVerify] 今日已完成收盘核实');
-      const last = this._loadLastResult();
-      this._lastVerifyResult = last;
-      this._showHomeVerifyResult(last, true);
-      return;
+      // v5.14: 今日已核实，但若仍有股票级漏核实，则继续执行补漏核实
+      if (!this._hasTopUpPending()) {
+        console.log('[AutoVerify] 今日已完成收盘核实');
+        const last = this._loadLastResult();
+        this._lastVerifyResult = last;
+        this._showHomeVerifyResult(last, true);
+        return;
+      }
+      console.log('[AutoVerify] v5.14: 今日已核实，但存在待补核实股票，继续执行补漏核实');
     }
 
     try {
@@ -11282,54 +11711,58 @@ const AutoVerify = {
       if (!s.verified) return true;
       // v4.4 P32: 当天核实过的允许重新核实（盘中→收盘数据更新）
       if (s.verifyDate === today) return true;
+      // v5.14: 快照级已核实但存在股票级漏核实 → 纳入补漏队列
+      if (Utils.countPendingStocks(s) > 0) return true;
       return false;
     });
     if (pending.length === 0) return;
 
-    let totalResolved = 0, totalFailDays = 0;
+    let totalResolved = 0, totalFailDays = 0, totalTopUp = 0;
     for (const target of pending) {
-      let hit = 0, resolved = 0;
+      const _vndBase = target.baseDate || target.date;
+      const _isTopUp = (target.verified === true);
+      const _pendingBefore = Utils.countPendingStocks(target);
       const list = target.stocks || [];
+      const _vndDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vndBase)) / 86400000));
+      const _vndKCount = Math.min(60, Math.max(10, Math.ceil(_vndDayDiff * 0.75) + 5));
       const batchSize = 10;
       for (let i = 0; i < list.length; i += batchSize) {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            // v5.11: 动态K线条数（按基准日与今天的日差计算）
-            const _vndBase = target.baseDate || target.date;
-            const _vndDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vndBase)) / 86400000));
-            const _vndKCount = Math.min(60, Math.max(10, Math.ceil(_vndDayDiff * 0.75) + 5));
-            const klines = await DataAPI.fetchKline(s.code, _vndKCount);
-            if (klines && klines.length > 0) {
-              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              // v5.11: 统一使用 baseDate→下一交易日 逻辑
-              const baseKline = klines.find(k => k.date === _vndBase) || klines.filter(k => k.date <= _vndBase).pop();
-              if (!baseKline || !(baseKline.close > 0)) return;
-              const nextKline = klines.find(k => k.date > baseKline.date);
-              if (nextKline && nextKline.close > 0) {
-                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
-                s.verified = true;
-                resolved++;
-                if (s.nextChangePct > 0) hit++;
-              }
-            }
+            // v5.14: 已核实股票不再重复请求（补漏模式只对未核实的发请求）
+            if (!s || s.verified === true) return;
+            // v5.14: K线取不到时换更大条数重试一次
+            const pct = await Utils.resolveNextChange(s.code, _vndBase, _vndKCount);
+            if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
+            else { console.warn('[AutoVerify] 次日榜核实失败:', s.code, 'baseDate:' + _vndBase); }
           } catch (e) { console.warn('[AutoVerify] 次日榜核实单股异常:', s.code, e && e.message); }
         }));
       }
+      // v5.14: 按全量已核实股票重算统计（避免补漏后胜率被漏算股票拉低）
+      const _vndDone = list.filter(st => st && st.verified === true);
+      const hit = _vndDone.filter(st => (st.nextChangePct || 0) > 0).length;
+      const resolved = _vndDone.length;
       if (resolved > 0) {
         target.verified = true;
         target.hitCount = hit;
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = today;
+        target.pendingCount = Utils.countPendingStocks(target);   // v5.14
         totalResolved += resolved;
+        if (_isTopUp) {
+          const _fixed = Math.max(0, _pendingBefore - target.pendingCount);
+          totalTopUp += _fixed;
+          console.log('[核实补漏] 快照', _vndBase, '补核', _fixed, '只');
+        }
       } else {
         totalFailDays++;
         console.warn('[AutoVerify] 次日榜核实失败:', target.date, '- K线日期可能不匹配');
       }
     }
     NextDayPrediction._saveSnapshots(snaps);
-    console.log('[AutoVerify] 次日榜核实完成，共' + pending.length + '个交易日');
+    console.log('[AutoVerify] 次日榜核实完成，共' + pending.length + '个交易日' + (totalTopUp > 0 ? '，其中补漏' + totalTopUp + '只' : ''));
   },
 
   async _verifyShortTerm() {
@@ -11341,56 +11774,53 @@ const AutoVerify = {
       if (!s.verified) return true;
       // v4.4 P32: 当天核实过的允许重新核实（盘中→收盘数据更新）
       if (s.verifyDate === today) return true;
+      // v5.14: 快照级已核实但存在股票级漏核实 → 纳入补漏队列
+      if (Utils.countPendingStocks(s) > 0) return true;
       return false;
     });
     console.log('[AutoVerify][P35] 待核实快照数:' + pending.length + ', 日期:' + pending.map(s => s.date).join(','));
     if (pending.length === 0) { console.log('[AutoVerify][P35] 无需核实，跳过'); return; }
 
-    let totalResolved = 0, totalFailDays = 0;
+    let totalResolved = 0, totalFailDays = 0, totalTopUp = 0;
     for (const target of pending) {
-      let hit = 0, resolved = 0;
+      const _vstBase = target.baseDate || target.date;
+      const _isTopUp = (target.verified === true);
+      const _pendingBefore = Utils.countPendingStocks(target);
       const list = target.stocks || [];
-      console.log('[AutoVerify][P35] 核实快照 date:' + target.date + ', 股票数:' + list.length);
+      console.log('[AutoVerify][P35] 核实快照 date:' + target.date + ', 股票数:' + list.length + (_isTopUp ? '（补漏模式）' : ''));
+      const _vstDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vstBase)) / 86400000));
+      const _vstKCount = Math.min(60, Math.max(10, Math.ceil(_vstDayDiff * 0.75) + 5));
       const batchSize = 10;
       for (let i = 0; i < list.length; i += batchSize) {
         const batch = list.slice(i, i + batchSize);
         await Promise.all(batch.map(async (s) => {
           try {
-            // v5.11: 动态K线条数
-            const _vstBase = target.baseDate || target.date;
-            const _vstDayDiff = Math.max(1, Math.ceil((Date.parse(today) - Date.parse(_vstBase)) / 86400000));
-            const _vstKCount = Math.min(60, Math.max(10, Math.ceil(_vstDayDiff * 0.75) + 5));
-            const klines = await DataAPI.fetchKline(s.code, _vstKCount);
-            if (klines && klines.length > 0) {
-              for (const k of klines) { k.date = Utils.normalizeDate(k.date); }
-              // v5.11: 统一使用 baseDate→下一交易日 逻辑
-              const baseKline = klines.find(k => k.date === _vstBase) || klines.filter(k => k.date <= _vstBase).pop();
-              if (!baseKline || !(baseKline.close > 0)) {
-                console.warn('[AutoVerify][P35] K线base缺失:', s.code, 'baseDate:' + _vstBase);
-                return;
-              }
-              const nextKline = klines.find(k => k.date > baseKline.date);
-              if (nextKline && nextKline.close > 0) {
-                s.nextChangePct = (nextKline.close - baseKline.close) / baseKline.close * 100;
-                s.verified = true;
-                resolved++;
-                if (s.nextChangePct > 0) hit++;
-              } else {
-                console.warn('[AutoVerify][P35] K线next缺失:', s.code, 'baseDate:' + _vstBase, 'klineDates:' + klines.map(k => k.date).join(','));
-              }
-            } else {
-              console.warn('[AutoVerify][P35] K线为空:', s.code);
-            }
+            // v5.14: 已核实股票不再重复请求
+            if (!s || s.verified === true) return;
+            // v5.14: K线取不到时换更大条数重试一次
+            const pct = await Utils.resolveNextChange(s.code, _vstBase, _vstKCount);
+            if (pct !== null) { s.nextChangePct = pct; s.verified = true; }
+            else { console.warn('[AutoVerify][P35] 核实失败(K线base/next缺失):', s.code, 'baseDate:' + _vstBase); }
           } catch (e) { console.warn('[AutoVerify] 短线核实单股异常:', s.code, e && e.message); }
         }));
       }
+      // v5.14: 按全量已核实股票重算统计
+      const _vstDone = list.filter(st => st && st.verified === true);
+      const hit = _vstDone.filter(st => (st.nextChangePct || 0) > 0).length;
+      const resolved = _vstDone.length;
       if (resolved > 0) {
         target.verified = true;
         target.hitCount = hit;
         target.resolvedCount = resolved;
         target.winRate = Math.round(hit / resolved * 100);
         target.verifyDate = today;
+        target.pendingCount = Utils.countPendingStocks(target);   // v5.14
         totalResolved += resolved;
+        if (_isTopUp) {
+          const _fixed = Math.max(0, _pendingBefore - target.pendingCount);
+          totalTopUp += _fixed;
+          console.log('[核实补漏] 快照', _vstBase, '补核', _fixed, '只');
+        }
         console.log('[AutoVerify][P35] 快照' + target.date + '核实完成：hit=' + hit + '/' + resolved + ', winRate=' + target.winRate + '%');
       } else {
         totalFailDays++;
@@ -11446,7 +11876,7 @@ const AutoVerify = {
         console.log('[AutoVerify] v5.4 调度器-盘中巡检（不生成预测，等待15:00）');
       } else {
         // 收盘后(>=15:00)：核实（v5.5: 去掉23点上限）
-        if (!this._alreadyVerifiedToday()) {
+        if (!this._alreadyVerifiedToday() || this._hasTopUpPending()) {
           console.log('[AutoVerify] 调度器-收盘后核实');
           const bar = document.getElementById('homeVerifyStatusBar');
           if (bar) {
@@ -12024,6 +12454,13 @@ const App = {
       // v4.4 P34: 启动15:00自动核实调度器
       try { AutoVerify._startScheduler(); } catch(e) { console.warn('[AutoVerify] scheduler init error:', e); }
     }, 1000);
+
+    // v5.14: 数据通道自动扫描（延后3秒，避免抢占首屏请求；失败静默、不 toast、不阻塞 UI）
+    setTimeout(() => {
+      try {
+        if (typeof ChannelManager !== 'undefined') ChannelManager.autoScan();
+      } catch(e) { console.warn('[ChannelManager] autoScan init error:', e); }
+    }, 3000);
 
     // v4.4 P17: 价值投资模块——静默刷新价值榜单 + 长期持仓价格（异常隔离）
     setTimeout(() => {
@@ -19749,7 +20186,47 @@ const SelfCheck = {
     }
     if (this._btnDiag) { this._btnDiag.disabled = false; this._btnDiag.textContent = '🔄 重新诊断行情链路'; }
     if (this._btnStart) this._btnStart.disabled = false;
+
+    // v5.14: 7项探测结果下方追加「通道健康度」面板
+    try { this._renderChannelHealth(); } catch (e) { console.warn('[SelfCheck] 通道健康度渲染异常:', e && e.message); }
     return this._results;
+  },
+
+  /** v5.14: 渲染通道健康度（按域列出每个通道的可用性/连败/延迟/冷却剩余） */
+  _renderChannelHealth() {
+    try {
+      if (typeof ChannelManager === 'undefined' || !this._listEl) return;
+      const st = ChannelManager.getStatus();
+      const domName = { quote: '行情', kline: 'K线', search: '搜索', industry: '行业' };
+      const wrap = document.createElement('div');
+      wrap.id = 'selfcheck-channel-health';
+      wrap.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px dashed var(--border-divider,rgba(255,255,255,0.12))';
+      let h = '<div style="font-size:12px;font-weight:600;color:var(--text-primary,#e0e0e0);margin-bottom:4px">🩺 通道健康度（自动扫描 · 连续失败3次冷却5分钟）</div>';
+      const keys = Object.keys(st);
+      if (keys.length === 0) {
+        h += '<div style="font-size:11px;color:var(--text-muted,#888)">暂无通道状态数据</div>';
+      }
+      for (const d of keys) {
+        h += '<div style="margin:7px 0 2px;font-size:11px;color:var(--text-secondary,#aaa);font-weight:600">▌' + (domName[d] || d) + '（' + d + '）</div>';
+        for (const c of st[d]) {
+          const cooling = c.cooldownRemainSec > 0;
+          const col = cooling ? '#f44336' : (c.usable ? '#4caf50' : '#ff9800');
+          const flag = cooling ? ('❄ 冷却中 ' + c.cooldownRemainSec + 's') : (c.usable ? '✅ 可用' : '⚠️ 不可用');
+          h += '<div style="display:flex;gap:6px;font-size:11px;padding:3px 0 3px 10px;color:' + col + ';align-items:center">'
+            + '<span style="min-width:118px">' + c.name + '</span>'
+            + '<span style="min-width:78px">' + flag + '</span>'
+            + '<span style="color:var(--text-muted,#888)">连败' + c.failStreak + ' · 延迟' + (c.avgLatency || 0) + 'ms · 成功' + c.okCount + '/失败' + c.failCount + '</span>'
+            + '</div>';
+        }
+      }
+      wrap.innerHTML = h;
+      const old = this._listEl.querySelector ? this._listEl.querySelector('#selfcheck-channel-health') : null;
+      if (old && old.parentNode) old.parentNode.removeChild(old);
+      this._listEl.appendChild(wrap);
+      console.log('[SelfCheck] 通道健康度已渲染', JSON.stringify(st));
+    } catch (e) {
+      console.warn('[SelfCheck] _renderChannelHealth 异常:', e && e.message);
+    }
   },
 
   copyReport() {
