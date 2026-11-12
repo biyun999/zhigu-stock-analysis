@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.15',
+  VERSION: 'v5.16',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -10658,19 +10658,19 @@ const ShortTermLedger = {
     return '';
   },
 
-  // ---------- 保存当日快照 ----------
-  saveSnapshot(topStocks, topSectors, fallbackMode, afterClose, baseDate) {
+  /** v5.16: 时间戳格式化为 HH:MM（台账版本行展示用） */
+  _fmtHM(ts) {
+    if (!ts) return '--:--';
+    try {
+      const d = new Date(ts);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    } catch (e) { return '--:--'; }
+  },
+  // ---------- 保存当日快照（v5.16：定稿 + 版本机制，彻底替换失效的 v4.4 P41） ----------
+  saveSnapshot(topStocks, topSectors, fallbackMode, afterClose, baseDate, extra) {
     const today = baseDate || this._todayStr();
-    // v4.4 P41: 收盘后(afterClose=true)不允许覆盖盘中已定型的预测快照
-    if (afterClose) {
-      try {
-        const existing = this._loadSnapshots().find(x => x.date === today && !x.afterClose);
-        if (existing) {
-          console.log('[ShortTermLedger] P41: 今日盘中预测快照已存在(date=' + today + ')，跳过收盘后覆盖');
-          return;
-        }
-      } catch(e) { /* 异常时继续正常保存 */ }
-    }
+    const nowTs = Date.now();
+    const isBackfill = !!(extra && extra.backfilled);
     const stocks = (topStocks || []).map(s => ({
       code: s.code, name: s.name, price: s.price, changePct: s.changePct,
       sectorName: s.sectorName || '', total: s.total || 0,
@@ -10679,19 +10679,113 @@ const ShortTermLedger = {
       quantScore: s.quantScore || 0, probTag: s.probTag || '',
       category: s.category || '', verified: null, nextChangePct: null
     }));
+    // v5.16: 同交易日已有快照 → 允许覆盖，但版本号递增、保留首次定稿时间、记录上一版代码
+    const prev = this._loadSnapshots().find(x => (x.baseDate || x.date) === today) || null;
+    let rev = 1;
+    let finalizedAt = nowTs;
+    let createdAt = nowTs;
+    let prevCodes = null;
+    const carry = {};
+    if (prev) {
+      prevCodes = (prev.stocks || []).map(s => s.code);
+      rev = (prev.rev || 1) + 1;
+      finalizedAt = prev.finalizedAt || prev.ts || nowTs;
+      createdAt = prev.createdAt || prev.ts || nowTs;
+      // 榜单代码集合完全没变时，沿用已有核实结果，避免刷新把核实成果冲掉
+      const _prevKey = prevCodes.slice().sort().join(',');
+      const _newKey = stocks.map(s => s.code).sort().join(',');
+      if (prev.verified === true && _prevKey === _newKey) {
+        const _vMap = {};
+        (prev.stocks || []).forEach(ps => { _vMap[ps.code] = { verified: ps.verified, nextChangePct: ps.nextChangePct }; });
+        stocks.forEach(s => { if (_vMap[s.code]) { s.verified = _vMap[s.code].verified; s.nextChangePct = _vMap[s.code].nextChangePct; } });
+        carry.verified = true;
+        carry.winRate = prev.winRate;
+        carry.hitCount = prev.hitCount;
+        carry.resolvedCount = prev.resolvedCount;
+        carry.verifyDate = prev.verifyDate;
+        carry.verifiedAt = prev.verifiedAt;
+        carry.pendingCount = prev.pendingCount;
+      }
+    }
     const snapshot = {
       date: today,
       baseDate: today,
       targetDate: (typeof NextDayPrediction !== 'undefined' && NextDayPrediction._nextTradingDayStr) ? NextDayPrediction._nextTradingDayStr(today) : '',
-      ts: Date.now(),
+      ts: nowTs,
+      createdAt: createdAt,
+      updatedAt: nowTs,
+      rev: rev,
+      finalizedAt: finalizedAt,
+      prevCodes: prevCodes,
       topSectors: topSectors || [],
       fallbackMode: fallbackMode || 'normal',
       afterClose: !!afterClose,
+      backfilled: isBackfill,
+      backfilledAt: isBackfill ? nowTs : null,
       stocks: stocks
     };
-    const snaps = this._loadSnapshots().filter(x => x.date !== today);
+    Object.keys(carry).forEach(k => { snapshot[k] = carry[k]; });
+    if (rev > 1) console.log('[ShortTermLedger] v5.16: 同交易日快照覆盖 date=' + today + ' rev=' + rev);
+    if (isBackfill) console.log('[ShortTermLedger] v5.16: 事后补算快照 date=' + today + '（胜率不计入整体胜率）');
+    const snaps = this._loadSnapshots().filter(x => (x.baseDate || x.date) !== today);
     snaps.unshift(snapshot);
     this._saveSnapshots(snaps);
+  },
+
+  /** v5.16: 台账明细顶部「版本/定稿时间/补算」信息行 */
+  _renderSnapshotVersionLine(s) {
+    let html = '';
+    const rev = s.rev || 1;
+    const _finTs = s.finalizedAt || s.ts;
+    const parts = ['第 ' + rev + ' 版'];
+    parts.push('定稿 ' + this._fmtHM(_finTs));
+    if (s.updatedAt && (s.updatedAt !== _finTs || rev > 1)) parts.push('最后更新 ' + this._fmtHM(s.updatedAt));
+    html += '<div style="font-size:11px;color:var(--text-muted);padding:2px 0 0">🗂 ' + parts.join(' · ') + '</div>';
+    if (rev > 1) {
+      html += '<div style="font-size:11px;color:#ff9800;padding:2px 0 0">⚠️ 本日快照已更新 ' + (rev - 1) + ' 次（当前为第 ' + rev + ' 版，台账以本版为准）</div>';
+    }
+    if (s.backfilled) {
+      html += '<div style="font-size:11px;color:#8a8e9b;padding:2px 0 0">⚠️ 事后补算（' + this._fmtHM(s.backfilledAt || s.ts) + ' 用当时可得行情推算），该快照胜率不计入「TOP10整体胜率」</div>';
+    }
+    return html;
+  },
+
+  /** v5.16: 台账明细顶部「与当前页面榜」对照行 */
+  _renderSnapshotBoardCompare(s) {
+    const snapBase = this._getBaseDate(s);
+    let pageMeta = null;
+    let pageCodes = [];
+    try {
+      if (typeof App !== 'undefined') {
+        pageMeta = (typeof App._getShortTermBoardMeta === 'function') ? App._getShortTermBoardMeta() : null;
+        pageCodes = (App._shortTermAll || []).map(x => x.code).filter(Boolean);
+      }
+    } catch (e) { /* 降级 */ }
+    if (!pageCodes.length) {
+      return '<div style="font-size:11px;color:#8a8e9b;padding:2px 0 0">ℹ️ 当前页面尚未加载短线榜，无法对照</div>';
+    }
+    const pageDate = (pageMeta && pageMeta.date) ? pageMeta.date : '';
+    if (!pageDate || pageDate !== snapBase) {
+      return '<div style="font-size:11px;color:#8a8e9b;padding:2px 0 0">ℹ️ 当前页面榜为 ' + (pageDate || '未知日期') + '，非本日快照</div>';
+    }
+    const snapCodes = (s.stocks || []).map(x => x.code).filter(Boolean);
+    const snapSet = {};
+    snapCodes.forEach(c => { snapSet[c] = 1; });
+    const pageSet = {};
+    pageCodes.forEach(c => { pageSet[c] = 1; });
+    const pageOnly = pageCodes.filter(c => !snapSet[c]);
+    const snapOnly = snapCodes.filter(c => !pageSet[c]);
+    const same = snapCodes.filter(c => pageSet[c]).length;
+    const diffN = Math.max(pageOnly.length, snapOnly.length);
+    if (diffN === 0) {
+      return '<div style="font-size:11px;color:#00e676;padding:2px 0 0">✅ 与当前页面榜一致（' + same + '/' + snapCodes.length + ' 只相同）</div>';
+    }
+    const _short = (arr) => arr.map(c => String(c).replace(/^(sh|sz|bj)/, '').toUpperCase()).join('、');
+    let html = '<div style="font-size:11px;color:#ff9800;padding:2px 0 0">⚠️ 与当前页面榜有 ' + diffN + ' 只不同';
+    if (pageOnly.length) html += '；页面独有：' + _short(pageOnly);
+    if (snapOnly.length) html += '；快照独有：' + _short(snapOnly);
+    html += '（' + same + '/' + snapCodes.length + ' 只相同）</div>';
+    return html;
   },
 
   // ---------- 弹窗控制 ----------
@@ -10736,7 +10830,8 @@ const ShortTermLedger = {
   // ---------- 渲染 ----------
   _renderLedger(snaps) {
     const tab = this._ledgerTab || 'verify';
-    const verifiedSnaps = snaps.filter(s => s.verified === true);
+    // v5.16: 「事后补算」快照不计入整体胜率口径
+    const verifiedSnaps = snaps.filter(s => s.verified === true && s.backfilled !== true);
     const totalWinRate = verifiedSnaps.length
       ? Math.round(verifiedSnaps.reduce((sum, s) => sum + (s.winRate || 0), 0) / verifiedSnaps.length)
       : 0;
@@ -10765,10 +10860,14 @@ const ShortTermLedger = {
   },
 
   _renderVerifyTab(snaps, verifiedSnaps, totalWinRate) {
+    // v5.16: 「事后补算」快照（backfilled）胜率不计入「TOP10整体胜率」口径，单列提示
+    const verifiedAll = snaps.filter(s => s.verified === true);
+    const verifiedForRate = verifiedAll.filter(s => s.backfilled !== true);
+    const backfilledVerifiedCnt = verifiedAll.length - verifiedForRate.length;
     // TOP10整体胜率计算
     let totalHit = 0, totalResolved = 0;
-    if (verifiedSnaps.length > 0) {
-      verifiedSnaps.forEach(s => { totalHit += (s.hitCount || 0); totalResolved += (s.resolvedCount || 0); });
+    if (verifiedForRate.length > 0) {
+      verifiedForRate.forEach(s => { totalHit += (s.hitCount || 0); totalResolved += (s.resolvedCount || 0); });
     }
     const overallRate = totalResolved > 0 ? Math.round(totalHit / totalResolved * 100) : 0;
 
@@ -10776,7 +10875,7 @@ const ShortTermLedger = {
     // 紧凑统计卡片
     html += '<div class="ledger-stats-row st-ledger-stats">';
     html += '<div class="ledger-stat-card"><div class="ls-num">' + snaps.length + '</div><div class="ls-label">累计交易日</div></div>';
-    html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedSnaps.length + '</div><div class="ls-label">已核实</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedAll.length + '</div><div class="ls-label">已核实</div></div>';
     html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
     html += '</div>';
 
@@ -10801,11 +10900,14 @@ const ShortTermLedger = {
     }
 
     // 整体胜率小标签（已核实有数据时显示）
-    if (verifiedSnaps.length > 0) {
+    if (verifiedForRate.length > 0) {
       html += '<div class="st-ledger-overall-bar">';
       html += '<span>🎯 TOP10整体胜率 <b style="color:#00e676">' + overallRate + '%</b></span>';
       html += '<span class="st-ledger-overall-sub">' + totalHit + '/' + totalResolved + ' 只次日收涨</span>';
       html += '</div>';
+    }
+    if (backfilledVerifiedCnt > 0) {
+      html += '<div style="font-size:10px;color:#8a8e9b;text-align:center;padding:2px 0 4px;line-height:1.5">⚠️ 另有 ' + backfilledVerifiedCnt + ' 个「事后补算」快照已核实，其基准日行情为事后推算，胜率不计入上方整体胜率，仅供单日参考</div>';
     }
 
     // 历史日期列表（主体）
@@ -10858,6 +10960,11 @@ const ShortTermLedger = {
         html += '<div class="st-ledger-detail">';
         html += '<div class="st-ledger-detail-header">';
         html += '<span class="st-ledger-detail-date">📅 预测基准日 ' + this._getBaseDate(s) + ' · 次日(' + (this._getTargetDate(s) || '?') + ')核实 TOP10 完整榜单</span>';
+        // v5.16: 版本/定稿时间/事后补算 信息行
+        html += this._renderSnapshotVersionLine(s);
+        // v5.16: 与当前页面榜对照行
+        html += this._renderSnapshotBoardCompare(s);
+        html += '<div style="font-size:10px;color:var(--text-muted);padding:2px 0 0">ℹ️ 下方名次为「综合分排名」（保存时按综合分降序），切换其他排序方式后页面名次会不同</div>';
         if (s.topSectors && s.topSectors.length > 0) {
           const allSectors = s.topSectors.map(sec => {
             const name = typeof sec === 'string' ? sec : (sec.name || sec);
@@ -11380,6 +11487,14 @@ const AutoVerify = {
   async _backfillMissingPredictions() {
     const now = new Date();
     const base = this._lastTradingDateStr(now);
+    // v5.16: 短线榜补算只能用「上一交易日收盘数据」——仅允许 9:30 前或非交易日执行；
+    //        9:30 之后（盘中/收盘后）实时行情已不是上一交易日收盘数据，补算会伪造历史快照
+    const _bfMins = now.getHours() * 60 + now.getMinutes();
+    const _bfWeekend = now.getDay() === 0 || now.getDay() === 6;
+    const _bfStAllowed = _bfWeekend || (_bfMins < 9 * 60 + 30);
+    if (!_bfStAllowed) {
+      console.log('[AutoVerify] v5.16: 当前 ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ' 不在「9:30 前/非交易日」窗口，实时行情≠上一交易日收盘数据，跳过短线榜补算');
+    }
     const backfillKey = 'zhigu_backfill_done_' + base;
     try { if (localStorage.getItem(backfillKey) === '1') { console.log('[AutoVerify] v5.5: 补漏已完成(base=' + base + ')，跳过'); return; } } catch(e) {}
     console.log('[AutoVerify] v5.5: 开始补漏检查，base=' + base);
@@ -11404,27 +11519,32 @@ const AutoVerify = {
         }
       }
     } catch(e) { ndOk = false; console.warn('[AutoVerify] v5.6: 次日榜补漏异常:', e); }
-    // 短线榜幂等检查
+    // 短线榜幂等检查（v5.16: 仅 9:30 前/非交易日允许补算，且静默入库不覆盖首页榜单）
+    if (!_bfStAllowed) {
+      console.log('[AutoVerify] v5.16: 跳过短线榜补算(base=' + base + ')，当日榜由收盘后 ensureAfterClosePredictions 负责');
+    } else {
     try {
       if (typeof ShortTermLedger !== 'undefined') {
         const stSnaps = ShortTermLedger._loadSnapshots();
-        const exists = stSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === base));
+        const exists = stSnaps.some(s => (s.baseDate || s.date) === base);
         if (!exists) {
-          console.log('[AutoVerify] v5.6: 短线榜缺失(base=' + base + ')，补生成');
+          console.log('[AutoVerify] v5.6: 短线榜缺失(base=' + base + ')，补生成（静默：不覆盖首页榜单）');
           if (typeof App !== 'undefined' && App.loadHotStocks) {
-            await App.loadHotStocks({ autoRefresh: true, force: true, baseDate: base });
+            await App.loadHotStocks({ autoRefresh: true, force: true, baseDate: base, silent: true });
           }
           // loadHotStocks成功后再检查是否真的存在了
           const stSnaps2 = ShortTermLedger._loadSnapshots();
-          const nowExists = stSnaps2.some(s => s.baseDate === base || (!s.baseDate && s.date === base));
+          const nowExists = stSnaps2.some(s => (s.baseDate || s.date) === base);
           if (!nowExists) { stOk = false; console.warn('[AutoVerify] v5.6: 短线榜补生成后仍不存在'); }
         } else {
           console.log('[AutoVerify] v5.6: 短线榜已存在(base=' + base + ')，跳过');
         }
       }
     } catch(e) { stOk = false; console.warn('[AutoVerify] v5.6: 短线榜补漏异常:', e); }
+    } // end if (_bfStAllowed)
     // v5.6: 只有两者都成功才标记完成，否则下次继续重试
-    if (ndOk && stOk) {
+    // v5.16: 短线榜被时段拦截时不得标记完成，否则次日上午不会再补
+    if (ndOk && stOk && _bfStAllowed) {
       try { localStorage.setItem(backfillKey, '1'); } catch(e) {}
       console.log('[AutoVerify] v5.6: 补漏全部完成');
     } else {
@@ -12739,9 +12859,11 @@ const App = {
    *  多数据源多级降级：行业板块 → 概念板块 → 全市场活跃股 → 腾讯静态热门 */
   async loadHotStocks(opts) {
     const isAutoRefresh = opts && opts.autoRefresh;
+    // v5.16: 静默模式——仅供「事后补算」使用，只取数打分入库，绝不覆盖首页榜单/滚动位置
+    const isSilent = !!(opts && opts.silent);
     const container = document.getElementById('hotStocks');
     const savedScroll = isAutoRefresh ? (document.documentElement.scrollTop || document.body.scrollTop) : 0;
-    if (!isAutoRefresh) {
+    if (!isAutoRefresh && !isSilent) {
       container.innerHTML = '<div class="loading-pulse">正在扫描热门板块与主力资金...</div>';
     }
 
@@ -12874,11 +12996,13 @@ const App = {
       }
 
       if (candidates.length === 0) {
-        container.innerHTML = `
+        if (!isSilent) {
+          container.innerHTML = `
           <div class="empty-tip">
             未获取到行情数据，可能网络或数据源异常<br>
             <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 点击重试</button>
           </div>`;
+        }
         return;
       }
 
@@ -12970,23 +13094,23 @@ const App = {
       // ====== 第4步：排序取TOP10并渲染 ======
       scored.sort((a, b) => b.total - a.total);
       const top10 = scored.slice(0, 10);
+      // v5.16: 先保存快照（定稿/版本/补算语义），再渲染——渲染才能拿到准确的「榜单归属」标识
+      let _boardMeta = null;
+      if (typeof ShortTermLedger !== 'undefined') {
+        try {
+          _boardMeta = this._persistShortTermSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, opts);
+        } catch (e) { console.warn('保存短线快照失败', e); }
+      }
+      // v5.16: 静默补算——取数+打分+入库已完成，不渲染首页、不改 this._shortTermAll
+      if (isSilent) {
+        console.log('[短线快照] v5.16 静默补算完成，不渲染首页榜单');
+        return;
+      }
       this._shortTermAll = top10;            // 保存全量供排序切换
       this._shortTermSortKey = 'composite';  // 默认综合排序
       this._shortTermCtx = { topSectors: hotSectors.slice(0, 5), fallbackMode };
+      this._shortTermBoardMeta = _boardMeta; // v5.16: 榜单归属（盘中/定稿/补算）
       this.renderShortTermTop10(top10, this._shortTermCtx.topSectors, this._shortTermCtx.fallbackMode);
-      // v5.4: 仅收盘后保存短线预测快照，盘中实时浏览不产生快照
-      if (typeof ShortTermLedger !== 'undefined') {
-        try {
-          const optionsBase = opts && opts.baseDate;
-          const todayStr = (typeof ShortTermLedger !== 'undefined' && ShortTermLedger._todayStr) ? ShortTermLedger._todayStr() : new Date().toISOString().slice(0, 10);
-          const isAfterClose = (optionsBase && optionsBase !== todayStr) ? true : (new Date().getHours() >= 15);
-          if (isAfterClose) {
-            ShortTermLedger.saveSnapshot(top10, hotSectors.slice(0, 5), fallbackMode, true, optionsBase);
-          } else {
-            console.log('[短线快照] 盘中不保存预测快照，等待15:00收盘后生成');
-          }
-        } catch (e) { console.warn('保存短线快照失败', e); }
-      }
 
       // v4.4 P40: 自动刷新后恢复滚动位置 + 更新状态时间
       if (isAutoRefresh && savedScroll) {
@@ -12997,11 +13121,13 @@ const App = {
       }); // end HeavyTaskLock.run
     } catch (e) {
       console.error('[短线TOP10] 整体异常:', e);
-      container.innerHTML = `
+      if (!isSilent) {
+        container.innerHTML = `
         <div class="empty-tip">
           加载异常：${e.message || '未知错误'}<br>
           <button class="st-retry-btn" onclick="App.loadHotStocks()">🔄 点击重试</button>
         </div>`;
+      }
     }
   },
 
@@ -13812,6 +13938,90 @@ const App = {
     return risks.slice(0, 5);  // 最多5条（新增筹码风险）
   },
 
+  // ====== v5.16: 短线榜「榜单归属」标识 + 快照落库 ======
+  _shortTermBoardMeta: null,
+
+  /** v5.16: 计算当前首页短线榜归属 { date, kind: intraday|finalized|backfilled, rev, stale } */
+  _getShortTermBoardMeta() {
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+    let today = '';
+    try { today = ShortTermLedger._todayStr(); } catch (e) { today = now.toISOString().slice(0, 10); }
+    let snaps = [];
+    try { snaps = ShortTermLedger._loadSnapshots() || []; } catch (e) { snaps = []; }
+    const todaySnap = snaps.find(x => (x.baseDate || x.date) === today) || null;
+    const rendered = this._shortTermBoardMeta || null;
+    // 1) 补算生成的快照被页面呈现
+    if (rendered && rendered.kind === 'backfilled') {
+      return { date: rendered.date, kind: 'backfilled', rev: rendered.rev || 1, stale: false };
+    }
+    // 2) 渲染时已确定为收盘定稿
+    if (rendered && rendered.kind === 'finalized' && rendered.date === today) {
+      return { date: today, kind: 'finalized', rev: (todaySnap && todaySnap.rev) || rendered.rev || 1, stale: false };
+    }
+    // 3) 渲染时是盘中实时榜（若此后台账已定稿，标 stale 提示刷新对齐）
+    if (rendered && rendered.date) {
+      const _finalized = !!(todaySnap && todaySnap.afterClose === true && !isWeekend && mins >= 15 * 60);
+      return { date: rendered.date, kind: 'intraday', rev: (todaySnap && todaySnap.rev) || 0, stale: _finalized };
+    }
+    // 4) 无渲染信息 → 按当前时段推断
+    if (!isWeekend && mins >= 15 * 60 && todaySnap && todaySnap.afterClose === true) {
+      return { date: today, kind: 'finalized', rev: todaySnap.rev || 1, stale: false };
+    }
+    return { date: today, kind: 'intraday', rev: 0, stale: false };
+  },
+
+  /** v5.16: 归属标识文案 */
+  _shortTermBoardMetaLabel(meta) {
+    const m = meta || this._getShortTermBoardMeta();
+    const mmdd = (m.date || '').slice(5) || '--';
+    if (m.kind === 'finalized') {
+      return '📅 ' + mmdd + ' 收盘定稿榜 · 已入台账' + ((m.rev || 1) > 1 ? '（第 ' + m.rev + ' 版）' : '');
+    }
+    if (m.kind === 'backfilled') {
+      return '📅 ' + mmdd + ' 事后补算榜 · 已入台账';
+    }
+    return '📅 ' + mmdd + ' 盘中实时榜 · 未入台账（15:00 收盘后自动入账）' + (m.stale ? '｜台账今日已定稿，点🔄刷新对齐' : '');
+  },
+
+  /** v5.16: 保存短线快照并返回榜单归属（定稿/版本/补算语义集中在此） */
+  _persistShortTermSnapshot(top10, sectors, fallbackMode, opts) {
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const isWeekend = now.getDay() === 0 || now.getDay() === 6;
+    let todayStr = '';
+    try { todayStr = ShortTermLedger._todayStr(); } catch (e) { todayStr = now.toISOString().slice(0, 10); }
+    const optionsBase = opts && opts.baseDate;
+    const silent = !!(opts && opts.silent);
+    // 场景1：事后补算（静默模式，或显式 baseDate 且非今日）——入库但不影响页面
+    if (silent || (optionsBase && optionsBase !== todayStr)) {
+      const base = optionsBase || todayStr;
+      try {
+        ShortTermLedger.saveSnapshot(top10, sectors, fallbackMode, true, base, { backfilled: true });
+      } catch (e) { console.warn('保存短线快照失败', e); }
+      return { date: base, kind: 'backfilled', rev: 1, stale: false };
+    }
+    // 场景2：非交易日不产生快照（避免污染台账）
+    if (isWeekend) {
+      console.log('[短线快照] v5.16: 非交易日不保存预测快照');
+      return { date: todayStr, kind: 'intraday', rev: 0, stale: false };
+    }
+    // 场景3：盘中实时浏览不产生快照
+    if (mins < 15 * 60) {
+      console.log('[短线快照] 盘中不保存预测快照，等待15:00收盘后生成');
+      return { date: todayStr, kind: 'intraday', rev: 0, stale: false };
+    }
+    // 场景4：收盘后定稿（同交易日重复保存 → rev 递增，保留首次 finalizedAt）
+    let rev = 1;
+    try {
+      ShortTermLedger.saveSnapshot(top10, sectors, fallbackMode, true, undefined);
+      const cur = (ShortTermLedger._loadSnapshots() || []).find(x => (x.baseDate || x.date) === todayStr);
+      if (cur && cur.rev) rev = cur.rev;
+    } catch (e) { console.warn('保存短线快照失败', e); }
+    return { date: todayStr, kind: 'finalized', rev: rev, stale: false };
+  },
+
   /** 切换短线TOP10排序方式 */
   resortShortTerm(sortKey) {
     if (!this._shortTermAll || !this._shortTermAll.length) return;
@@ -13868,6 +14078,9 @@ const App = {
       'market': '🟠 全市场活跃股（板块接口降级）',
       'static': '⚪ 静态热门池（全部接口降级）'
     }[fallbackMode] || '🟢 行业板块数据';
+    // v5.16: 榜单归属标识（盘中实时榜 / 收盘定稿榜 / 事后补算榜）
+    const _boardMeta = this._getShortTermBoardMeta();
+    const boardTagHtml = '<span class="st-board-owner" style="font-size:11px;color:#00d4ff;background:rgba(0,212,255,0.10);border:1px solid rgba(0,212,255,0.35);border-radius:6px;padding:1px 6px;margin-left:4px;display:inline-block">' + this._shortTermBoardMetaLabel(_boardMeta) + '</span>';
     // 板块标签
     const sectorHtml = topSectors.map((s, i) => {
       const chgCls = s.changePct > 0 ? 'up' : s.changePct < 0 ? 'down' : '';
@@ -14010,6 +14223,11 @@ const App = {
                   onclick="App.resortShortTerm('${b.key}')">${b.label}</button>
         `).join('')}
       </div>`;
+    // v5.16: 非综合排序时提示「台账按综合分排名」，避免与台账对比时误判
+    const _sortLabelMap = { composite: '综合', capital: '主力', sector: '板块', policy: '政策', news: '消息', quant: '量化分', change: '涨幅', profit: '筹码' };
+    const sortTipHtml = (sortKey && sortKey !== 'composite')
+      ? '<div class="st-sort-tip" style="font-size:11px;color:#ff9800;padding:4px 12px 0;line-height:1.5">ℹ️ 当前按「' + (_sortLabelMap[sortKey] || sortKey) + '」排序；台账记录的是综合分排名</div>'
+      : '';
 
     // v4.4 P35: 读取最近已核实快照的胜率，显示在顶部
     let stWinRateHtml = '';
@@ -14021,9 +14239,10 @@ const App = {
     } catch(e) {}
 
     container.innerHTML = `
-      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks();App._lastRefreshTime=new Date();App._updateAutoRefreshInfo()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${stWinRateHtml}<span id="st-auto-refresh-info" class="st-auto-refresh-info"></span></div>
+      <div class="st-source-mode">${modeLabel} <button class="st-retry-btn" onclick="App.loadHotStocks();App._lastRefreshTime=new Date();App._updateAutoRefreshInfo()">🔄 刷新</button> <button class="st-ledger-btn" onclick="ShortTermLedger.showLedger()">📊 台账</button>${boardTagHtml}${stWinRateHtml}<span id="st-auto-refresh-info" class="st-auto-refresh-info"></span></div>
       <div class="st-top-sectors">${sectorHtml}</div>
       ${sortBarHtml}
+      ${sortTipHtml}
       ${stockHtml}
       ${riskControlHtml}
     `;
