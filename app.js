@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.16',
+  VERSION: 'v5.17',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -8005,6 +8005,7 @@ const NextDayPrediction = {
   MAX_SNAPSHOTS: 30,
   scanning: false,
   marketTag: '',
+  _ndBoardMeta: null,   // v5.17: 首页次日榜归属（盘中/定稿/补算）
 
   // ---------- 存储 ----------
   _loadSnapshots() {
@@ -8052,9 +8053,15 @@ const NextDayPrediction = {
   },
 
   // ---------- 入口：扫描 ----------
-  async scan(silent = false, baseDate) {
+  async scan(silent = false, baseDate, opts) {
     if (this.scanning) return;
     this.scanning = true;
+    // v5.17: 事后补算判定——显式 opts.backfill，或「指定了非今日的基准日」（补漏路径）；
+    //        silent 只静默 loading 状态文本，不覆盖页面榜单，故另设 noRender 独立开关
+    const _scanOpts = opts || {};
+    const isBackfill = _scanOpts.backfill === true
+      || !!(baseDate && baseDate !== this._todayStr());
+    const noRender = isBackfill || _scanOpts.noRender === true;
     const body = document.getElementById('nextDayBody');
     const setStatus = (t) => {
       if (silent) { console.log('[NextDay]', t); return; }
@@ -8270,8 +8277,10 @@ const NextDayPrediction = {
 
       setStatus('第5步/5：保存快照...');
       if (finalList.length === 0) {
-        body.innerHTML = '<div class="empty-tip">今日全市场无符合条件的高概率标的（资金/技术/板块共振个股不足，'
-          + mkt.tag + '），这本身是偏弱信号，建议控制仓位观望。</div>';
+        if (!noRender && body) {
+          body.innerHTML = '<div class="empty-tip">今日全市场无符合条件的高概率标的（资金/技术/板块共振个股不足，'
+            + mkt.tag + '），这本身是偏弱信号，建议控制仓位观望。</div>';
+        }
         return;
       }
 
@@ -8289,12 +8298,23 @@ const NextDayPrediction = {
         limitDownCount,
         stocks: finalList
       };
+      // v5.17: 事后补算标记——区分「正常收盘后生成的当日预测」与「事后补算的历史预测」
+      if (isBackfill) {
+        snapshot.backfilled = true;
+        snapshot.backfilledAt = Date.now();
+        console.log('[NextDay] v5.17: 事后补算快照 baseDate=' + base + '（胜率不计入整体胜率）');
+      }
       const snaps = this._loadSnapshots().filter(x => x.date !== snapshot.date && x.baseDate !== base);
       snaps.unshift(snapshot);
       this._saveSnapshots(snaps);
 
-      this._renderList(snapshot);
-      if (!silent) { Utils.toast ? Utils.toast('已保存 ' + targetDate + ' 预测排名，开盘后可核实') : null; }
+      // v5.17: 补算路径不重渲染首页次日榜、不改当前展示数据
+      if (noRender) {
+        console.log('[NextDay] v5.17: 事后补算/静默不渲染模式，不覆盖首页次日榜');
+      } else {
+        this._renderList(snapshot);
+      }
+      if (!silent && !noRender) { Utils.toast ? Utils.toast('已保存 ' + targetDate + ' 预测排名，开盘后可核实') : null; }
       }); // end HeavyTaskLock.run
     } catch (e) {
       console.error('NextDayPrediction.scan error:', e);
@@ -9429,8 +9449,65 @@ const NextDayPrediction = {
     return { label: '概率偏低', color: '#8a8e9b' };
   },
 
+  // ---------- v5.17: 榜单归属 + 事后补算标识 ----------
+  /** v5.17: 时间戳格式化为 HH:MM */
+  _fmtHM(ts) {
+    if (!ts) return '--:--';
+    try {
+      const d = new Date(ts);
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    } catch (e) { return '--:--'; }
+  },
+
+  /** v5.17: 计算当前首页次日榜归属 { date, kind: intraday|finalized|backfilled } */
+  _getBoardMeta() {
+    const rendered = this._ndBoardMeta;
+    if (rendered && rendered.date) {
+      return { date: rendered.date, kind: rendered.kind || 'intraday' };
+    }
+    // 无渲染信息 → 按台账推断
+    let today = '';
+    try { today = this._todayStr(); } catch (e) { today = new Date().toISOString().slice(0, 10); }
+    let snaps = [];
+    try { snaps = this._loadSnapshots() || []; } catch (e) { snaps = []; }
+    const todaySnap = snaps.find(x => (x.baseDate || x.date) === today) || null;
+    if (todaySnap) {
+      return { date: today, kind: todaySnap.backfilled === true ? 'backfilled' : 'finalized' };
+    }
+    return { date: today, kind: 'intraday' };
+  },
+
+  /** v5.17: 归属标识文案（对应短线榜 v5.16 的 _shortTermBoardMetaLabel） */
+  _boardMetaLabel(meta) {
+    const m = meta || this._getBoardMeta();
+    const mmdd = (m.date || '').slice(5) || '--';
+    if (m.kind === 'finalized') return '📅 ' + mmdd + ' 收盘定稿榜 · 已入台账';
+    if (m.kind === 'backfilled') return '📅 ' + mmdd + ' 事后补算榜 · 已入台账';
+    return '📅 ' + mmdd + ' 盘中实时榜 · 未入台账（15:00 收盘后自动入账）';
+  },
+
+  /** v5.17: 事后补算灰字提示（仅 backfilled 快照显示） */
+  _renderBackfillLine(s) {
+    if (!s || s.backfilled !== true) return '';
+    return '<div class="nd-backfill-note" style="font-size:11px;color:#8a8e9b;margin:0 0 6px">⚠️ 事后补算（'
+      + this._fmtHM(s.backfilledAt || s.ts) + ' 用当时可得行情推算），该快照胜率不计入「平均胜率」</div>';
+  },
+
   // ---------- 渲染 ----------
   _renderList(snapshot) {
+    // v5.17: 记录「榜单归属」（盘中/定稿/补算），供 _getBoardMeta 使用
+    try {
+      const _b = snapshot.baseDate || snapshot.date || '';
+      const _t = this._todayStr();
+      let _inLedger = false;
+      try {
+        _inLedger = (this._loadSnapshots() || []).some(x => (x.baseDate || x.date) === _b);
+      } catch (e2) { _inLedger = false; }
+      let _kind = 'intraday';
+      if (snapshot.backfilled === true) _kind = 'backfilled';
+      else if (_inLedger && _b === _t) _kind = 'finalized';
+      this._ndBoardMeta = { date: _kind === 'intraday' ? _t : _b, kind: _kind };
+    } catch (e) { /* 归属计算失败不影响渲染 */ }
     const body = document.getElementById('nextDayBody');
     // v5.14: 股票级待补核实数量
     const _ndPendingCnt = Utils.countPendingStocks(snapshot);
@@ -9455,6 +9532,12 @@ const NextDayPrediction = {
       ? '📅 预测基准日 ' + snapshot.baseDate + ' · 次日(' + snapshot.date + ')核实'
       : '📅 预测基准日 ' + snapshot.date + '（盘后）';
     let html = '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' + dateLabel + ' · 共' + snapshot.stocks.length + '只 ' + verifyBadge + '</div>';
+    // v5.17: 榜单归属标识（对应短线榜 v5.16 的 _shortTermBoardMetaLabel）
+    try {
+      html += '<div style="margin:0 0 6px"><span class="nd-board-owner" style="font-size:11px;color:#00d4ff;background:rgba(0,212,255,0.10);border:1px solid rgba(0,212,255,0.35);border-radius:6px;padding:1px 6px;display:inline-block">'
+        + this._boardMetaLabel(this._getBoardMeta()) + '</span></div>';
+    } catch (e) { /* 标识渲染失败不影响榜单 */ }
+    html += this._renderBackfillLine(snapshot);
     html += mktLine;
     html += '<div class="hot-stocks-list">';
     snapshot.stocks.forEach((s, idx) => {
@@ -9907,13 +9990,25 @@ const NextDayPrediction = {
 
   _renderVerifyTab(snaps, verifiedSnaps, totalWinRate) {
     const stats = this._calcTierStats(snaps);
+    // v5.17: 「事后补算」快照（backfilled）胜率不计入「平均胜率」口径，单列灰字提示
+    const _ndBfVerified = (snaps || []).filter(s => s.verified === true && s.backfilled === true);
+    const _ndRateVerified = (verifiedSnaps || []).filter(s => s.backfilled !== true);
+    const _ndAvgRate = (_ndBfVerified.length > 0)
+      ? (_ndRateVerified.length > 0
+        ? Math.round(_ndRateVerified.reduce((a, s) => a + (s.winRate || 0), 0) / _ndRateVerified.length)
+        : 0)
+      : totalWinRate;
     let html = '';
     // 统计概览卡片
     html += '<div class="ledger-stats-row">';
     html += '<div class="ledger-stat-card"><div class="ls-num">' + snaps.length + '</div><div class="ls-label">累计交易日</div></div>';
     html += '<div class="ledger-stat-card"><div class="ls-num">' + verifiedSnaps.length + '</div><div class="ls-label">已核实</div></div>';
-    html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + totalWinRate + '%</div><div class="ls-label">平均胜率</div></div>';
+    html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + _ndAvgRate + '%</div><div class="ls-label">平均胜率</div></div>';
     html += '</div>';
+    if (_ndBfVerified.length > 0) {
+      html += '<div style="font-size:10px;color:#8a8e9b;text-align:center;padding:2px 0 4px;line-height:1.5">⚠️ 另有 '
+        + _ndBfVerified.length + ' 个「事后补算」快照已核实，其基准日行情为事后推算，胜率不计入上方平均胜率，仅供单日参考</div>';
+    }
 
     // 档位胜率
     html += '<div class="ledger-section-title">📈 档位胜率统计</div>';
@@ -9979,6 +10074,8 @@ const NextDayPrediction = {
       // v5.15: 已停止重试徽标
       const _ndItemGaveUp = Utils.countGaveUpStocks(s);
       if (_ndItemGaveUp > 0) html += '<span class="ledger-tag" style="color:#8a8e9b;border-color:rgba(138,142,155,0.45)">' + _ndItemGaveUp + '只数据缺失</span>';
+      // v5.17: 事后补算徽标（与短线榜 v5.16 口径一致）
+      if (s.backfilled === true) html += '<span class="ledger-tag" style="color:#8a8e9b;border-color:rgba(138,142,155,0.45)">⚠️ 事后补算</span>';
       html += '</div>';
       if (isVerified) {
         const wrColor = wr >= 70 ? '#00e676' : wr >= 50 ? '#ff9800' : '#ff5252';
@@ -11495,6 +11592,12 @@ const AutoVerify = {
     if (!_bfStAllowed) {
       console.log('[AutoVerify] v5.16: 当前 ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ' 不在「9:30 前/非交易日」窗口，实时行情≠上一交易日收盘数据，跳过短线榜补算');
     }
+    // v5.17: 次日榜补算同理——NextDayPrediction.scan 内部取数走的是实时行情接口，
+    //        baseDate 只被当作日期标签；盘中/收盘后补算会用当前时刻行情伪造历史快照
+    const _bfNdAllowed = _bfWeekend || (_bfMins < 9 * 60 + 30);
+    if (!_bfNdAllowed) {
+      console.log('[AutoVerify] v5.17: 当前 ' + String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0') + ' 不在「9:30 前/非交易日」窗口，实时行情≠上一交易日收盘数据，跳过次日榜补算');
+    }
     const backfillKey = 'zhigu_backfill_done_' + base;
     try { if (localStorage.getItem(backfillKey) === '1') { console.log('[AutoVerify] v5.5: 补漏已完成(base=' + base + ')，跳过'); return; } } catch(e) {}
     console.log('[AutoVerify] v5.5: 开始补漏检查，base=' + base);
@@ -11502,14 +11605,17 @@ const AutoVerify = {
     // v5.6: 改为条件写入——只有次日榜和短线榜都成功才标记完成，否则下次继续重试
     let ndOk = true;
     let stOk = true;
-    // 次日榜幂等检查
+    // 次日榜幂等检查（v5.17: 仅 9:30 前/非交易日允许补算，且静默入库不覆盖首页榜单）
+    if (!_bfNdAllowed) {
+      console.log('[AutoVerify] v5.17: 跳过次日榜补算(base=' + base + ')，当日榜由收盘后 ensureAfterClosePredictions 负责');
+    } else {
     try {
       if (typeof NextDayPrediction !== 'undefined') {
         const ndSnaps = NextDayPrediction._loadSnapshots();
         const exists = ndSnaps.some(s => s.baseDate === base || (!s.baseDate && s.date === target));
         if (!exists) {
           console.log('[AutoVerify] v5.6: 次日榜缺失(base=' + base + ')，补生成');
-          await NextDayPrediction.scan(true, base);
+          await NextDayPrediction.scan(true, base, { backfill: true });
           // scan成功后再检查是否真的存在了
           const ndSnaps2 = NextDayPrediction._loadSnapshots();
           const nowExists = ndSnaps2.some(s => s.baseDate === base || (!s.baseDate && s.date === target));
@@ -11519,6 +11625,7 @@ const AutoVerify = {
         }
       }
     } catch(e) { ndOk = false; console.warn('[AutoVerify] v5.6: 次日榜补漏异常:', e); }
+    } // end if (_bfNdAllowed)
     // 短线榜幂等检查（v5.16: 仅 9:30 前/非交易日允许补算，且静默入库不覆盖首页榜单）
     if (!_bfStAllowed) {
       console.log('[AutoVerify] v5.16: 跳过短线榜补算(base=' + base + ')，当日榜由收盘后 ensureAfterClosePredictions 负责');
@@ -11544,7 +11651,7 @@ const AutoVerify = {
     } // end if (_bfStAllowed)
     // v5.6: 只有两者都成功才标记完成，否则下次继续重试
     // v5.16: 短线榜被时段拦截时不得标记完成，否则次日上午不会再补
-    if (ndOk && stOk && _bfStAllowed) {
+    if (ndOk && stOk && _bfStAllowed && _bfNdAllowed) {
       try { localStorage.setItem(backfillKey, '1'); } catch(e) {}
       console.log('[AutoVerify] v5.6: 补漏全部完成');
     } else {
