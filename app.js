@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.17',
+  VERSION: 'v5.18',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -18690,6 +18690,91 @@ const ValueInvestor = {
   }
 };
 
+// ===== 1.5 IndexMember - 主要指数成分股名单（v5.18）=====
+const IndexMember = {
+  // 名单基准日，成分股每半年调整一次（6月/12月）
+  DATA_DATE: '2026-11-23',
+  // 沪深300成分股（300只，逗号分隔，格式 sh600519）
+  HS300_STR: 'sh600000,sh600009,sh600010,sh600011,sh600015,sh600016,sh600018,sh600019,sh600023,sh600025,sh600028,sh600029,sh600030,sh600031,sh600036,sh600039,sh600048,sh600050,sh600061,sh600085,sh600089,sh600104,sh600111,sh600115,sh600132,sh600150,sh600176,sh600183,sh600188,sh600196,sh600219,sh600233,sh600276,sh600309,sh600332,sh600346,sh600362,sh600372,sh600406,sh600426,sh600436,sh600438,sh600460,sh600489,sh600515,sh600519,sh600547,sh600570,sh600584,sh600585,sh600588,sh600600,sh600606,sh600660,sh600674,sh600690,sh600732,sh600741,sh600745,sh600754,sh600760,sh600795,sh600803,sh600809,sh600837,sh600845,sh600875,sh600886,sh600887,sh600893,sh600900,sh600905,sh600918,sh600919,sh600926,sh600938,sh600941,sh600958,sh600989,sh600999,sh601006,sh601009,sh601012,sh601021,sh601059,sh601066,sh601088,sh601100,sh601111,sh601117,sh601138,sh601155,sh601166,sh601169,sh601186,sh601211,sh601225,sh601229,sh601236,sh601238,sh601288,sh601318,sh601319,sh601328,sh601336,sh601360,sh601377,sh601390,sh601398,sh601600,sh601601,sh601607,sh601615,sh601618,sh601628,sh601633,sh601658,sh601668,sh601669,sh601688,sh601689,sh601698,sh601699,sh601728,sh601766,sh601788,sh601799,sh601800,sh601808,sh601816,sh601818,sh601838,sh601857,sh601865,sh601868,sh601872,sh601877,sh601878,sh601881,sh601888,sh601898,sh601899,sh601901,sh601916,sh601919,sh601939,sh601985,sh601988,sh601989,sh601995,sh601998,sh603019,sh603195,sh603259,sh603260,sh603288,sh603290,sh603369,sh603392,sh603486,sh603501,sh603659,sh603799,sh603806,sh603833,sh603899,sh603986,sh603993,sh605117,sh605499,sh688008,sh688012,sh688036,sh688041,sh688065,sh688111,sh688126,sh688187,sh688223,sh688256,sh688271,sh688303,sh688363,sh688396,sh688561,sh688599,sh688981,sz000001,sz000002,sz000063,sz000069,sz000100,sz000157,sz000166,sz000301,sz000333,sz000338,sz000408,sz000425,sz000538,sz000568,sz000596,sz000617,sz000625,sz000651,sz000661,sz000708,sz000725,sz000733,sz000768,sz000776,sz000786,sz000792,sz000800,sz000858,sz000876,sz000877,sz000895,sz000938,sz000963,sz000977,sz000983,sz000999,sz001289,sz001979,sz002001,sz002007,sz002027,sz002049,sz002050,sz002074,sz002129,sz002142,sz002179,sz002180,sz002202,sz002230,sz002236,sz002241,sz002252,sz002271,sz002304,sz002311,sz002352,sz002371,sz002410,sz002415,sz002459,sz002460,sz002466,sz002475,sz002493,sz002555,sz002594,sz002601,sz002603,sz002648,sz002709,sz002714,sz002736,sz002812,sz002821,sz002841,sz002916,sz002920,sz002938,sz003816,sz300014,sz300015,sz300033,sz300059,sz300122,sz300124,sz300142,sz300223,sz300274,sz300308,sz300316,sz300347,sz300408,sz300413,sz300433,sz300450,sz300454,sz300496,sz300498,sz300628,sz300661,sz300750,sz300751,sz300759,sz300760,sz300763,sz300782,sz300896,sz300919,sz300957,sz300979,sz300999,sz301269',
+  // 上证50成分股（50只）
+  SZ50_STR: 'sh600028,sh600030,sh600031,sh600036,sh600050,sh600089,sh600111,sh600150,sh600183,sh600276,sh600309,sh600406,sh600519,sh600760,sh600809,sh600887,sh600900,sh600930,sh601012,sh601088,sh601127,sh601166,sh601211,sh601288,sh601318,sh601328,sh601398,sh601600,sh601601,sh601628,sh601658,sh601668,sh601688,sh601728,sh601857,sh601888,sh601899,sh601919,sh601988,sh603019,sh603259,sh603501,sh603986,sh603993,sh688008,sh688012,sh688041,sh688111,sh688256,sh688981',
+  // 科创50成分股（50只）
+  KC50_STR: 'sh688002,sh688008,sh688009,sh688012,sh688027,sh688036,sh688041,sh688047,sh688072,sh688082,sh688099,sh688111,sh688120,sh688122,sh688126,sh688169,sh688183,sh688187,sh688188,sh688213,sh688220,sh688223,sh688249,sh688256,sh688271,sh688303,sh688347,sh688361,sh688375,sh688396,sh688469,sh688472,sh688498,sh688506,sh688521,sh688525,sh688568,sh688578,sh688599,sh688629,sh688702,sh688728,sh688729,sh688775,sh688777,sh688795,sh688802,sh688820,sh688981,sh689009',
+  // 标签配色（内联样式，不新增CSS文件依赖）
+  _STYLE: {
+    '沪深300': 'background:rgba(33,150,243,0.15);border:1px solid rgba(33,150,243,0.45);color:#42a5f5',
+    '上证50': 'background:rgba(244,67,54,0.15);border:1px solid rgba(244,67,54,0.45);color:#ef5350',
+    '科创50': 'background:rgba(156,39,176,0.15);border:1px solid rgba(156,39,176,0.45);color:#ba68c8'
+  },
+  _sets: null,
+
+  /** 懒建三个 Set（单字符串存储省体积） */
+  _init() {
+    if (this._sets) return this._sets;
+    const mk = function(str) {
+      const out = new Set();
+      String(str || '').split(',').forEach(function(x) {
+        x = x.trim();
+        if (x) out.add(x);
+      });
+      return out;
+    };
+    this._sets = { hs300: mk(this.HS300_STR), sz50: mk(this.SZ50_STR), kc50: mk(this.KC50_STR) };
+    return this._sets;
+  },
+
+  /** 返回所属指数名数组，顺序固定：沪深300 → 上证50 → 科创50；无成分或非法入参返回 [] */
+  getIndexes(code) {
+    if (typeof code !== 'string' || !code) return [];
+    if (!/^(sh|sz)\d{6}$/.test(code)) return [];
+    const s = this._init();
+    const out = [];
+    if (s.hs300.has(code)) out.push('沪深300');
+    if (s.sz50.has(code)) out.push('上证50');
+    if (s.kc50.has(code)) out.push('科创50');
+    return out;
+  },
+
+  isHS300(code) { return this.getIndexes(code).indexOf('沪深300') >= 0; },
+  isSZ50(code) { return this.getIndexes(code).indexOf('上证50') >= 0; },
+  isKC50(code) { return this.getIndexes(code).indexOf('科创50') >= 0; },
+
+  /** 指数标签 HTML 片段，无成分返回 '' */
+  tagHtml(code) {
+    const idx = this.getIndexes(code);
+    if (!idx.length) return '';
+    let out = '';
+    for (let i = 0; i < idx.length; i++) {
+      const name = idx[i];
+      out += ' <span class="vs-index-tag" style="font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;white-space:nowrap;'
+        + (this._STYLE[name] || '') + '" title="' + name + ' 成分股（名单基准 ' + this.DATA_DATE + '）">' + name + '</span>';
+    }
+    return out;
+  },
+
+  /** 统计一组代码的指数覆盖情况 */
+  stats(codes) {
+    const r = { total: 0, hs300: 0, sz50: 0, kc50: 0, any: 0 };
+    if (!Array.isArray(codes)) return r;
+    for (let i = 0; i < codes.length; i++) {
+      r.total++;
+      const idx = this.getIndexes(codes[i]);
+      if (idx.length) r.any++;
+      if (idx.indexOf('沪深300') >= 0) r.hs300++;
+      if (idx.indexOf('上证50') >= 0) r.sz50++;
+      if (idx.indexOf('科创50') >= 0) r.kc50++;
+    }
+    return r;
+  },
+
+  /** 榜单头部统计文案 */
+  statsLine(codes) {
+    const st = this.stats(codes);
+    if (!st.total) return '';
+    return '📊 指数覆盖：沪深300 ' + st.hs300 + ' 只 · 上证50 ' + st.sz50 + ' 只 · 科创50 ' + st.kc50 + ' 只（' + st.total + ' 只中 ' + st.any + ' 只属至少一个）';
+  }
+};
+
 // ===== 2. ValueScreener - 价值投资扫描引擎 =====
 const ValueScreener = {
   STORAGE_KEY: 'zhigu_value_screener',
@@ -19109,6 +19194,11 @@ const ValueScreener = {
     }
 
     let html = '';
+    // v5.18: 指数覆盖统计条（当前榜单TOP20）
+    const idxStatsLine = IndexMember.statsLine(data.stocks.map(function(x) { return x.code; }));
+    if (idxStatsLine) {
+      html += '<div class="vs-index-stats" style="font-size:11px;color:var(--text-muted);margin-bottom:8px;padding:6px 8px;background:rgba(255,255,255,0.03);border-radius:4px">' + idxStatsLine + '</div>';
+    }
     data.stocks.forEach((s, i) => {
       const rank = i + 1;
       const rankClass = rank <= 3 ? ' top' + rank : '';
@@ -19128,6 +19218,8 @@ const ValueScreener = {
         const bbTitle = '注销式回购' + (s.buybackCancel.date ? ' · ' + s.buybackCancel.date : '') + (s.buybackCancel.title ? ' · ' + s.buybackCancel.title : '');
         html += ' <span class="vs-buyback-badge" title="' + bbTitle.replace(/"/g, '&quot;') + '">🔄</span>';
       }
+      // v5.18: 指数成分标签（沪深300/上证50/科创50）
+      html += IndexMember.tagHtml(s.code);
       html += '</div>';
       html += '<div class="vsc-industry">' + (s.industry || '--') + '</div>';
       html += '</div></div>';
@@ -20373,6 +20465,47 @@ const SelfCheck = {
         note += ' 下一:' + status.nextReport + '(' + status.nextWindowStart + '起 还有' + status.daysToNext + '天)';
       }
       return { status: 'pass', note: note };
+    }, 5000);
+
+    // 15. v5.18: 指数成分名单完整性
+    await this._runOne(14, '指数成分名单', async () => {
+      const lists = [
+        ['沪深300', IndexMember.HS300_STR, 300],
+        ['上证50', IndexMember.SZ50_STR, 50],
+        ['科创50', IndexMember.KC50_STR, 50]
+      ];
+      const badLen = [];
+      const badDup = [];
+      const badFmt = [];
+      lists.forEach(function(item) {
+        const name = item[0];
+        const arr = String(item[1] || '').split(',').filter(function(x) { return x; });
+        if (arr.length !== item[2]) badLen.push(name + ' ' + arr.length + '(应' + item[2] + ')');
+        const seen = new Set();
+        const dups = [];
+        arr.forEach(function(c) { if (seen.has(c)) dups.push(c); else seen.add(c); });
+        if (dups.length) badDup.push(name + ' 重复' + dups.length + '(' + dups.slice(0, 3).join(',') + ')');
+        arr.forEach(function(c) { if (!/^(sh|sz)\d{6}$/.test(c)) badFmt.push(name + ':' + c); });
+      });
+      if (badLen.length) return { status: 'fail', note: '名单长度异常 ' + badLen.join('；') };
+      if (badDup.length) return { status: 'fail', note: badDup.join('；') };
+      if (badFmt.length) return { status: 'fail', note: '代码格式非法 ' + badFmt.slice(0, 5).join(',') };
+      // 抽样成员关系校验
+      const sample = [
+        ['sh600519', ['沪深300', '上证50']],
+        ['sh688981', ['沪深300', '上证50', '科创50']],
+        ['sh688002', ['科创50']],
+        ['bj920000', []]
+      ];
+      for (let i = 0; i < sample.length; i++) {
+        const code = sample[i][0];
+        const want = sample[i][1];
+        const got = IndexMember.getIndexes(code);
+        if (got.join(',') !== want.join(',')) {
+          return { status: 'fail', note: code + ' 期望[' + want.join(',') + '] 实际[' + got.join(',') + ']' };
+        }
+      }
+      return { status: 'pass', note: '沪深300 300 · 上证50 50 · 科创50 50 · 基准 ' + IndexMember.DATA_DATE };
     }, 5000);
 
     if (this._btnStart) {
