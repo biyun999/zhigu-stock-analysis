@@ -22,7 +22,7 @@
 // ============================================================
 const CONFIG = {
   // 版本号（更新时同步修改）
-  VERSION: 'v5.18',
+  VERSION: 'v5.19',
   // 腾讯实时行情API（GBK编码，需转换）
   TENCENT_QUOTE: 'https://qt.gtimg.cn/q=',
   // 腾讯日K线API（JSON格式）
@@ -6866,7 +6866,7 @@ const Screener = {
       <div class="screener-item screener-item-v2" onclick="App.analyzeStock('${s.code}')">
         <div class="sc-rank">${i + 1}</div>
         <div class="sc-info">
-          <div class="sc-name">${s.name}</div>
+          <div class="sc-name">${s.name}${IndexMember.tagHtml(s.code)}</div>
           <div class="sc-code">${s.code} · ${s.sector}</div>
           <div class="sc-tags">${tagsHtml}</div>
         </div>
@@ -7724,7 +7724,7 @@ const Watchlist = {
       // v4.0: 整卡可点击跳转分析页（操作按钮 stopPropagation 拦截）
       html += '<div class="watchlist-item watchlist-item-v2 clickable" onclick="App.analyzeStock(\'' + item.code + '\')">';
       html += '<div class="wl-left">';
-      html += '<div class="wl-name">' + item.name + '</div>';
+      html += '<div class="wl-name">' + item.name + IndexMember.tagHtml(item.code, { compact: true }) + '</div>';
       // v4.3: 行业标签
       const ndMap0 = (this._ndCache && this._ndCache.map) || {};
       const nd0 = ndMap0[item.code];
@@ -7949,7 +7949,7 @@ const Watchlist = {
           html += '<div class="rs-left">';
           html += '<span class="rs-badge" style="background:' + r.riskColor + '20;color:' + r.riskColor + ';border:1px solid ' + r.riskColor + '40">' + r.riskIcon + '</span>';
           html += '<div class="rs-info">';
-          html += '<div class="rs-name">' + r.name + '</div>';
+          html += '<div class="rs-name">' + r.name + IndexMember.tagHtml(r.code) + '</div>';
           html += '<div class="rs-code">' + r.code + '</div>';
           if (r.topRisks.length > 0) {
             html += '<div class="rs-risk-tags">';
@@ -9562,7 +9562,7 @@ const NextDayPrediction = {
       html += '<div class="hot-stock-item st-card" onclick="App.analyzeStock(\'' + s.code + '\')">'
         + '<div class="rank ' + rankCls + '">' + (idx + 1) + '</div>'
         + '<div class="hs-info">'
-        +   '<div class="hs-name">' + s.name + ' <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard(\'' + _copyText + '\')" title="复制股票名称和代码">📋</span> <span class="risk-badge risk-' + riskBadge.level + '">' + riskBadge.icon + '</span> ' + indLine + '</div>'
+        +   '<div class="hs-name">' + s.name + IndexMember.tagHtml(s.code, { compact: true }) + ' <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard(\'' + _copyText + '\')" title="复制股票名称和代码">📋</span> <span class="risk-badge risk-' + riskBadge.level + '">' + riskBadge.icon + '</span> ' + indLine + '</div>'
         +   '<div class="hs-code">' + _copyCode + ' · 换手' + (s.turnover || 0).toFixed(1) + '% · 主力' + (s.mainFlow >= 0 ? '净流入' : '净流出') + Utils.formatAmount(Math.abs(s.mainFlow || 0)) + '</div>'
         +   factorLine
         +   verify
@@ -9718,7 +9718,7 @@ const NextDayPrediction = {
       stocks.forEach(s => {
         const chgColor = s.changePct >= 0 ? 'var(--color-up)' : 'var(--color-down)';
         html += '<div class="shp-stock" onclick="NextDayPrediction._closeSectorPopup();App.analyzeStock(\'' + s.code + '\')">'
-          + '<div class="shp-stock-name">' + s.name + '</div>'
+          + '<div class="shp-stock-name">' + s.name + IndexMember.tagHtml(s.code, { compact: true }) + '</div>'
           + '<div class="shp-stock-code">' + s.rawCode + '</div>'
           + '<div class="shp-stock-chg" style="color:' + chgColor + '">' + (s.changePct >= 0 ? '+' : '') + s.changePct.toFixed(2) + '%</div>'
           + '</div>';
@@ -10583,7 +10583,7 @@ const NextDayPrediction = {
         html += '<div class="empty-tip">近30个交易日内该股票未进入次日榜TOP10</div>';
       } else {
         html += '<div class="backtrack-summary">';
-        html += '<div class="backtrack-sum-header">📌 ' + result.name + '（' + result.code + '）</div>';
+        html += '<div class="backtrack-sum-header">📌 ' + result.name + IndexMember.tagHtml(result.code) + '（' + result.code + '）</div>';
         html += '<div class="ledger-stats-row" style="margin-top:10px;margin-bottom:0">';
         html += '<div class="ledger-stat-card"><div class="ls-num">' + result.totalHits + '</div><div class="ls-label">上榜次数</div></div>';
         html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + result.winRate + '%</div><div class="ls-label">次日胜率</div></div>';
@@ -11088,7 +11088,7 @@ const ShortTermLedger = {
           html += '<div class="hot-stock-item st-card st-detail-stock-item" onclick="event.stopPropagation();App.analyzeStock(\'' + stock.code + '\')">';
           html += '<div class="rank ' + rankCls + '">' + rank + '</div>';
           html += '<div class="hs-info">';
-          html += '<div class="hs-name">' + stock.name + ' <span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + (stock.sectorName || '-') + ']</span></div>';
+          html += '<div class="hs-name">' + stock.name + IndexMember.tagHtml(stock.code, { compact: true }) + ' <span style="font-size:10px;color:var(--text-muted);font-weight:400">[' + (stock.sectorName || '-') + ']</span></div>';
           html += '<div class="hs-code">' + stock.code.replace(/^(sh|sz|bj)/, '').toUpperCase() + ' · 次日' + chgStr + '</div>';
           html += '</div>';
           html += '<div class="hs-score">';
@@ -11200,7 +11200,7 @@ const ShortTermLedger = {
         html += '<div class="empty-tip">近30个交易日内该股票未进入短线潜力榜TOP10</div>';
       } else {
         html += '<div class="backtrack-summary">';
-        html += '<div class="backtrack-sum-header">📌 ' + result.name + '（' + result.code + '）</div>';
+        html += '<div class="backtrack-sum-header">📌 ' + result.name + IndexMember.tagHtml(result.code) + '（' + result.code + '）</div>';
         html += '<div class="ledger-stats-row" style="margin-top:10px;margin-bottom:0">';
         html += '<div class="ledger-stat-card"><div class="ls-num">' + result.totalHits + '</div><div class="ls-label">上榜次数</div></div>';
         html += '<div class="ledger-stat-card"><div class="ls-num" style="color:#00e676">' + result.winRate + '%</div><div class="ls-label">次日胜率</div></div>';
@@ -12554,7 +12554,7 @@ const HomeLedger = {
 
           html += '<div class="hld-stock" onclick="event.stopPropagation();App.analyzeStock(\'' + stock.code + '\')">';
           html += '<div class="hld-rank">' + (sIdx + 1) + '</div>';
-          html += '<div class="hld-name">' + (stock.name || codeClean) + '</div>';
+          html += '<div class="hld-name">' + (stock.name || codeClean) + IndexMember.tagHtml(stock.code, { compact: true }) + '</div>';
           html += '<div class="hld-code">' + codeClean + '</div>';
           html += '<div class="hld-chg" style="color:' + chgColor + '">' + chgStr + '</div>';
           html += '</div>';
@@ -14267,7 +14267,7 @@ const App = {
           <div class="st-head">
             <div class="rank ${rankCls}">${i + 1}</div>
             <div class="hs-info">
-              <div class="hs-name">${s.name} <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard('${_hotCopyText}')" title="复制股票名称和代码">📋</span> ${catTag}<span class="risk-badge risk-${riskBadge.level}" title="风险：${riskBadge.level === 'low' ? '低' : riskBadge.level === 'medium' ? '中' : riskBadge.level === 'high' ? '较高' : '高'}">${riskBadge.icon}</span></div>
+              <div class="hs-name">${s.name}${IndexMember.tagHtml(s.code, { compact: true })} <span class="copy-stock-btn" onclick="event.stopPropagation();Utils.copyToClipboard('${_hotCopyText}')" title="复制股票名称和代码">📋</span> ${catTag}<span class="risk-badge risk-${riskBadge.level}" title="风险：${riskBadge.level === 'low' ? '低' : riskBadge.level === 'medium' ? '中' : riskBadge.level === 'high' ? '较高' : '高'}">${riskBadge.icon}</span></div>
               <div class="hs-code">${s.code} · ${s.sectorName}</div>
             </div>
             <div class="hs-price">
@@ -14732,6 +14732,9 @@ const App = {
   renderStockSummary(quote, code) {
     document.getElementById('stockName').textContent = quote.name;
     document.getElementById('stockCode').textContent = code;
+    // v5.19: 指数成分标签（独立容器，避免对 quote.name 使用 innerHTML）
+    const _idxTagsEl = document.getElementById('stockIndexTags');
+    if (_idxTagsEl) _idxTagsEl.innerHTML = IndexMember.tagHtml(code);
     
     const priceEl = document.getElementById('stockPrice');
     priceEl.textContent = quote.price.toFixed(2);
@@ -18726,12 +18729,18 @@ const IndexMember = {
   /** 返回所属指数名数组，顺序固定：沪深300 → 上证50 → 科创50；无成分或非法入参返回 [] */
   getIndexes(code) {
     if (typeof code !== 'string' || !code) return [];
-    if (!/^(sh|sz)\d{6}$/.test(code)) return [];
+    let c = code;
+    // v5.19: 6位纯数字自动推断交易所前缀（6→sh，0/3→sz，8/4/9→bj）
+    if (/^\d{6}$/.test(c)) {
+      const h = c.charAt(0);
+      c = (h === '6' ? 'sh' : (h === '0' || h === '3') ? 'sz' : 'bj') + c;
+    }
+    if (!/^(sh|sz|bj)\d{6}$/.test(c)) return [];
     const s = this._init();
     const out = [];
-    if (s.hs300.has(code)) out.push('沪深300');
-    if (s.sz50.has(code)) out.push('上证50');
-    if (s.kc50.has(code)) out.push('科创50');
+    if (s.hs300.has(c)) out.push('沪深300');
+    if (s.sz50.has(c)) out.push('上证50');
+    if (s.kc50.has(c)) out.push('科创50');
     return out;
   },
 
@@ -18739,14 +18748,18 @@ const IndexMember = {
   isSZ50(code) { return this.getIndexes(code).indexOf('上证50') >= 0; },
   isKC50(code) { return this.getIndexes(code).indexOf('科创50') >= 0; },
 
-  /** 指数标签 HTML 片段，无成分返回 '' */
-  tagHtml(code) {
+  /** 指数标签 HTML 片段，无成分返回 ''；v5.19 支持 opts.compact 紧凑模式 */
+  tagHtml(code, opts) {
     const idx = this.getIndexes(code);
     if (!idx.length) return '';
+    const compact = !!(opts && opts.compact === true);
+    const baseStyle = compact
+      ? 'font-size:9px;padding:0 4px;border-radius:2px;margin-left:3px;line-height:14px;display:inline-block;vertical-align:middle;white-space:nowrap;'
+      : 'font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;white-space:nowrap;';
     let out = '';
     for (let i = 0; i < idx.length; i++) {
       const name = idx[i];
-      out += ' <span class="vs-index-tag" style="font-size:10px;padding:1px 5px;border-radius:3px;margin-left:4px;vertical-align:middle;white-space:nowrap;'
+      out += ' <span class="vs-index-tag" style="' + baseStyle
         + (this._STYLE[name] || '') + '" title="' + name + ' 成分股（名单基准 ' + this.DATA_DATE + '）">' + name + '</span>';
     }
     return out;
@@ -19382,7 +19395,7 @@ const LongTermPortfolio = {
         }
         html += '<div class="lt-item">';
         html += '<div class="lt-item-row1">';
-        html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + '</div>';
+        html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + IndexMember.tagHtml(s.code) + '</div>';
         html += '<div class="lt-item-score">' + (s.score || '--') + '分</div>';
         html += '</div>';
         html += '<div class="lt-item-row2">';
@@ -19511,7 +19524,7 @@ const LongTermPortfolio = {
       }
       html += '<div class="lt-item">';
       html += '<div class="lt-item-row1">';
-      html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + '</div>';
+      html += '<div class="lt-item-name" onclick="LongTermPortfolio._closeManager();App.analyzeStock(\'' + s.code + '\')">' + s.name + IndexMember.tagHtml(s.code) + '</div>';
       html += '<div class="lt-item-score">' + (s.score || '--') + '分</div>';
       html += '</div>';
       html += '<div class="lt-item-row2">';

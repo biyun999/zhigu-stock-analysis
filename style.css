@@ -402,6 +402,9 @@ body {
 
 .stock-name-code { display:flex; align-items:baseline; gap:8px; }
 
+/* v5.19: 个股详情页指数成分标签容器 */
+.stock-index-tags { display:inline-flex; align-items:center; gap:2px; flex-wrap:wrap; }
+
 .stock-name {
   font-size: 20px;
   font-weight: 700;
